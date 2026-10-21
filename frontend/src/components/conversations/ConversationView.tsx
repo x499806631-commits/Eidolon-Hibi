@@ -49,6 +49,7 @@ import { cn } from "@/lib/utils";
 import { herVars } from "@/theme/herVars";
 import {
   BackIcon,
+  AsmrIcon,
   CooldownIcon,
   EndedIcon,
   GiftIcon,
@@ -156,6 +157,8 @@ export function ConversationView({
   const inCall = isLive(call);
   // 要在这次点击里同步调用：她的声音趁这一下唤醒 AudioContext。
   const dial = () => void live?.startCall();
+  // ASMR 模式通话：同样要在这次点击里同步调用。历史对话里、通话中都拨不出去，同电话键。
+  const dialAsmr = () => void live?.startCall(true);
 
   // 通话层展开时盖住整栏：底下的页首和对话不能再被 Tab 或屏幕阅读器摸到。快照里的 layer
   // 已经管着「画哪一通、收没收起」；通话条只在通话中、通话层收着时出现。
@@ -234,6 +237,10 @@ export function ConversationView({
           <DropdownMenuItem onClick={() => setPickingPast(true)}>
             <PastConversationsIcon aria-hidden />
             {t.past.open}
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={viewing !== null || inCall || !snapshot.canDial} onClick={dialAsmr}>
+            <AsmrIcon aria-hidden />
+            {t.asmrCall}
           </DropdownMenuItem>
           {outfits && (
             <DropdownMenuItem onClick={() => setPickingOutfit(true)}>

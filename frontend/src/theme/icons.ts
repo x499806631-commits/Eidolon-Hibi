@@ -36,6 +36,15 @@ export { CircleAlert as FailureIcon } from "lucide-react";
 // 设置页「已绑定」的提示和它的关闭键（shadcn-redesign 18）。
 export { CircleCheck as SuccessIcon, X as CloseIcon } from "lucide-react";
 
+// ASMR 模式通话（对话页首更多菜单）。
+export { AudioLines as AmbienceIcon, Moon as AsmrIcon } from "lucide-react";
+
+// 信箱（来信）。
+export { Mail as LettersIcon } from "lucide-react";
+
+// 日历页（导航的「日历」、翻月、制作人自己的生日）。
+export { Cake as CakeIcon, CalendarDays as CalendarIcon } from "lucide-react";
+
 // 对话列表页首的公告铃铛（GLOSSARY.md「公告」）；后台导航的公告用 Megaphone。
 export { Bell as AnnouncementsBellIcon } from "lucide-react";
 

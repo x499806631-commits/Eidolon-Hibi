@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CharacterVoice } from "@/lib/characterVoice";
 
+/** An audio parameter: its value, and the scheduling the ambience's fades use (a no-op here). */
+function param(value: number) {
+  const noop = () => {};
+  return { value, setValueAtTime: noop, linearRampToValueAtTime: noop, cancelScheduledValues: noop };
+}
+
 /** An audio node in the fake Web Audio graph: what it is, its settings, and where it sends its sound. */
 type FakeNode = {
   kind: string;
@@ -17,6 +23,11 @@ type FakeNode = {
   attack?: { value: number };
   release?: { value: number };
   stream?: FakeStream;
+  pan?: { value: number };
+  started?: boolean;
+  stopped?: boolean;
+  start?: () => void;
+  stop?: () => void;
 };
 
 class FakeStream {
@@ -42,6 +53,7 @@ function node(kind: string, extra: Partial<FakeNode> = {}): FakeNode {
 /** The browser's AudioContext, recording the graph built in it. */
 function fakeContext(state: "running" | "suspended" = "suspended") {
   const sources: FakeNode[] = [];
+  const oscillators: FakeNode[] = [];
   const context = {
     state,
     resumed: 0,
@@ -52,7 +64,8 @@ function fakeContext(state: "running" | "suspended" = "suspended") {
       sources.push(source);
       return source;
     },
-    createBiquadFilter: () => node("filter", { type: "lowpass", frequency: { value: 350 }, Q: { value: 1 } }),
+    createBiquadFilter: () =>
+      node("filter", { type: "lowpass", frequency: { value: 350 }, Q: { value: 1 }, gain: { value: 0 } }),
     createDynamicsCompressor: () =>
       node("compressor", {
         threshold: { value: -24 },
@@ -61,7 +74,15 @@ function fakeContext(state: "running" | "suspended" = "suspended") {
         attack: { value: 0.003 },
         release: { value: 0.25 },
       }),
-    createGain: () => node("gain", { gain: { value: 1 } }),
+    createGain: () => node("gain", { gain: param(1) }),
+    createStereoPanner: () => node("panner", { pan: { value: 0 } }),
+    createOscillator: () => {
+      const n = node("oscillator", { type: "sine", frequency: { value: 440 }, started: false, stopped: false });
+      n.start = () => void (n.started = true);
+      n.stop = () => void (n.stopped = true);
+      oscillators.push(n);
+      return n;
+    },
     resume: async () => {
       context.resumed++;
       context.state = "running";
@@ -70,7 +91,7 @@ function fakeContext(state: "running" | "suspended" = "suspended") {
       context.closed = true;
     },
   };
-  return { context, sources };
+  return { context, sources, oscillators };
 }
 
 /** Every chain from a source to the speakers, as the nodes passed through. */
@@ -184,6 +205,38 @@ describe("character voice with phone texture", () => {
     voice.play(track);
 
     expect(audible(sources[0])).toBe(false);
+  });
+});
+
+describe("character voice in an ASMR call", () => {
+  it("reaches the speakers by the ear: warm, breathy, brought close, drifting slowly from ear to ear", () => {
+    const { voice, element, sources, oscillators } = setUp();
+
+    voice.dial(true, true); // never over the phone line
+
+    voice.play(track);
+    expect(element.muted).toBe(true);
+    const [path] = pathsToSpeakers(sources[0]);
+    expect(path.map((n) => n.kind)).toEqual(["filter", "filter", "compressor", "gain", "panner", "gain", "destination"]);
+    expect(path.filter((n) => n.kind === "filter").map((f) => f.type)).toEqual(["lowshelf", "highshelf"]);
+    const [drift] = oscillators;
+    expect(drift.started).toBe(true);
+    expect(drift.frequency!.value).toBeLessThan(0.2); // slow: seconds from ear to ear, not a tremble
+    expect(drift.outputs[0].outputs[0]).toBe(path[4].pan);
+    expect(audible(sources[0])).toBe(true);
+
+    voice.setTextOnly(true);
+    expect(audible(sources[0])).toBe(false);
+  });
+
+  it("stops drifting as the next call is dialed", () => {
+    const { voice, oscillators } = setUp();
+    voice.dial(false, true);
+    voice.play(track);
+
+    voice.dial(false);
+
+    expect(oscillators[0].stopped).toBe(true);
   });
 });
 

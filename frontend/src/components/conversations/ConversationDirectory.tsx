@@ -44,6 +44,7 @@ import {
 } from "@/lib/api";
 import { startCall } from "@/lib/call";
 import { loadCallPreferences, saveCallPreferences } from "@/lib/callPreferences";
+import type { Ambience } from "@/lib/ambience";
 import { CharacterVoice } from "@/lib/characterVoice";
 import { toFailure, type Failure } from "@/lib/failure";
 import { keepListPreferences, listPreferences, NO_PREFERENCES, type ListPreferences } from "@/lib/listPreferences";
@@ -84,6 +85,8 @@ export type Directory = {
   /** 改外观，立即生效（`characters` 的头像跟着换）并存下；存不进去时只在这次页面里生效。 */
   changeAppearance: (appearance: Appearance) => void;
   call: CallInList;
+  /** 通话时垫在她声音下面的环境音（ASMR 模式），和她的声音一样由外壳持有。 */
+  ambience: Ambience;
   /**
    * 外壳持有的那段对话的实时状态（ADR-0018「通话属于外壳」）：她的对话页开着时就是那一页的；
    * 离开她的对话页时通话还在进行，就留在外壳里，换页时不卸下，通话结束后才丢掉。没有时为 null。
@@ -319,7 +322,8 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
             return record;
           }),
         onListChanged: refresh,
-        startCall: (conversationId, preferences, handlers) => startCall(conversationId, preferences, handlers, userId),
+        startCall: (conversationId, preferences, handlers, asmr) =>
+          startCall(conversationId, preferences, handlers, userId, asmr),
         sendTurn: (conversationId, text) => sendTurn(conversationId, text, userId),
         getPhoto,
         getAffinity,
@@ -413,6 +417,7 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
         refresh,
         reload,
         call,
+        ambience: voice.ambience,
         held,
         isHeldShown,
         onScreen: held && isHeldShown && !isPastShown ? held.characterId : null,

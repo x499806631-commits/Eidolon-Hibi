@@ -82,6 +82,8 @@
   --color-her-call-shade: color-mix(in oklch, var(--her-call-deep) 85%, black);
   /* 固定色，定义在下面的 :root 里，都有对比度测试。 */
   --color-hangup: var(--hangup);
+  --color-saturday: var(--saturday);
+  --color-sunday: var(--sunday);
   --color-warning: var(--warning);
   --color-producer-ink: var(--producer-ink);
   --color-on-producer-ink: var(--on-producer-ink);
@@ -213,6 +215,9 @@
   --overlay-edge: light-dark(transparent, oklch(0.556 0 0));
   /* 新增：后台服务健康里「出错偏多」的琥珀色状态点（大量出错用 --destructive），在页面底和卡片底上 ≥ 3。 */
   --warning: light-dark(oklch(0.666 0.179 58.318), oklch(0.769 0.188 70.08));
+  /* 新增：日历页上周六、周日的日期（日本月历的习惯：周六蓝、周日红），在页面底和 muted 底上都 ≥ 4.5。 */
+  --saturday: light-dark(#2457c5, #7aa7ff);
+  --sunday: light-dark(#c8283c, #f87171);
   /* 新增：挂断键（DESIGN.md hang-up-red），就是 --destructive。 */
   --hangup: var(--destructive);
   /* 新增：制作人气泡的事务所深蓝墨水和上面的字（producer-ink、producer-ink-night）。 */

@@ -5,6 +5,7 @@
 // only renders a snapshot and passes on clicks.
 
 import type { AffinityChange, AffinityStatus } from "@/lib/affinity";
+import type { AmbienceKind } from "@/lib/ambience";
 import {
   ApiError,
   type CallEvent,
@@ -222,10 +223,19 @@ export const NOT_OPEN: Snapshot = {
 
 /** Her voice in a call (`CharacterVoice`): plain or over a phone line, silent in text only. */
 export type Voice = {
-  /** A call is being dialed, inside the user's click: over the phone line or not. */
-  dial: (phoneTexture: boolean) => void;
+  /** A call is being dialed, inside the user's click: over the phone line or not, or close to
+   * the ear in an ASMR call. */
+  dial: (phoneTexture: boolean, asmr?: boolean) => void;
   /** Her voice has arrived in the call under way. */
   play: (track: MediaStreamTrack) => void;
+  /** She starts or stops speaking in the call under way (the ambience under her goes down). */
+  speaking?: (speaking: boolean) => void;
+  /** The call is over, however it ended. */
+  callEnded?: () => void;
+  /** The call under way has connected: `setAmbienceAuto` asks the backend to pick the ambience. */
+  callConnected?: (setAmbienceAuto: (on: boolean) => void) => void;
+  /** The backend picked the ambience for the call under way. */
+  ambiencePicked?: (kind: AmbienceKind) => void;
   setTextOnly: (textOnly: boolean) => void;
   /** The page is left. */
   dispose: () => void;
@@ -260,10 +270,12 @@ export type Ports = {
   /** The conversation list's line for her has changed: a turn was recorded, or a
    * conversation was started. Told even after the page is left. */
   onListChanged: () => void;
+  /** `asmr` for an ASMR call (ASMR 模式通话). */
   startCall: (
     conversationId: string,
     preferences: CallPreferences,
     handlers: CallHandlers,
+    asmr?: boolean,
   ) => Promise<Call>;
   sendTurn: (conversationId: string, text: string) => AsyncIterable<TurnEvent>;
   /** How a photo she sent is coming along. */
@@ -457,12 +469,12 @@ export class LiveConversation {
    * ringback, or the list. That rule is kept here alone, in the gate every handler given to
    * the call goes through; the handlers behind it do not ask again.
    */
-  async startCall(): Promise<void> {
+  async startCall(asmr = false): Promise<void> {
     const conversationId = this.openConversationId();
     if (!conversationId || !isFree(this.state) || isCooling(this.state) || isEnded(this.state)) return;
     // Read once: the phone texture her voice is told is the one the call is given.
     const preferences = this.ports.preferences.load();
-    this.ports.voice.dial(preferences.phoneTexture);
+    this.ports.voice.dial(preferences.phoneTexture, asmr);
     const attempt = {};
     this.attempt = attempt;
     this.endedBy = null;
@@ -501,7 +513,7 @@ export class LiveConversation {
           if (this.state.call.phase === "dialing") return;
           this.update(now ? micInUse(now) : { micId: "", micNotice: "lost" });
         }),
-      });
+      }, asmr);
     } catch (e) {
       if (!current()) return;
       if (e instanceof ApiError && e.cooldownUntil !== null) {
@@ -535,6 +547,7 @@ export class LiveConversation {
       return;
     }
     this.call = started;
+    this.ports.voice.callConnected?.((on) => started.setAmbienceAuto?.(on));
     this.ports.tones.connect();
     this.update({
       call: {
@@ -660,9 +673,13 @@ export class LiveConversation {
         return this.moveCard(event, { stand });
       case "bot-started-speaking":
       case "bot-stopped-speaking":
+        this.ports.voice.speaking?.(event.type === "bot-started-speaking");
         return this.moveCard({ type: "voice", playing: event.type === "bot-started-speaking" }, { stand });
       case "user-started-speaking":
         return this.moveCard({ type: "interrupted" }, { stand });
+      case "ambience":
+        this.ports.voice.ambiencePicked?.(event.kind);
+        return;
       default:
         this.update({ stand });
     }
@@ -843,6 +860,7 @@ export class LiveConversation {
     this.holding?.();
     this.call = null;
     this.ports.tones.hangUp();
+    this.ports.voice.callEnded?.();
     this.moveCard(
       { type: "call-over" },
       {

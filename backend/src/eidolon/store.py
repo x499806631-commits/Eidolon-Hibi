@@ -148,6 +148,22 @@ CREATE TABLE IF NOT EXISTS reach_outs (
     record_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS reach_outs_by_conversation ON reach_outs(conversation_id, created_at);
+-- The letters she wrote the user (GLOSSARY.md「来信」): longer than what she says in a
+-- conversation and kept apart from any, the Japanese as the model wrote it, each segment with
+-- its subtitle; why she wrote it (`occasion`), when it comes (`created_at`: written ahead, it
+-- is not there till then), and when the user first read it, if they have.
+CREATE TABLE IF NOT EXISTS letters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL REFERENCES users(id),
+    character_id TEXT NOT NULL,
+    occasion TEXT NOT NULL,
+    ja TEXT NOT NULL,
+    zh TEXT NOT NULL,
+    segments TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    read_at TEXT
+);
+CREATE INDEX IF NOT EXISTS letters_by_user ON letters(user_id, created_at);
 -- The identities banned users signed in with, kept when those users were deleted so that
 -- deleting is not unbanning; only a keyed hash of each (`accounts.identity_hash`), no one's.
 CREATE TABLE IF NOT EXISTS banned_identities (
@@ -377,6 +393,34 @@ class ReachOut:
 
 
 Recorded = Message | ConversationEvent | ReachOut
+
+Occasion = Literal["ordinary", "producer_birthday", "her_birthday", "holiday"]
+"""Why she wrote a letter: just because, the producer's birthday, her own, or a holiday."""
+
+
+@dataclass(frozen=True)
+class Letter:
+    """A letter she wrote the user (GLOSSARY.md「来信」): in segments, each Japanese with its
+    subtitle, as the model wrote them; why (`occasion`); when it comes (written ahead, it is
+    not there till then), and when the user first read it (None while unread)."""
+
+    id: int
+    character_id: str
+    occasion: Occasion
+    ja: str
+    zh: str
+    segments: list[Segment]
+    created_at: str
+    read_at: str | None = None
+
+    def shown(self) -> dict:
+        """As the browser is told it: without delivery cues, which are for voicing."""
+        return asdict(replace(
+            self,
+            ja=without_cues(self.ja),
+            zh=without_cues(self.zh),
+            segments=[Segment(without_cues(s.ja), without_cues(s.zh)) for s in self.segments],
+        ))
 """What a conversation's record holds."""
 
 
@@ -1354,6 +1398,77 @@ class Store:
         assert cursor.lastrowid is not None
         return ReachOut(cursor.lastrowid, ja, zh, list(said), created_at)
 
+    def add_letter(
+        self,
+        user_id: str,
+        character_id: str,
+        occasion: Occasion,
+        said: list[Segment],
+        at: datetime | None = None,
+    ) -> Letter:
+        """Keep a letter she wrote the user, coming `at`, or now; unread."""
+        created_at = _now() if at is None else at.astimezone(UTC).isoformat()
+        ja, zh = "".join(s.ja for s in said), "".join(s.zh for s in said)
+        with self._lock, self._db:
+            cursor = self._db.execute(
+                "INSERT INTO letters (user_id, character_id, occasion, ja, zh, segments,"
+                " created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (user_id, character_id, occasion, ja, zh, _stored_segments(said), created_at),
+            )
+        assert cursor.lastrowid is not None
+        return Letter(cursor.lastrowid, character_id, occasion, ja, zh, list(said), created_at)
+
+    def letters(
+        self, user_id: str, character_id: str | None = None, until: datetime | None = None
+    ) -> list[Letter]:
+        """The user's letters, newest first; only hers if `character_id` is given, and only
+        those come by `until`, if given (else those written ahead too)."""
+        query = f"SELECT {_LETTER_COLUMNS} FROM letters WHERE user_id = ?"
+        params: tuple[str, ...] = (user_id,)
+        if character_id is not None:
+            query += " AND character_id = ?"
+            params += (character_id,)
+        if until is not None:
+            query += " AND created_at <= ?"
+            params += (until.astimezone(UTC).isoformat(),)
+        with self._lock:
+            rows = self._db.execute(query + " ORDER BY created_at DESC, id DESC", params).fetchall()
+        return [_letter(row) for row in rows]
+
+    def letter(self, user_id: str, letter_id: int, until: datetime) -> Letter:
+        """One of the user's letters come by `until`; NotFound if there is no such letter of
+        theirs, or it has not come yet."""
+        with self._lock:
+            row = self._db.execute(
+                f"SELECT {_LETTER_COLUMNS} FROM letters"
+                " WHERE id = ? AND user_id = ? AND created_at <= ?",
+                (letter_id, user_id, until.astimezone(UTC).isoformat()),
+            ).fetchone()
+        if row is None:
+            raise NotFound("没有这封信")
+        return _letter(row)
+
+    def read_letter(self, user_id: str, letter_id: int, now: datetime) -> Letter:
+        """The user reads one of their letters, `now`: read then, unless it was before.
+        NotFound if there is no such letter of theirs come by now."""
+        letter = self.letter(user_id, letter_id, now)
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE letters SET read_at = ? WHERE id = ? AND read_at IS NULL",
+                (now.astimezone(UTC).isoformat(), letter_id),
+            )
+        return self.letter(user_id, letter.id, now)
+
+    def unread_letters(self, user_id: str, until: datetime) -> int:
+        """How many of the user's letters come by `until` are unread."""
+        with self._lock:
+            [count] = self._db.execute(
+                "SELECT COUNT(*) FROM letters WHERE user_id = ? AND read_at IS NULL"
+                " AND created_at <= ?",
+                (user_id, until.astimezone(UTC).isoformat()),
+            ).fetchone()
+        return count
+
     def reach_out_recorded_as(self, reach_out_id: int, record_id: int | None) -> None:
         """Keep the id of the activity record of the reach-out, once it is written; answered
         already, should the user and she have been in touch since it was recorded."""
@@ -1493,6 +1608,7 @@ _MESSAGE_WITH_PHOTO = (
 """A message with its photo, if any, but not its picture (`_message_with_photo`)."""
 _EVENT_COLUMNS = "id, kind, created_at, affinity, gift_id, liked"
 _REACH_OUT_COLUMNS = "id, ja, zh, segments, created_at"
+_LETTER_COLUMNS = "id, character_id, occasion, ja, zh, segments, created_at, read_at"
 
 def write_profile(db: sqlite3.Connection, user_id: str, profile: ProducerProfile) -> None:
     """Save the user's whole producer profile through `db`, in the caller's transaction: what
@@ -1627,6 +1743,13 @@ def _event(row: sqlite3.Row) -> ConversationEvent:
     return ConversationEvent(
         row["id"], row["kind"], row["created_at"], _change(row["affinity"]),
         row["gift_id"], bool(row["liked"]),
+    )
+
+
+def _letter(row: sqlite3.Row) -> Letter:
+    return Letter(
+        row["id"], row["character_id"], row["occasion"], row["ja"], row["zh"],
+        [Segment(**s) for s in json.loads(row["segments"])], row["created_at"], row["read_at"],
     )
 
 

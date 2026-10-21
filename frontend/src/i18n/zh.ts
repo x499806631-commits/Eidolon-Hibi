@@ -33,6 +33,10 @@ export const zh = {
     /** 「对话」图标上有点时读屏读的名字：列表里有一行有没看过的搭话。 */
     conversationsUnseen: "对话，有没看过的搭话",
     gifts: "礼物",
+    calendar: "日历",
+    letters: "信箱",
+    /** 「信箱」图标上有点时读屏读的名字。 */
+    lettersUnread: "信箱，有没读过的信",
     settings: "设置",
   },
   /** 落地页的链接贴到聊天软件、社交网站时预览卡片上的文字（Open Graph、Twitter 卡片）。页面上不显示，不进字体子集。 */
@@ -148,6 +152,8 @@ export const zh = {
     newConversation: "新对话",
     call: (name: string) => `和${name}通话`,
     callTooltip: "语音通话",
+    /** 更多菜单里的 ASMR 模式通话：她在耳边轻声慢慢地说话，聊什么都可以。 */
+    asmrCall: "ASMR 模式",
     placeholder: "用中文或日语说点什么",
     send: "发送",
     /** 消息区里跨天处的日期条；昨天、更早的写法和列表一样（conversationList）。 */
@@ -304,6 +310,19 @@ export const zh = {
     micUnmute: "取消麦克风静音",
     hangUp: "挂断",
     switchMic: "切换麦克风",
+    /** 通话画面底部的环境音按钮和它弹出的面板（ASMR 模式）。 */
+    ambience: {
+      label: "环境音",
+      title: "环境音",
+      off: "关闭",
+      auto: "自动",
+      autoWaiting: "正在按时间、季节和聊的内容挑……",
+      autoQuiet: "自动挑了「安静」：现在先不放，聊着聊着可能会换。",
+      autoPlaying: (scene: string) => `自动挑了「${scene}」，聊着聊着可能会换。`,
+      volume: "音量",
+      volumes: { quiet: "小", medium: "中", loud: "大" },
+      hint: "ASMR 模式的通话会自动放上次选的；选「自动」就让她那边按时间和聊的内容来挑。",
+    },
     micSheet: {
       title: "切换麦克风",
       systemDefault: "系统默认",
@@ -1695,6 +1714,53 @@ export const zh = {
     },
   },
   /** 礼物页（GLOSSARY.md「礼物」「抽奖」，DESIGN.md「礼物页」）。 */
+  /** 日历页（`/calendar`）：偶像的生日、节日和制作人自己的生日。 */
+  calendar: {
+    title: "日历",
+    loading: "正在读取日历",
+    month: (year: number, month: number) => `${year}年${month}月`,
+    previous: "上个月",
+    next: "下个月",
+    today: "今天",
+    /** 月历的表头，星期一在最左边。 */
+    weekdays: ["一", "二", "三", "四", "五", "六", "日"],
+    /** 读屏读一格：「10月27日，今天，樋口円香的生日」。`about` 是「今天」和这天的事，没有时是空的。 */
+    day: (month: number, day: number) => `${month}月${day}日`,
+    dayLabel: (date: string, about: string) => (about ? `${date}，${about}` : date),
+    more: (n: number) => `+${n}`,
+    /** 下面那张清单。 */
+    thisMonth: "这个月",
+    date: (month: number, day: number, weekday: string) => `${month}月${day}日 周${weekday}`,
+    birthdayOf: (name: string) => `${name}的生日`,
+    producerBirthday: "你的生日",
+    lasting: (from: string, to: string) => `${from} 至 ${to}`,
+    goChat: "去找她",
+    empty: "这个月没有特别的日子",
+    /** 没填自己的生日时清单下面一句。 */
+    addBirthday: "在设置的档案里填上生日，那天她们会祝你生日快乐。",
+  },
+  letters: {
+    title: "信箱",
+    loading: "正在读取信箱",
+    empty: "还没有收到信",
+    /** 信箱是空的时下面一句。 */
+    emptyHint: "她们会在特别的日子，或者想你的时候写信来。",
+    /** 清单一行读屏读的：「真乃的信，10月21日，没读过」。 */
+    rowLabel: (name: string, date: string, unread: boolean) => `${name}的信，${date}${unread ? "，没读过" : ""}`,
+    date: (month: number, day: number) => `${month}月${day}日`,
+    /** 信纸右下角：「10月21日 20:30」。 */
+    stamp: (date: string, time: string) => `${date} ${time}`,
+    occasions: {
+      ordinary: "平时的信",
+      producer_birthday: "生日信",
+      her_birthday: "她生日那天",
+      holiday: "节日",
+    },
+    back: "回到信箱",
+    goChat: "去找她",
+    showTranslation: "显示翻译",
+    hideTranslation: "只看原文",
+  },
   gifts: {
     title: "礼物",
     loading: "正在读取礼物",

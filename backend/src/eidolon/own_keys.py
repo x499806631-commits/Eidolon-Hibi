@@ -64,6 +64,7 @@ from eidolon.config import (
     SttKey,
     SttProvider,
 )
+from eidolon.ambience import AmbiencePicking
 from eidolon.emotion import EmotionJudging
 from eidolon.image_generation import (
     GENERATION_TIMEOUT,
@@ -385,6 +386,9 @@ class DeployerKeys:
     call_llm: ChatLLM | None = None
     """The chat model as calls' turns use it, at its reasoning effort in calls; None for
     `chat_llm`."""
+    ambience: AmbiencePicking | None = None
+    """Picking the ambience during calls (环境音「自动」), on the deployer's judge model,
+    whoever's keys the call is on; None without one."""
 
     def lease(self) -> "DeployerLease":
         """These keys, which never change, for a turn or call."""
@@ -440,6 +444,8 @@ class CallKeys:
     """The deployer's, as the call connected (see `DeployerKeys.emotions`)."""
     own_llm: bool = False
     """Whether `llms` are the user's own LLM."""
+    ambience: AmbiencePicking | None = None
+    """The deployer's, as the call connected (see `DeployerKeys.ambience`)."""
 
 
 class OwnKeys:
@@ -499,6 +505,7 @@ class OwnKeys:
         return CallKeys(
             llms, stt, tts, own, self.exempt("call", brought.services), lease.release,
             tts_model, deployer.emotions, own_llm=brought.llm is not None,
+            ambience=deployer.ambience,
         )
 
     def exempt(self, kind: UsageKind, services: Iterable[Service]) -> bool:

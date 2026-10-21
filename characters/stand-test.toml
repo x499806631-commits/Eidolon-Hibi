@@ -1,0 +1,118 @@
+# 角色配置。新增角色、替换音色 ID 只需要改这个文件，不需要改代码。
+#
+# 每位角色一个 [[characters]] 段：
+#   id        规范标识，用在网址和剧情库的出场角色里（小写字母、数字、- 和 _）
+#   name      显示名
+#   name_zh、name_kana、name_romaji  对话列表搜索用的另外几种名字（可选；不写时只能用 name 搜到她）：
+#             name_zh 是国内社区通行的中文简体译名，姓名之间不空格（"八宫巡"）；
+#             name_kana 是全名的平假名读音，姓和名之间空一格（"さくらぎ まの"）；
+#             name_romaji 是全名的罗马字，写成「姓 名」，中间空一格、首字母大写，用平文式、不加长音符号
+#             （"Asakura Toru"）；官方拼法和平文式不同时以官方为准（"Ikaruga Luca"）。都写成单行字符串
+#   intro     角色选择页上的简介
+#   voice_id  Fish Audio 音色 ID。音色要设为公开：自带 Fish Audio 密钥的用户用自己的 key 调用它（ADR-0003 的修订）
+#   sheet     人设文件，路径相对于本文件
+#   avatar    头像图片（可选），路径相对于本文件；文件不存在时不显示头像。界面上最大显示 112px，
+#             所以提交前缩到 224×224（两倍屏）的 JPEG，质量 82 左右，每张十几 KB；比这大或超过 32 KB 测试会失败
+#   scsp_avatar 她在 SCSP 里的头像（可选），路径相对于本文件，规格和 avatar 一样；用户在设置「外观」里打开
+#             「SCSP 头像」后，登录后的应用里换用这一套。没配的角色照旧显示 avatar
+#   color     印象色，原作官方的代表色，#rrggbb；界面上属于她的地方都以它为基调
+#   background 通话层背景图（可选），路径相对于本文件；没有或文件不存在时用印象色的渐变代替。
+#             提交前缩到 1200px 宽的 JPEG，质量 82 左右，每张几十到两百多 KB
+#   facts     角色资料（可选），路径相对于本文件；Markdown，每个标题下的内容是一条，对话中按需检索；
+#             文件不存在时不检索角色资料。修改后重启后端即可，不需要重新导入
+#   liked_gifts 她喜欢的礼物，礼物目录 gifts.toml 里的 id 列表，1–3 件，不能全是稀有；送她喜欢的礼物好感度多加。
+#             每一条都要在她的出处文件（facts/<角色标识>.sources.md）的「喜欢的礼物」一节写明剧情出处，
+#             不收推断出来的条目。只在服务器上用，礼物页不透露她喜欢什么
+#   speakers  剧情台词里她的说话人名字，用来识别剧情的出场角色；修改后需要重新导入剧情库
+#   idol_id   原作的偶像编号（可选），即 ShinyColorsDB 的 idolId（整理目录 source/spine_manifest.json 里也有），正整数
+#   default_outfit 立绘的默认衣装（可选），写成 stand/<enzaId>（这张卡的私服）或 stand_costume/<enzaId>
+#             （这张卡的演出服），enzaId 是卡的十位编号（source/spine_manifest.json 里的 enzaId）。用户没选过衣装时她穿这一套。
+#             idol_id、default_outfit 和后端的 EIDOLON_STAND_ASSETS_URL 都配好了，通话层才显示立绘，
+#             否则只显示背景图（docs/deploy.md「立绘素材」）
+#   greeting  落地页上的招呼（可选）：她对初次见面的制作人说的一句日语，可以带语气提示，写法和回复里的一样
+#             （例如 "[softly] はじめまして"；语气提示只给语音合成听，页面上不显示）。和 greeting_subtitle 一起配
+#   greeting_subtitle 招呼的中文字幕。这两项都写成双引号的单行字符串（落地页的字体子集按这个写法收字）。
+#             改了招呼或 voice_id 之后，运行 eidolon greeting upload 重新合成上传，再重新生成落地页的字体子集
+#             （docs/deploy.md「招呼」）。后端配了 EIDOLON_STAND_ASSETS_URL，访客才听得到声音，否则只显示字幕
+#   call_opener 落地页演示来电的开场白（可选）：访客接听后她说的第一句日语，这时她是打电话给已经认识的制作人。
+#             写法、规则和 greeting 一样，和 call_opener_subtitle（中文字幕）一起配；同样由 eidolon greeting upload
+#             合成上传，改了以后同样要重新上传、重新生成字体子集。只有落地页上打来电话的那一位需要配
+#   photo_tag 她发来的照片里的角色 tag（可选），Danbooru 的写法、小写，例如 "sakuragi mano"；不从 name_romaji 推
+#   photo_appearance 她的外貌 tag（可选），英文逗号分隔，只写发色、发型、瞳色，不写饰物和服装。
+#             这两项都配了她才能发照片，缺一项时启动会警告（GLOSSARY.md「照片」）
+#
+# 人设文件和角色资料是自己写的，提交进仓库：参照 sheets/example.md 编写 sheets/<角色标识>.md
+# （也可以先用 eidolon character draft-sheet 生成初稿再校对），参照 facts/example.md 编写 facts/<角色标识>.md。
+# 头像放在 avatars/ 下（SCSP 头像放在 avatars-scsp/ 下），通话层背景图放在 backgrounds/ 下，同样提交进仓库。
+
+[[characters]]
+id = "mano"
+name = "櫻木真乃"
+name_zh = "樱木真乃"
+name_kana = "さくらぎ まの"
+name_romaji = "Sakuragi Mano"
+intro = "illumination STARS 的中心。温柔又有点慢热，喜欢鸟，常和鸽子「ピーちゃん」在一起。"
+voice_id = "a1150f3d14ac46fb8ea59c7803cd8357"
+sheet = "sheets/mano.md"
+avatar = "avatars/mano.jpg"
+scsp_avatar = "avatars-scsp/mano.jpg"
+color = "#ffbad6"
+background = "backgrounds/mano.jpg"
+facts = "facts/mano.md"
+liked_gifts = ["potted-plant", "black-tea"]
+photo_tag = "sakuragi mano"
+photo_appearance = "brown hair, medium hair, brown eyes"
+speakers = ["真乃"]
+idol_id = 1
+default_outfit = "stand/1030010010"  # 【ナチュラルモード】
+greeting = "[shyly] ほわっ……プロデューサーさん、ですか？　よろしくお願いしますっ"
+greeting_subtitle = "呼哇……你就是制作人吗？请多指教！"
+call_opener = "[shyly] あっ、もしもし……真乃です。えっと、今、お電話だいじょうぶですか？"
+call_opener_subtitle = "啊，喂……我是真乃。那个，现在方便接电话吗？"
+
+[[characters]]
+id = "hiori"
+name = "風野灯織"
+name_zh = "风野灯织"
+name_kana = "かざの ひおり"
+name_romaji = "Kazano Hiori"
+intro = "illumination STARS 的成员。认真、对自己要求严格，嘴上不太会表达，其实很温柔，在一点点学着坦率。"
+voice_id = "df43849d16ae48fe87f5670b6a2b81b3"
+sheet = "sheets/hiori.md"
+avatar = "avatars/hiori.jpg"
+scsp_avatar = "avatars-scsp/hiori.jpg"
+color = "#144384"
+background = "backgrounds/hiori.jpg"
+facts = "facts/hiori.md"
+liked_gifts = ["book", "music-cd"]
+photo_tag = "kazano hiori"
+photo_appearance = "black hair, long hair, ponytail, blue eyes"
+speakers = ["灯織"]
+idol_id = 2
+default_outfit = "stand/1030020010"  # 【手作りの心遣い】
+greeting = "はじめまして、風野灯織です。……精一杯、精進します"
+greeting_subtitle = "初次见面，我是風野灯織。……我会竭尽全力。"
+
+[[characters]]
+id = "meguru"
+name = "八宮めぐる"
+name_zh = "八宫巡"
+name_kana = "はちみや めぐる"
+name_romaji = "Hachimiya Meguru"
+intro = "illumination STARS 的成员。开朗热情、跟谁都能马上交上朋友，是大家的开心果，最喜欢和伙伴们在一起。"
+voice_id = "17ce7b6d4ccb43a2bedac1fdb4a219cb"
+sheet = "sheets/meguru.md"
+avatar = "avatars/meguru.jpg"
+scsp_avatar = "avatars-scsp/meguru.jpg"
+color = "#ffe012"
+background = "backgrounds/meguru.jpg"
+facts = "facts/meguru.md"
+liked_gifts = ["ice-cream", "honey-drink"]
+photo_tag = "hachimiya meguru"
+photo_appearance = "blonde hair, long hair, ahoge, low twintails, blue eyes"
+speakers = ["めぐる"]
+idol_id = 3
+default_outfit = "stand/1030030010"  # 【キネマ・リリックで夢見て】
+greeting = "[excitedly] はじめまして！　えへへっ、いっぱい仲良くしようねっ、プロデューサー！"
+greeting_subtitle = "初次见面！嘿嘿，我们要好好相处哦，制作人！"
+

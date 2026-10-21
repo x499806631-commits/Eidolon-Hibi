@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AffinityStatus } from "@/lib/affinity";
+import type { AmbienceKind } from "@/lib/ambience";
 import {
   ApiError,
   type CallEvent,
@@ -40,6 +41,8 @@ class FakeCall implements Call {
   setTextOnly = (textOnly: boolean) => void this.textOnly.push(textOnly);
   setMicEnabled = (enabled: boolean) => void this.micEnabled.push(enabled);
   hangUp = async () => void this.hangUps++;
+  ambienceAuto: boolean[] = [];
+  setAmbienceAuto = (on: boolean) => void this.ambienceAuto.push(on);
   leaves = 0;
   leave = async () => void this.leaves++;
 }
@@ -48,13 +51,23 @@ class FakeCall implements Call {
 class FakeVoice {
   /** The phone texture each dialing asked for. */
   dials: boolean[] = [];
+  /** Whether each dialing was of an ASMR call. */
+  asmrDials: boolean[] = [];
   played: MediaStreamTrack[] = [];
   textOnly: boolean[] = [];
   disposed = 0;
-  dial = (phoneTexture: boolean) => void this.dials.push(phoneTexture);
+  dial = (phoneTexture: boolean, asmr = false) => {
+    this.dials.push(phoneTexture);
+    this.asmrDials.push(asmr);
+  };
   play = (track: MediaStreamTrack) => void this.played.push(track);
   setTextOnly = (textOnly: boolean) => void this.textOnly.push(textOnly);
   dispose = () => void this.disposed++;
+  /** How the call under way asks the backend to pick the ambience, once it has connected. */
+  setAmbienceAuto: ((on: boolean) => void) | null = null;
+  callConnected = (setAmbienceAuto: (on: boolean) => void) => void (this.setAmbienceAuto = setAmbienceAuto);
+  picked: AmbienceKind[] = [];
+  ambiencePicked = (kind: AmbienceKind) => void this.picked.push(kind);
 }
 
 /** The phone's own sounds: records what the conversation tells it, in order. */
@@ -76,6 +89,7 @@ const herTrack = { kind: "audio" } as MediaStreamTrack;
 type Attempt = {
   preferences: CallPreferences;
   handlers: CallHandlers;
+  asmr?: boolean;
   connect: (call: Call) => void;
   fail: (error: Error) => void;
 };
@@ -131,11 +145,11 @@ function opening(options: Options = {}) {
     getAffinity: async () => options.affinity ?? null,
     getPhoto: async () => ({ status: "pending", reason: null }),
     onListChanged: () => listChanged++,
-    startCall: (conversationId, preferences, handlers) => {
+    startCall: (conversationId, preferences, handlers, asmr) => {
       sentTo.push(conversationId);
       // 麦克风一拨就打开；要看它打开之前的，测试自己换掉这个 port。
       handlers.onMicOpen();
-      return new Promise((connect, fail) => attempts.push({ preferences, handlers, connect, fail }));
+      return new Promise((connect, fail) => attempts.push({ preferences, handlers, asmr, connect, fail }));
     },
     sendTurn: (conversationId, text) => {
       sentTo.push(conversationId);
@@ -1279,6 +1293,26 @@ describe("LiveConversation: her voice", () => {
     expect(voice.dials).toEqual([true]);
     expect(loaded).toHaveLength(read + 1);
     expect(attempts[0].preferences).toBe(loaded.at(-1));
+  });
+
+  it("dials an ASMR call by the ear, and asks for one, an ordinary call not", async () => {
+    const { live, attempts, voice } = await conversation({ preferences: { phoneTexture: true } });
+
+    void live.startCall(true);
+
+    expect(voice.asmrDials).toEqual([true]);
+    expect(attempts[0].asmr).toBe(true);
+  });
+
+  it("lets her voice ask the call under way for the ambience, and hands it what the backend picks", async () => {
+    const { live, attempts, voice } = await conversation();
+    const call = await connected(live, attempts);
+
+    voice.setAmbienceAuto?.(true);
+    attempts[0].handlers.onEvent({ type: "ambience", kind: "rain" });
+
+    expect(call.ambienceAuto).toEqual([true]);
+    expect(voice.picked).toEqual(["rain"]);
   });
 
   it("plays her voice in the call under way", async () => {

@@ -95,6 +95,9 @@ describe("导航栏和 dock 的当前项", () => {
     ["/settings", "settings"],
     ["/settings/own-keys", "settings"],
     ["/gifts?to=mano", "gifts"],
+    ["/calendar", "calendar"],
+    ["/letters", "letters"],
+    ["/letters", "letters"],
   ] as const)("%s 的当前项是 %s", (href, item) => {
     expect(currentNavItem(href)).toBe(item);
   });

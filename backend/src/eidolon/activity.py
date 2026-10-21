@@ -49,7 +49,7 @@ import re
 import secrets
 import sqlite3
 import threading
-from collections.abc import AsyncIterator, Awaitable, Iterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import Context, ContextVar, copy_context
 from dataclasses import dataclass
@@ -85,6 +85,7 @@ from eidolon.rerank import Reranker
 from eidolon.retry import ServiceError, on_retry
 if TYPE_CHECKING:  # retrieval finds memories, which write down detached from turns
     from eidolon.affinity_judge import AffinityJudge
+    from eidolon.ambience import AmbienceJudge, AmbienceKind, AmbienceMoment
     from eidolon.emotion import EmotionAnswer, EmotionJudge, SegmentToJudge
     from eidolon.retrieval import Need, RetrievalJudge
 from eidolon.store import Message
@@ -96,7 +97,7 @@ LLM_SERVICES: tuple[ServiceName, ...] = ("chat_llm", "memory_llm")
 """The LLMs among them (`llm_origin`): a user's own is recorded as `OWN`, and each call
 says how soon its first word came and at which reasoning effort."""
 
-RecordKind = Literal["turn", "call", "reach_out"]
+RecordKind = Literal["turn", "call", "reach_out", "letter"]
 """A reach-out is neither a turn nor a call, nor counted as one anywhere; it is always on the
 deployer's keys."""
 Result = Literal["success", "failed", "rejected", "left", "not_connected"]
@@ -1229,6 +1230,19 @@ class MeteredEmotionJudge:
 
     async def judge_emotion(self, segment: "SegmentToJudge") -> "EmotionAnswer":
         return await timed(self._log, self._origin, self._judge.judge_emotion(segment))
+
+
+class MeteredAmbienceJudge:
+    """The judge model as calls ask it which ambience fits, each question recorded as a
+    service call under the call it is asked in."""
+
+    def __init__(self, judge: "AmbienceJudge", log: ActivityLog, origin: Origin) -> None:
+        self._judge = judge
+        self._log = log
+        self._origin = origin
+
+    async def judge_ambience(self, moment: "AmbienceMoment") -> "Mapping[AmbienceKind, float]":
+        return await timed(self._log, self._origin, self._judge.judge_ambience(moment))
 
 
 class MeteredJudge:

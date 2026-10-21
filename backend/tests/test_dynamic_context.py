@@ -165,6 +165,33 @@ async def test_she_is_told_whether_the_turn_is_typed_or_in_a_call_after_what_is_
 
 
 
+ASMR = "# ASMR 模式通话"
+
+
+async def test_an_asmr_calls_turns_are_told_to_speak_softly_whispering_as_the_voice_reads_it(
+    make_client: ClientFactory, settings: Settings
+):
+    """Told after what is cached, as the rest that changes from turn to turn; an ordinary
+    call's are not. Voiced with the default model, she is told to whisper with cues."""
+    client = make_client(FakeLLM())
+    conversation = await start_conversation(client, "mano")
+    told = []
+    for asmr in (True, False):
+        call = CallUnderTest(settings, client, conversation)
+        llm = FakeLLM(MANO_REPLY)
+        try:
+            await call.run(llm, [spoken("晚上好")], asmr=asmr)
+        finally:
+            call.close()
+        [prompt] = llm.prompts
+        told.append(ASMR in context_of(prompt))
+        if asmr:
+            assert "[whispering]" in context_of(prompt)
+            assert not any(ASMR in m.content for m in prompt[:2])
+
+    assert told == [True, False]
+
+
 async def test_each_typed_turn_is_told_when_they_last_talked_and_how_long_ago(
     make_client: ClientFactory, settings: Settings
 ):

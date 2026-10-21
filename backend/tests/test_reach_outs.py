@@ -13,7 +13,9 @@ Her time goes by the producer's day, in the profile's time zone: from the night 
 to the morning after, 08:00–10:00; no more than the deployer's number a day for each user,
 the earliest first, the rest to the next morning; never past a week after the last contact.
 What was missed as the backend was down, or failed, is not made up for, but put off by a
-time from her tier's range. None for a user banned, or let take no turns on the deployer's
+time from her tier's range. On a special day (the producer's birthday, her own, or a holiday
+of one day, from the calendar), before they are in touch that day, she comes that morning,
+sooner than her range. None for a user banned, or let take no turns on the deployer's
 keys; none while a text turn is under way or a call; and none recorded that the user spoke
 as she was thinking it, its record refused.
 
@@ -38,7 +40,8 @@ from eidolon.config import Settings
 from eidolon.engine import REACH_OUT_RULES, WANTS_TO_REACH_OUT
 from eidolon.llm import LLMError
 from tests.browser import Browser
-from tests.conftest import ClientFactory
+from eidolon.special_days import CALENDAR_FILE
+from tests.conftest import CharacterConfig, ClientFactory
 from tests.fakes import (
     DEPLOYER_KEY,
     FAKE_JUDGE,
@@ -629,6 +632,76 @@ async def test_deleting_the_user_deletes_them_when_she_was_to_come_and_their_swi
         left = [db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
                 for t in ("reach_outs", "reach_out_schedules", "reach_outs_off")]
     assert left == [0, 0, 0]
+
+
+SPECIAL = {
+    "his-birthday": None,
+    "her-birthday": '[[birthdays]]\ncharacter = "mano"\ndate = "10-20"\n',
+    "a-holiday": '[[holidays]]\nname = "测试节"\ndate = "10-20"\n',
+    "another-idols-birthday": '[[birthdays]]\ncharacter = "kogane"\ndate = "10-20"\n',
+    "a-season": '[[holidays]]\nname = "测试季"\ndate = "10-15"\nend = "10-25"\n',
+}
+
+
+@pytest.mark.parametrize(
+    ("day", "talked_today", "comes", "told"),
+    [
+        ("his-birthday", False, True, "今天是制作人的生日"),
+        ("her-birthday", False, True, "今天是你自己的生日"),
+        ("a-holiday", False, True, "今天是测试节"),
+        ("his-birthday", True, False, None),
+        ("another-idols-birthday", False, False, None),
+        ("a-season", False, False, None),
+    ],
+    ids=["his-birthday", "her-birthday", "a-holiday", "talked-today", "another-idols-birthday", "a-season"],
+)
+async def test_on_a_special_day_she_comes_that_morning_sooner_than_her_range(
+    make_client: ClientFactory, settings: Settings, characters: CharacterConfig,
+    day: str, talked_today: bool, comes: bool, told: str | None,
+):
+    """In Shanghai, last in touch at 21:00 the evening before (or at 00:30 that day), her time
+    from the range 28 hours on; brought forward to 8:00, the start of the morning."""
+    if (calendar := SPECIAL[day]) is not None:
+        characters.write(CALENDAR_FILE, calendar)
+    client, llm, clock, conversation = await talked(
+        make_client, REACH_OUT,
+        at=datetime(2026, 10, 19, 13, tzinfo=UTC),  # 21:00 on the 19th in Shanghai
+        random=FakeRandom(MIDDLE, 0),
+    )
+    if day == "his-birthday":
+        await client.put("/api/profile", json={"birthday": {"month": 10, "day": 20}})
+    contact = datetime(2026, 10, 19, 16, 30, tzinfo=UTC) if talked_today else clock.now
+    last_contact(settings.database_path, conversation, contact)
+    reach_out = backend_of(client).reach_outs
+
+    clock.now = datetime(2026, 10, 19, 23, 50, tzinfo=UTC)  # 7:50 on the 20th: still night
+    await reach_out.run_due()
+    at_night = len(reach_outs(await record(client, conversation)))
+    clock.now = datetime(2026, 10, 20, 0, 30, tzinfo=UTC)  # 8:30
+    await reach_out.run_due()
+    in_the_morning = len(reach_outs(await record(client, conversation)))
+
+    assert (at_night, in_the_morning) == (0, 1 if comes else 0)
+    if told is not None:
+        assert told in context_of(llm.prompts[-1])
+
+
+async def test_brought_forward_to_a_special_day_she_comes_however_late_the_backend_starts(
+    make_client: ClientFactory, settings: Settings, characters: CharacterConfig,
+):
+    """The backend starting at noon on her birthday, past the morning: she comes all the same,
+    not put off as missed."""
+    characters.write(CALENDAR_FILE, SPECIAL["her-birthday"])
+    client, _, clock, conversation = await talked(
+        make_client, REACH_OUT,
+        at=datetime(2026, 10, 20, 4, tzinfo=UTC),  # 12:00 on the 20th in Shanghai
+        random=FakeRandom(MIDDLE, 0),
+    )
+    last_contact(settings.database_path, conversation, datetime(2026, 10, 19, 13, tzinfo=UTC))
+
+    await backend_of(client).reach_outs.run_due()
+
+    assert len(reach_outs(await record(client, conversation))) == 1
 
 
 async def allow_a_day(client: httpx.AsyncClient, github: FakeIdentityProvider, per_day: int) -> None:

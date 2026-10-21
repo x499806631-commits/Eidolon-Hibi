@@ -55,6 +55,8 @@ from eidolon.announcements_api import add_announcement_routes
 from eidolon.gifts_api import add_gift_routes
 from eidolon.photos_api import add_photo_routes
 from eidolon.sessions import UserId, session_middleware
+from eidolon.letters_api import add_letter_routes
+from eidolon.special_days_api import add_calendar_routes
 from eidolon.sponsor_api import add_sponsor_routes
 from eidolon.stats import add_stats_routes
 from eidolon.service_status import add_service_status_routes
@@ -100,6 +102,8 @@ class CallRequest(BaseModel):
     conversation_id: str
     muted: bool = False
     quality: Quality = "standard"
+    asmr: bool = False
+    """An ASMR call (ASMR 模式通话): she speaks softly and slowly, whatever they talk about."""
     own_keys: OwnKeysInput | None = None
     """The user's own keys, which their browser keeps, for the call to run on."""
 
@@ -350,6 +354,8 @@ def create_app(backend: Backend) -> FastAPI:
     add_admin_price_routes(app, backend)
     add_announcement_routes(app, backend)
     add_gift_routes(app, backend)
+    add_calendar_routes(app, backend)
+    add_letter_routes(app, backend)
     add_photo_routes(app, backend)
     add_sponsor_routes(app, backend)
     add_data_package_routes(app, backend)
@@ -388,7 +394,7 @@ def create_app(backend: Backend) -> FastAPI:
             user_id,
             conversation,
             characters[conversation.character_id],
-            CallOptions(body.call.muted, body.call.quality, device_timezone),
+            CallOptions(body.call.muted, body.call.quality, device_timezone, body.call.asmr),
             description,
             body.call.own_keys.brought() if body.call.own_keys else BroughtKeys(),
         )

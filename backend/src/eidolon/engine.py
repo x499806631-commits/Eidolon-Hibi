@@ -102,7 +102,7 @@ import logging
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from typing import Literal, ParamSpec, TypeVar
 
@@ -123,6 +123,7 @@ from eidolon.affinity_judge import AffinityJudge
 from eidolon.characters import Character
 from eidolon.clock import Clock
 from eidolon.config import FishAudioModel, ImageSettings
+from eidolon.delivery_cues import TAG_READERS, without_cues
 from eidolon.gift_catalog import Gift
 from eidolon.judge import JudgeError
 from eidolon.llm import ChatLLM, ChatMessage, Reasoning, Tool, ToolCall, TurnLLMs
@@ -145,8 +146,10 @@ from eidolon.store import (
     Conversation,
     ConversationEnded,
     ConversationEvent,
+    Letter,
     Message,
     NewPhoto,
+    Occasion,
     Photo,
     ReachOut,
     Recorded,
@@ -155,6 +158,7 @@ from eidolon.store import (
     timestamp,
 )
 from eidolon.titles import Titles
+from eidolon.special_days import SpecialDays
 from eidolon.world import World
 
 MAX_INPUT_LENGTH = 2000
@@ -220,6 +224,8 @@ class InCall:
 
     out_of_line: int = 0
     hurts: tuple[float, ...] = ()
+    asmr: bool = False
+    """It is an ASMR call (ASMR 模式通话): she is told how to speak in it (`asmr_rules`)."""
 
 
 @dataclass(frozen=True)
@@ -448,9 +454,29 @@ def narrations(
     return told
 
 
+def asmr_rules(voiced_by: FishAudioModel | None) -> str:
+    """How she speaks in an ASMR call (ASMR 模式通话): softly, whatever they talk about; told
+    her in what changes from turn to turn, how she whispers as the model her replies are
+    voiced with reads it."""
+    whisper = (
+        "- 每段开头写一句贴近的指示，例如 [whispering right into the ear, very close] [soft breathy murmur, lips near the ear]；"
+        "悄悄话用 <whisper>…</whisper> 包住，语速慢的地方可以用 <slow>…</slow>，换气、轻笑写成 [soft breath] [quiet giggle]。"
+        if voiced_by in TAG_READERS
+        else "- 语气提示多用 [whispering]、[softly]、[gently]。"
+    )
+    return f"""# ASMR 模式通话
+制作人想听你在耳边轻轻地说话。
+- 声音放得很轻、很慢，像凑在耳边小声说话；句子短一些，一次只说一两句。
+{whisper}
+- 聊什么都可以，和平时打电话一样，接着制作人的话说；只是说话的方式变得轻柔。
+- 制作人说想睡了，就轻轻跟他说晚安。
+- 你还是你自己：照你的性格和说话方式来。
+- 轻声说话也照回复格式来：<ja> 里只有日语，不要在日语后面接着用中文再说一遍，中文只写在 <zh> 字幕里。"""
+
+
 REACH_OUT_RULES = """# 先开口
 制作人这会儿没在和你说话，你想先给他发几句。
-- 由头你自己挑：先接着你们最近聊过的事，或者他最近的近况；其次才是现在的时间、他的生日。
+- 由头你自己挑：今天要是「此刻」里写着的特别的日子（他的生日、你的生日、节日），就先说这个；不然先接着你们最近聊过的事，或者他最近的近况；其次才是现在的时间。
 - 不要只发一句空的问候，比如「早安」「在吗」「想你了」，要有具体想说的事。
 - 写一到两段。
 - 别和你前几次先开口时用一样的开头、一样的由头。
@@ -461,6 +487,96 @@ REACH_OUT_RULES = """# 先开口
 where what retrieval finds would be."""
 
 WANTS_TO_REACH_OUT = "（制作人这会儿没在和你说话。你想先给他发几句。）"
+
+LETTER_RULES = """# 写信
+你想给制作人写一封信。信会放进他的信箱里，他可以反复看；这不是聊天，是一封信。
+- 开头一段是称呼（照你平时对他的称呼，日语书信的写法，例如「プロデューサーさんへ」），最后一段是落款（只写你的名字，可以加一句结尾的问候）。
+- 中间是正文，每段一个 <ja>…</ja><zh>…</zh>。{length}
+- {occasion}
+- 写信的时候可以说一些当面不好意思说的话、平时没说出口的感谢或心事，但要照你自己的性格和说话方式，也要合你们现在的关系。
+- 可以接着你们最近聊过的事、他最近的近况、你记得的关于他的事来写。
+- {own_life}
+- 不写方括号里的语气提示，也不用 <whisper> 这类标签：信是读的，不是念的。
+- 不附照片，也不说要给他打电话。
+- 别和你之前写过的信用一样的开头、一样的由头。"""
+"""How she is to write a letter (GLOSSARY.md「来信」), with what it is for, its length and what
+she may tell of her own life filled in (`LETTER_OCCASIONS`)."""
+
+_EVERYDAY = (
+    "说到你自己那边，只说练习、拍摄、在事务所这类平常的事，或者世界设定里有日期的 live 和新歌；"
+    "不要编具体的剧情，也不要说别的偶像做了什么。"
+)
+_THAT_DAY = (
+    "说到你自己今天怎么过的，可以写和家人、朋友或同组合的伙伴一起度过的日常小事，照你的设定合理地写；"
+    "不要写成大事件，也不要编原作里的剧情。"
+)
+
+LETTER_OCCASIONS: dict[Occasion, tuple[str, str, str]] = {
+    "ordinary": (
+        "没有什么特别的由头，只是想给他写封信：最近的事、季节的变化、想对他说的话，由你挑一件来写。",
+        "正文写三到四段。",
+        _EVERYDAY,
+    ),
+    "producer_birthday": (
+        "这是给制作人的生日信，会在他生日那天一早送到（提前写好的话，就是零点）：你想第一个祝他生日快乐。"
+        "用你自己的方式祝福他，说说这一年来想对他说的话。",
+        "正文写三到五段。",
+        _EVERYDAY,
+    ),
+    "her_birthday": (
+        "今天是你自己的生日，现在是晚上。你想写信跟他说说今天是怎么过的：收到了谁的祝福、做了什么、"
+        "心里是什么感受，再谢谢他一直以来的照顾。",
+        "正文写三到四段。",
+        _THAT_DAY,
+    ),
+    "holiday": (
+        "今天是{about}现在是晚上。你想写信跟他说说这个节日你是怎么过的：做了什么、吃了什么、和谁一起、"
+        "发生了什么有意思的小事，最后祝福他。",
+        "正文写二到三段。",
+        _THAT_DAY,
+    ),
+}
+"""What each kind of letter is for (a holiday's, which, `about`), how long it is, and what she
+may tell of her own life in it."""
+
+
+def letter_rules(occasion: Occasion, about: str = "") -> str:
+    """How she is to write a letter for `occasion`; for a holiday, `about` says which, with its
+    note, as the calendar has it (`special_days.Holiday`)."""
+    what_for, length, own_life = LETTER_OCCASIONS[occasion]
+    return LETTER_RULES.format(
+        occasion=what_for.format(about=about), length=length, own_life=own_life
+    )
+
+WANTS_TO_WRITE = "（制作人这会儿没在和你说话。你想给他写一封信。）"
+"""Where the user's words would be as she writes a letter."""
+
+LETTER_LINES = 3
+"""How many of her latest letters to the user she is told of."""
+
+LETTER_DAYS = 14
+"""How many days after she wrote a letter she is told of it as she talks with the user."""
+
+_OCCASION_NAMES: dict[Occasion, str] = {
+    "ordinary": "平时的信", "producer_birthday": "生日信", "her_birthday": "你生日那天的信",
+    "holiday": "节日贺卡",
+}
+
+
+def letter_lines(letters: Sequence[Letter], timezone: str) -> list[str]:
+    """What she is told of her latest `letters` to the user, newest first: when, what kind, how
+    each began, and whether he has read it."""
+    zone = ZoneInfo(timezone)
+    lines = []
+    for letter in letters[:LETTER_LINES]:
+        at = datetime.fromisoformat(letter.created_at).astimezone(zone)
+        opening = next((s.zh for s in letter.segments[1:2]), letter.zh[:40])
+        read = "他已经看过了" if letter.read_at else "他还没看"
+        lines.append(
+            f"你在{at.month}月{at.day}日给制作人写过一封{_OCCASION_NAMES[letter.occasion]}，"
+            f"正文开头是「{without_cues(opening).strip()}」；{read}。"
+        )
+    return lines
 """Where the user's words would be as she reaches out, after the events since the last turn:
 so every protocol takes the prompt, ending with the user, as narration does."""
 
@@ -506,6 +622,7 @@ class ConversationEngine:
         affinities: Affinities | None = None,
         affinity_judge: AffinityJudge | None = None,
         photos: Photos | None = None,
+        special_days: SpecialDays | None = None,
     ) -> None:
         """Without `retrieval`, turns carry no story or character facts and find no
         memories. Each turn reads only the conversation's latest turns, as many as
@@ -514,7 +631,8 @@ class ConversationEngine:
         carry no world setting. Without `affinities`, turns change no affinity; with them,
         retrieval's judge judges what turns do to it, or without retrieval
         `affinity_judge`, which judges whether turns ask for a photo too. Without `photos`,
-        or without the judge model, no turn has a photo."""
+        or without the judge model, no turn has a photo. Without `special_days`, no turn
+        knows of birthdays or holidays but the producer's birthday."""
         self._store = store
         self._characters = characters
         self._gift_catalog = gift_catalog
@@ -527,7 +645,31 @@ class ConversationEngine:
         self._affinities = affinities
         self._affinity_judge = affinity_judge
         self._photos = photos
+        self._special_days = special_days
         self._ended_listeners: list[Callable[[str, EndsFor], None]] = []
+
+    def _special_lines(self, character: Character, today: date) -> list[str]:
+        """What `today`, the producer's local date, is besides their birthday, as `character`
+        is told it (`special_days`)."""
+        if self._special_days is None:
+            return []
+        names = {c.id: c.name for c in self._characters.values()}
+        return self._special_days.prompt_lines(character.id, names, today)
+
+    def _day_lines(
+        self, character: Character, user_id: str, now: datetime, timezone: str
+    ) -> list[str]:
+        """What she is told of the day besides the producer's birthday (`_special_lines`), and
+        of her letters to the user these last `LETTER_DAYS` days."""
+        since = now - timedelta(days=LETTER_DAYS)
+        letters = [
+            letter for letter in self._store.letters(user_id, character.id, now)
+            if datetime.fromisoformat(letter.created_at) >= since
+        ]
+        return [
+            *self._special_lines(character, local_date(now, timezone)),
+            *letter_lines(letters, timezone),
+        ]
 
     def on_ended(self, listener: Callable[[str, EndsFor], None]) -> None:
         """Have `listener` told the conversation's id, and why, as she ends one, once it is
@@ -670,8 +812,10 @@ class ConversationEngine:
                 now_prompt(
                     profile, now, timezone, "in_call" if in_call is not None else "typing",
                     affinity_lines, last_contact,
+                    self._day_lines(character, conversation.user_id, now, timezone),
                 ),
                 *([about_photo] if about_photo else []),
+                *([asmr_rules(voiced_by)] if in_call is not None and in_call.asmr else []),
             ],
             [p for p in (retrieved.memories_prompt, retrieved.prompt) if p],
             text, voiced_by,
@@ -806,10 +950,74 @@ class ConversationEngine:
                     profile, now, timezone, "apart",
                     affinity_prompt(affinity.tier, None) if affinity is not None else [],
                     self._store.last_contact(conversation.user_id, conversation.character_id),
+                    self._day_lines(character, conversation.user_id, now, timezone),
                 ),
             ],
             [*([memories] if memories else []), REACH_OUT_RULES],
             WANTS_TO_REACH_OUT, None,
+        )
+        parser = ReplyParser()
+        stream = llm.stream(prompt)
+        try:
+            async for item in stream:
+                if isinstance(item, str):
+                    parser.feed(item)  # a photo tag is dropped: she sends none
+        finally:
+            if (close := getattr(stream, "aclose", None)) is not None:
+                await close()
+        parser.finish()
+        if not parser.complete:
+            raise EmptyReply("对话模型没有返回任何内容")
+        return parser.complete
+
+    async def write_letter(
+        self,
+        conversation: Conversation,
+        llm: ChatLLM,
+        occasion: Occasion,
+        at: datetime | None = None,
+        about: str = "",
+    ) -> list[Segment]:
+        """A letter she writes the user (GLOSSARY.md「来信」) for `occasion` (a holiday's,
+        `about` which), on `llm`, from what she knows in `conversation`, her current one: its
+        segments, as the model wrote them. It comes `at`, if given, else now: written ahead, she
+        is told it is then, but for the producer's birthday, written the evening before. Her
+        prompt is a reach-out's (`reach_out`), told her latest letters (in `now_prompt`,
+        `_day_lines`) and how to write one (`letter_rules`). Raises EmptyReply if the model
+        writes nothing she could send, and whatever the model raises."""
+        character = self._characters[conversation.character_id]
+        record = self._store.record(conversation.id)
+        messages = [entry for entry in record if isinstance(entry, Message)]
+        profile = self._store.get_profile(conversation.user_id)
+        timezone = effective_timezone(profile, None)
+        now = self._clock() if at is None else at
+        if occasion == "producer_birthday" and at is not None:
+            now = min(self._clock(), at)  # written the evening before, to come at midnight
+        affinity = self._affinity(conversation)
+        world_prompt = (
+            self._world.prompt(character.name, local_date(now, timezone)) if self._world else None
+        )
+        told = narrations(record, self._gift_catalog, timezone)
+        told[None] = _since_last_turn(record, self._gift_catalog, timezone)
+        memories = await self._memory.for_reaching_out(
+            conversation, timezone, last_turn_query(messages)
+        )
+        prompt = self._prompt(
+            character, world_prompt, producer_prompt(profile),
+            chat_history(messages, self._history_turns()), told,
+            [
+                now_prompt(
+                    profile, now, timezone, "apart",
+                    affinity_prompt(affinity.tier, None) if affinity is not None else [],
+                    self._store.last_contact(conversation.user_id, conversation.character_id),
+                    self._day_lines(character, conversation.user_id, now, timezone),
+                ),
+            ],
+            [
+                *([memories] if memories else []),
+                letter_rules(occasion, about),
+            ],
+            WANTS_TO_WRITE, None,
         )
         parser = ReplyParser()
         stream = llm.stream(prompt)

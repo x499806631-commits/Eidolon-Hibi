@@ -86,7 +86,7 @@ def add_dashboard_routes(app: FastAPI, backend: Backend) -> None:
         starts = stretches(now, span, _zone(timezone))
         tally = backend.activity.tally(now - span.length, starts, DURATIONS)
         # Reach-outs are no turns nor calls, and taken by no user; their service calls count.
-        records = [r for r in tally.records if r.kind != "reach_out"]
+        records = [r for r in tally.records if r.kind in ("turn", "call")]
         reach_out_records = [r for r in tally.records if r.kind == "reach_out"]
         names = {id: c.name for id, c in backend.characters.items()}
         spent = cost(tally.calls, backend.prices.pricing(), starts)

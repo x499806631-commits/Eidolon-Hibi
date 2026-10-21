@@ -2,7 +2,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 /**
  * 头像的几档尺寸：`list` 是对话列表（56px），`bubble` 是气泡旁（36px），`call` 是没有立绘时通话层中部（112px），
- * `sm`、`lg` 给记忆页、登录页这类小处。
+ * `sm`、`lg` 给记忆页、登录页这类小处，`cell` 是日历页的格子里（手机 24px、电脑 36px）。
  */
 const SIZES = {
   sm: "size-6",
@@ -10,6 +10,7 @@ const SIZES = {
   lg: "size-12",
   list: "size-list-avatar",
   call: "size-28",
+  cell: "size-6 md:size-bubble-avatar",
 } as const;
 
 type Props = {

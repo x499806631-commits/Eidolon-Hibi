@@ -59,6 +59,8 @@ export type Call = {
   sendText: (text: string) => void;
   /** Whether the character's replies are voiced (GLOSSARY.md「只看文字」). */
   setTextOnly: (textOnly: boolean) => void;
+  /** Ask the backend to pick the ambience (环境音「自动」), or to stop picking it. */
+  setAmbienceAuto?: (on: boolean) => void;
   /** Turn the microphone's track on or off in the browser (GLOSSARY.md「麦克风静音」). */
   setMicEnabled: (enabled: boolean) => void;
   /** The microphone the call connected with. */
@@ -77,8 +79,8 @@ export type Call = {
  * it; the call screen has closed already. */
 const HANG_UP_GRACE_MS = 150;
 
-/** Connects a call, bringing the own keys this browser keeps for `userId` (read once, so the
- * services named before the call are those it brings); resolves once it has connected, on the
+/** Connects a call, an ASMR call (ASMR 模式通话) if `asmr`, bringing the own keys this browser
+ * keeps for `userId` (read once, so the services named before the call are those it brings); resolves once it has connected, on the
  * bot's `bot-ready`. That comes only after the peer connection and its data channel are open,
  * which is when the backend starts counting the call as connected. Fails with MicUnavailable,
  * an ApiError carrying the backend's reason, or an Error when it could not connect. */
@@ -87,6 +89,7 @@ export async function startCall(
   preferences: CallPreferences,
   handlers: CallHandlers,
   userId: string,
+  asmr = false,
 ): Promise<Call> {
   const { ownKeys, services } = callOwnKeys(userId);
   const { iceServers, maxCallSeconds, callExempt } = await getCallSetup(conversationId, services);
@@ -123,6 +126,7 @@ export async function startCall(
       quality: preferences.quality,
     };
     if (ownKeys) requestData.own_keys = ownKeys;
+    if (asmr) requestData.asmr = true;
     await client.connect({
       webrtcRequestParams: { endpoint: "/api/offer", headers: apiHeaders(), requestData },
     });
@@ -144,6 +148,7 @@ export async function startCall(
     exempt: callExempt,
     sendText: (text) => connected.sendClientMessage("user-text", { text }),
     setTextOnly: (textOnly) => connected.sendClientMessage("mute", { muted: textOnly }),
+    setAmbienceAuto: (on) => connected.sendClientMessage("ambience-auto", { on }),
     setMicEnabled: (enabled) => microphone.enableMic(enabled),
     mic: microphone.inUse,
     switchMic: (micId) => microphone.updateMic(micId),

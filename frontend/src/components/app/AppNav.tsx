@@ -2,25 +2,28 @@
 
 import NextLink from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useState, useSyncExternalStore, type MouseEvent } from "react";
 
 import { opensNewTab, useDirectory } from "@/components/conversations/ConversationDirectory";
 import { Button } from "@/components/ui/button";
 import { copy } from "@/i18n";
 import { hasUnseen } from "@/lib/conversationList";
+import { unreadLetters } from "@/lib/letters";
 import { currentNavItem, FIRST_LEVEL, isTyping, NAV_ITEMS, navDestination, type NavItem } from "@/lib/navShell";
 import { REPOSITORY_URL } from "@/lib/repository";
 import { cn } from "@/lib/utils";
-import { ConversationsIcon, GiftIcon, GitHubIcon, SettingsIcon } from "@/theme/icons";
+import { CalendarIcon, ConversationsIcon, GiftIcon, GitHubIcon, LettersIcon, SettingsIcon } from "@/theme/icons";
 
 const ICONS: Record<NavItem, typeof SettingsIcon> = {
   conversations: ConversationsIcon,
   gifts: GiftIcon,
+  calendar: CalendarIcon,
+  letters: LettersIcon,
   settings: SettingsIcon,
 };
 
 /**
- * 导航栏（电脑）：最左一条 72px，右边一条细线，不能收起；对话、礼物、设置从上往下，GitHub 仓库链接在最底下
+ * 导航栏（电脑）：最左一条 72px，右边一条细线，不能收起；对话、礼物、日历、信箱、设置从上往下，GitHub 仓库链接在最底下
  * （DESIGN.md「Layout」）。窄屏由 CSS 藏起来，换成 dock。通话层只盖住它右边，展开时它照样能点（见 NavLinks）。
  */
 export function NavRail() {
@@ -69,13 +72,19 @@ export function NavDock({ isInert }: { isInert: boolean }) {
  * 导航的每一项：图标在上、字在下；当前项（按网址，外壳的去处规则）图标铺中性的 bg-muted 圆角底、字 foreground 加 medium，
  * 标 `aria-current="page"`。点别的项去那一项的第一级；在二级页面上（她的对话页）再点当前项回到第一级，已在第一级时不动。
  * 通话层展开着（只有电脑上点得到，手机上它盖住 dock）时先收起，结束卡就放下，通话照常，去处顶上是通话条。
- * 对话列表里有一行有没看过的搭话（正开着的那段对话除外）时，「对话」图标右上角一个前景色的小点，和公告铃铛上的一样。
+ * 对话列表里有一行有没看过的搭话（正开着的那段对话除外）时，「对话」图标右上角一个前景色的小点，和公告铃铛上的一样；
+ * 有没读过的信时，「信箱」图标上也是这样一个点。
  */
 function NavLinks({ className }: { className: string }) {
   const pathname = usePathname();
   const { guard, held, characters, latest, preferences, onScreen } = useDirectory();
   const current = currentNavItem(pathname);
   const unseen = characters !== null && hasUnseen(characters, latest, { preferences, onScreen });
+  const unread = useSyncExternalStore(unreadLetters.subscribe, unreadLetters.snapshot, () => 0) > 0;
+  const dotted: Partial<Record<NavItem, string>> = {
+    ...(unseen ? { conversations: copy.nav.conversationsUnseen } : {}),
+    ...(unread ? { letters: copy.nav.lettersUnread } : {}),
+  };
   return NAV_ITEMS.map((item) => {
     const Icon = ICONS[item];
     const isCurrent = item === current;
@@ -94,7 +103,7 @@ function NavLinks({ className }: { className: string }) {
         href={FIRST_LEVEL[item]}
         onClick={onClick}
         aria-current={isCurrent ? "page" : undefined}
-        aria-label={item === "conversations" && unseen ? copy.nav.conversationsUnseen : undefined}
+        aria-label={dotted[item]}
         className={cn(
           "group flex flex-col items-center justify-center text-meta outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
           className,
@@ -107,7 +116,7 @@ function NavLinks({ className }: { className: string }) {
           )}
         >
           <Icon aria-hidden className="size-5" />
-          {item === "conversations" && unseen && (
+          {dotted[item] && (
             <span aria-hidden className="absolute top-1 right-2.5 size-1.5 rounded-full bg-foreground" />
           )}
         </span>

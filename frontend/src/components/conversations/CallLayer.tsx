@@ -11,6 +11,7 @@ import {
   type SVGProps,
 } from "react";
 
+import { AmbienceKey } from "@/components/conversations/AmbienceKey";
 import { MarkedAvatar } from "@/components/app/MarkedAvatar";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -595,6 +596,7 @@ function Dock({ isConnected, micMuted, onToggleMic, onHangUp, onSwitchMic }: Pro
           onClick={onToggleMic}
         />
         <RoundKey label={t.switchMic} icon={MicSwitchIcon} isDisabled={!isConnected} onClick={onSwitchMic} />
+        <AmbienceKey isDisabled={!isConnected} />
         <Button variant="hangup" size="call-dock" onClick={onHangUp} className="ml-2">
           <HangUpIcon aria-hidden />
           {t.hangUp}

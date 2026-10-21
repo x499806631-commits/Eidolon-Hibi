@@ -417,6 +417,9 @@ class Settings:
     affinity_and_gifts: bool = True
     """Whether affinity and gifts are on (GLOSSARY.md「好感度」), as they are only with the
     judge model; on unless `.env` turns them off, and the admin console may override it."""
+    letters: bool = False
+    """Whether characters write users letters (GLOSSARY.md「来信」), on the deployer's chat
+    model; off unless `.env` turns it on (`EIDOLON_LETTERS`)."""
     reach_outs: bool = False
     """Whether characters reach out to users (GLOSSARY.md「搭话」), on the deployer's chat
     model; off unless `.env` turns it on, and the admin console may override it."""
@@ -513,6 +516,7 @@ class Settings:
             exempting_keys=exempting_keys_from_env(),
             affinity_and_gifts=_switch("EIDOLON_AFFINITY_AND_GIFTS", default=True),
             reach_outs=_switch("EIDOLON_REACH_OUTS"),
+            letters=_switch("EIDOLON_LETTERS"),
             proxy=proxy_from_env(),
             service_status=service_status_from_env(),
             domain=os.environ.get("EIDOLON_DOMAIN", "").strip() or None,

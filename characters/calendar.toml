@@ -1,0 +1,204 @@
+# 日历：偶像的生日和节日。每个对话回合按制作人所在时区的今天，告诉她今天是什么日子。
+# 和礼物目录一样是配置，提交进仓库；文件不存在时没有特别的日子，写错了后端拒绝启动。
+#
+# [[birthdays]]：偶像的生日（取自 facts/<角色标识>.md 的档案）
+#   character  角色标识，characters.toml 里的 id
+#   date       "MM-DD"。2 月 29 日的生日在平年落在 2 月 28 日
+#
+# [[holidays]]：节日
+#   name       节日名，原样告诉她
+#   date       "MM-DD"，每年同一天；农历这类每年日期不同的节日改写 dates，按年份列出公历日期，
+#              例如 dates = { 2026 = "02-17", 2027 = "02-06" }，没列出的年份这个节日不出现
+#   end        "MM-DD"（可选）：节日一直持续到这一天，例如樱花季；不能跨年
+#   note       给她的一句背景（可选）：这一天大家通常会做什么
+#   icon       日历页上的小图标（可选），一个 emoji，只给页面看，不告诉她
+
+[[birthdays]]
+character = "mano"
+date = "04-25"
+
+[[birthdays]]
+character = "hiori"
+date = "03-04"
+
+[[birthdays]]
+character = "meguru"
+date = "07-22"
+
+[[birthdays]]
+character = "kogane"
+date = "02-25"
+
+[[birthdays]]
+character = "mamimi"
+date = "05-24"
+
+[[birthdays]]
+character = "sakuya"
+date = "06-27"
+
+[[birthdays]]
+character = "yuika"
+date = "01-16"
+
+[[birthdays]]
+character = "kiriko"
+date = "09-23"
+
+[[birthdays]]
+character = "kaho"
+date = "07-29"
+
+[[birthdays]]
+character = "chiyoko"
+date = "02-24"
+
+[[birthdays]]
+character = "juri"
+date = "11-26"
+
+[[birthdays]]
+character = "rinze"
+date = "10-19"
+
+[[birthdays]]
+character = "natsuha"
+date = "08-16"
+
+[[birthdays]]
+character = "amana"
+date = "12-25"
+
+[[birthdays]]
+character = "tenka"
+date = "12-25"
+
+[[birthdays]]
+character = "chiyuki"
+date = "04-18"
+
+[[birthdays]]
+character = "asahi"
+date = "01-04"
+
+[[birthdays]]
+character = "fuyuko"
+date = "12-04"
+
+[[birthdays]]
+character = "mei"
+date = "08-02"
+
+[[birthdays]]
+character = "toru"
+date = "05-04"
+
+[[birthdays]]
+character = "madoka"
+date = "10-27"
+
+[[birthdays]]
+character = "koito"
+date = "11-11"
+
+[[birthdays]]
+character = "hinana"
+date = "03-17"
+
+[[birthdays]]
+character = "nichika"
+date = "07-26"
+
+[[birthdays]]
+character = "mikoto"
+date = "09-08"
+
+[[birthdays]]
+character = "luca"
+date = "01-31"
+
+[[birthdays]]
+character = "hana"
+date = "10-02"
+
+[[birthdays]]
+character = "haruki"
+date = "04-05"
+
+[[holidays]]
+name = "元旦"
+icon = "🎍"
+date = "01-01"
+note = "新年的第一天，大家会互道新年快乐（あけましておめでとう），很多人去神社新年参拜（初詣）。"
+
+[[holidays]]
+name = "春节"
+icon = "🧧"
+dates = { 2025 = "01-29", 2026 = "02-17", 2027 = "02-06", 2028 = "01-26", 2029 = "02-13", 2030 = "02-03", 2031 = "01-23", 2032 = "02-11", 2033 = "01-31", 2034 = "02-19", 2035 = "02-08" }
+note = "中国的农历新年，制作人那边会团聚、拜年、说「新年快乐」。"
+
+[[holidays]]
+name = "情人节"
+icon = "🍫"
+date = "02-14"
+note = "在日本习惯由女生送巧克力，有送给心上人的，也有送给朋友（友チョコ）和平时照顾自己的人的。"
+
+[[holidays]]
+name = "女儿节（ひな祭り）"
+icon = "🎎"
+date = "03-03"
+note = "家里会摆出雏人形，吃散寿司和菱饼，祈愿女孩子健康成长。"
+
+[[holidays]]
+name = "白色情人节"
+icon = "🍬"
+date = "03-14"
+note = "收到过情人节巧克力的人回礼的日子。"
+
+[[holidays]]
+name = "樱花季"
+icon = "🌸"
+date = "03-25"
+end = "04-10"
+note = "樱花开的时候，大家会约着去赏花（花見）。"
+
+[[holidays]]
+name = "儿童节（こどもの日）"
+icon = "🎏"
+date = "05-05"
+note = "日本的儿童节，家里会挂鲤鱼旗、吃柏饼。"
+
+[[holidays]]
+name = "七夕"
+icon = "🎋"
+date = "07-07"
+note = "大家会把愿望写在短册上，挂在竹枝上。"
+
+[[holidays]]
+name = "中秋节"
+icon = "🎑"
+dates = { 2025 = "10-06", 2026 = "09-25", 2027 = "09-15", 2028 = "10-03", 2029 = "09-22", 2030 = "09-12", 2031 = "10-01", 2032 = "09-19", 2033 = "09-08", 2034 = "09-27", 2035 = "09-16" }
+note = "中国会赏月、吃月饼；日本这天叫「十五夜」，也有赏月、供月见团子的习惯。"
+
+[[holidays]]
+name = "万圣节"
+icon = "🎃"
+date = "10-31"
+note = "很多人会扮装，街上很热闹。"
+
+[[holidays]]
+name = "平安夜"
+icon = "🔔"
+date = "12-24"
+note = "在日本习惯和重要的人一起过，吃蛋糕和炸鸡。"
+
+[[holidays]]
+name = "圣诞节"
+icon = "🎄"
+date = "12-25"
+
+[[holidays]]
+name = "大晦日（跨年夜）"
+icon = "🍜"
+date = "12-31"
+note = "一年的最后一天，日本习惯吃跨年荞麦面，等着新年到来。"

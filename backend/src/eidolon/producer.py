@@ -147,11 +147,13 @@ def now_prompt(
     talking: Talking,
     affinity_lines: Sequence[str] = (),
     last_contact: datetime | None = None,
+    today_lines: Sequence[str] = (),
 ) -> str:
     """The prompt section about now: the time where the user is, how they are `talking` with
     the character, when they were `last_contact` in touch, if ever, and how long ago, and
-    whether it is their birthday; then `affinity_lines`, how the character feels toward them
-    now (`affinity.affinity_prompt`)."""
+    whether it is their birthday; then `today_lines`, what else the day is
+    (`special_days.SpecialDays.prompt_lines`); then `affinity_lines`, how the character feels
+    toward them now (`affinity.affinity_prompt`)."""
     zone = ZoneInfo(timezone)
     local = now.astimezone(zone)
     lines = [
@@ -169,5 +171,6 @@ def now_prompt(
         )
     if profile.birthday and is_birthday(profile.birthday, local.date()):
         lines.append(_BIRTHDAY_APART if talking == "apart" else _BIRTHDAY)
+    lines += today_lines
     lines += affinity_lines
     return "\n".join(lines)

@@ -1,4 +1,5 @@
 import type { AffinityChange, AffinityStatus } from "@/lib/affinity";
+import type { AmbienceKind } from "@/lib/ambience";
 import type { Provider } from "@/lib/signIn";
 import {
   forgetOwnKeys,
@@ -236,6 +237,7 @@ export type CallEvent =
   | SegmentPlaying
   | SegmentEmotion
   | Speaking
+  | AmbiencePicked
   | {
       type: "ended";
       reason: BackendEndReason;
@@ -244,6 +246,10 @@ export type CallEvent =
       cooldown_until?: string | null;
       event?: ConversationEvent;
     };
+
+/** The judge model picked the ambience to play under her voice (环境音「自动」), sent only while the
+ * browser asks for it (`Call.setAmbienceAuto`) and the kind is to change. */
+export type AmbiencePicked = { type: "ambience"; kind: AmbienceKind };
 
 /** A call's turn opens with `user` as any turn does, saying too which of her replies in the call
  * it opens, numbered from 1 (a turn replied to afresh opens again, with the next number). */

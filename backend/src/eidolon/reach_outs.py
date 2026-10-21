@@ -17,7 +17,12 @@ a user who has switched their own switch off (`switch`), on by default.
 
 Her time goes by the producer's day, in the profile's time zone (or `Asia/Shanghai`): one
 that falls in the `NIGHT`, or comes while it is night, is put off to the `MORNING` after,
-at a place in it drawn once for each contact. One past `WINDOW` after the last contact is
+at a place in it drawn once for each contact. On a special day (`special_days`: the
+producer's birthday, her own, or a holiday of one day), if they have not been in touch yet
+that day, her time is brought forward to that day's `MORNING`, at the same place, so that
+she comes to say something about the day; still not while she waits for the user to answer
+her, and not if her time from the range comes sooner. One brought forward is not missed as
+the backend was down: whenever it starts that day, she comes. One past `WINDOW` after the last contact is
 given up till they are in touch again. Those whose time has come at a tick come in the order
 of their times, each user reached out to at most as many times a day as the deployer sets;
 one over it is put off to a time drawn in the next day's `MORNING`. One whose time came
@@ -49,8 +54,9 @@ from eidolon.clock import Clock
 from eidolon.database import connect
 from eidolon.engine import ConversationEngine
 from eidolon.live_config import LiveConfig
-from eidolon.producer import effective_timezone
+from eidolon.producer import ProducerProfile, effective_timezone, is_birthday
 from eidolon.randomness import Random
+from eidolon.special_days import SpecialDays
 from eidolon.store import Conversation, CurrentConversation, ReachOutRefused, Store
 from eidolon.usage import UsageLimiter
 
@@ -119,7 +125,8 @@ class ReachOuts:
     """Her reach-outs, on the database at `path` beside the conversations of `store`, on the
     deployer's models of `config`, each recorded in `activity`; `usage` has the users' own
     limits, `in_call` says whether there is a call in a conversation, and `random` draws
-    when. A time that came before `clock` says it is as they begin is missed."""
+    when; `special_days` brings her time forward on the days she comes for. A time that came
+    before `clock` says it is as they begin is missed."""
 
     def __init__(
         self,
@@ -134,6 +141,7 @@ class ReachOuts:
         in_call: Callable[[str], bool],
         clock: Clock,
         random: Random,
+        special_days: SpecialDays | None = None,
     ) -> None:
         self._store = store
         self._engine = engine
@@ -145,6 +153,7 @@ class ReachOuts:
         self._in_call = in_call
         self._clock = clock
         self._random = random
+        self._special_days = special_days
         self._started = clock()
         self._db = connect(path)
         self._lock = threading.Lock()
@@ -234,7 +243,15 @@ class ReachOuts:
         place, morning, due = self._schedule(conversation.id, contact)
         if due is None:
             due = contact + self._interval(tier, place)
-        zone = ZoneInfo(effective_timezone(self._store.get_profile(conversation.user_id), None))
+        profile = self._store.get_profile(conversation.user_id)
+        zone = ZoneInfo(effective_timezone(profile, None))
+        if now < due and (
+            special := self._special_morning(conversation, profile, contact, morning, now, zone)
+        ) is not None and special < due:
+            # Brought forward to the special day's morning, which has come: not missed.
+            if now < special or self._talking(conversation.id):
+                return None
+            return _Due(conversation, contact, tier, special, zone)
         if _at_night(due, zone):
             night = due
         elif due <= now and _at_night(now, zone):
@@ -253,6 +270,32 @@ class ReachOuts:
             self._put_off(conversation.id, contact, now + self._interval(tier))
             return None
         return _Due(conversation, contact, tier, due, zone)
+
+    def _special_morning(
+        self,
+        conversation: Conversation,
+        profile: ProducerProfile,
+        contact: datetime,
+        morning: float | None,
+        now: datetime,
+        zone: ZoneInfo,
+    ) -> datetime | None:
+        """When in the morning she comes on the producer's today, if it is a special day for
+        her and they have not been in touch yet today; None if not, or if it is night now."""
+        if _at_night(now, zone):
+            return None
+        today = now.astimezone(zone).date()
+        if contact >= datetime.combine(today, time(), zone):
+            return None
+        birthday = profile.birthday is not None and is_birthday(profile.birthday, today)
+        greets = self._special_days is not None and self._special_days.greets(
+            conversation.character_id, today
+        )
+        if not birthday and not greets:
+            return None
+        if morning is None:
+            morning = self._draw_morning(conversation.id, contact)
+        return datetime.combine(today, NIGHT[1], zone) + MORNING * morning
 
     def _within_the_day(self, due: _Due, now: datetime) -> bool:
         """Whether the user may be reached out to once more today; if not, her time is put

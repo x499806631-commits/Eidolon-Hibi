@@ -38,6 +38,7 @@ from pipecat.processors.frameworks.rtvi.frames import (
 from pipecat.tests.utils import SleepFrame, run_test
 from pipecat.workers.runner import WorkerRunner
 
+from eidolon.ambience import AmbiencePicking
 from eidolon.call import (
     SONIOX_FOLLOW_ON_TIMEOUT,
     Call,
@@ -99,13 +100,15 @@ class CallUnderTest:
         follow_on_timeout: float = SONIOX_FOLLOW_ON_TIMEOUT,
         affinity: Sequence[Judging] | None = None,
         cooled: tuple[float, datetime] | None = None,
+        asmr: bool = False,
+        ambience: AmbiencePicking | None = None,
     ) -> tuple[list[str], list[dict]]:
         """Run the frames through; returns the text sent to TTS and the messages sent to the browser."""
         down = await self.run_frames(
             llm, frames, muted=muted, limits=limits, memory=memory,
             retrieval_judge=retrieval_judge, embedder=embedder, connected=connected,
             judge=judge, emotion=emotion, follow_on_timeout=follow_on_timeout,
-            affinity=affinity, cooled=cooled,
+            affinity=affinity, cooled=cooled, asmr=asmr, ambience=ambience,
         )
         spoken = [f.text for f in down if isinstance(f, SegmentTextFrame)]
         messages = [f.data for f in down if isinstance(f, RTVIServerMessageFrame)]
@@ -127,6 +130,8 @@ class CallUnderTest:
         follow_on_timeout: float = SONIOX_FOLLOW_ON_TIMEOUT,
         affinity: Sequence[Judging] | None = None,
         cooled: tuple[float, datetime] | None = None,
+        asmr: bool = False,
+        ambience: AmbiencePicking | None = None,
     ) -> Sequence[Frame]:
         """Run the frames through a call that, unless told otherwise, connects as it starts,
         remembering with the background model `memory`, if given, and retrieving with
@@ -134,7 +139,8 @@ class CallUnderTest:
         each segment's emotion, if given, as `emotion` says, and its speech recognition
         taking `follow_on_timeout` at most to transcribe a follow-on. Given `affinity`, affinity is on, the judge model judging
         each turn's as it says (`FakeJudgeModel.judgings`). Given `cooled`, she falls into a
-        cooldown elsewhere that many seconds into the call, ending when it says."""
+        cooldown elsewhere that many seconds into the call, ending when it says. `asmr`
+        makes it an ASMR call; `ambience` picks its ambience when asked."""
         remembering = {} if memory is None else {
             "background_llm": memory, "retrieval_judge": retrieval_judge or FakeJudge(),
             "embedder": embedder or FakeEmbedder(),
@@ -152,14 +158,14 @@ class CallUnderTest:
         try:
             mano = backend.characters["mano"]
             admission = backend.admissions.call(self.conversation.user_id, "mano", BroughtKeys())
-            call = Call(self.conversation, mano, admission.llms, muted, "standard")
+            call = Call(self.conversation, mano, admission.llms, muted, "standard", asmr=asmr)
             outcome = CallOutcome(
                 admission, limits, backend.clock,
                 partial(backend.store.keep_call, self.conversation.id),
             )
             turns = CallTurns(
                 backend.engine, backend.store, call, outcome, follow_on_timeout,
-                admission.keys.emotions,
+                admission.keys.emotions, ambience,
             )
             if connected:
                 turns.connected()

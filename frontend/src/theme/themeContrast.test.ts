@@ -14,6 +14,13 @@ describe("主题对比度", () => {
         expect(pair("--muted-foreground", "--muted", mode)).toBeGreaterThanOrEqual(4.5);
       });
 
+      it("日历页周六、周日的日期在页面底和 muted 底上都 ≥ 4.5", () => {
+        for (const day of ["--saturday", "--sunday"]) {
+          expect(pair(day, "--background", mode), day).toBeGreaterThanOrEqual(4.5);
+          expect(pair(day, "--muted", mode), day).toBeGreaterThanOrEqual(4.5);
+        }
+      });
+
       // --hangup 就是 var(--destructive)，不另测。
       it("挂断红（--destructive）上的白字 ≥ 4.5", () => {
         expect(contrast(color("--destructive", mode), "#ffffff")).toBeGreaterThanOrEqual(4.5);

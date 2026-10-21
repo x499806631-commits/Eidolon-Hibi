@@ -15,7 +15,7 @@ services:
       BACKEND_URL: http://backend:8000
       EIDOLON_STAND_ASSETS_URL: ${EIDOLON_STAND_ASSETS_URL:-}
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - backend
     restart: unless-stopped
