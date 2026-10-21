@@ -1,3 +1,5 @@
+> **这是一个个人 fork**：加了日历和节日、ASMR 通话、环境音、偶像来信，说明见 [FORK.md](FORK.md)。
+
 <div align="center">
 
 <img src="docs/images/landing.webp" alt="Eidolon-SC：和 283 事务所的偶像说说话" width="100%">
