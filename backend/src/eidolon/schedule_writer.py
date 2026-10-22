@@ -24,7 +24,7 @@ from eidolon.engine import ConversationEngine
 from eidolon.live_config import LiveConfig
 from eidolon.producer import effective_timezone
 from eidolon.randomness import Random
-from eidolon.schedules import TWISTS, Schedules, Slot, parse_schedule
+from eidolon.schedules import TWISTS, Schedules, Slot, parse_rest, parse_schedule
 from eidolon.schedules import said as schedule_said
 from eidolon.store import Conversation, Store
 
@@ -143,12 +143,14 @@ class ScheduleWriter:
         recording = self._activity.begin("schedule", user_id, character_id, own_llm=False, exempt=False)
         lease = self._config.lease()
         slots: list[Slot] = []
+        wake = sleep = None
         try:
             with recording.current():
                 answer = await self._engine.write_schedule(
                     conversation, lease.keys.chat_llm, day, twists, yesterday
                 )
             slots = parse_schedule(answer, self._characters)
+            wake, sleep = parse_rest(answer)
             recording.finish("success" if slots else "failed")
         except Exception as e:
             # Not logged with what was raised: a service's error may repeat what it was asked.
@@ -159,4 +161,6 @@ class ScheduleWriter:
             lease.release()
         if again:
             await asyncio.to_thread(self._schedules.forget, user_id, character_id, day)
-        await asyncio.to_thread(self._schedules.keep, user_id, character_id, day, slots, twists)
+        await asyncio.to_thread(
+            self._schedules.keep, user_id, character_id, day, slots, twists, wake, sleep
+        )

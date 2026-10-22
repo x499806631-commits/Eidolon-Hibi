@@ -1352,6 +1352,11 @@ class _LiveCall:
         await running
 
 
+OPENING = ""
+"""The turn she opens, answering the phone first, woken by it: no words of the user's. Nothing
+the user says is ever blank (`TurnTaking`), so it is told apart by that."""
+
+
 class CallTurns(FrameProcessor):
     """Takes turns in the conversation for the call, one at a time, as its `TurnTaking`
     has them.
@@ -1450,6 +1455,8 @@ class CallTurns(FrameProcessor):
         self._waiting: asyncio.Task | None = None  # times the follow-on waited for
         self._turn_outcome: TurnOutcome | None = None  # how it turns out, the last one's
         # till the next is taken up: her voice may start only once a recorded reply is over
+        self._answered = False  # the browser said the user hears her: she may answer first
+        self._said_anything = False  # the user has said or typed something in the call
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -1459,6 +1466,7 @@ class CallTurns(FrameProcessor):
             self._started = True
             self._start_timer()
         elif isinstance(frame, TranscriptionFrame):
+            self._said_anything = self._said_anything or bool(frame.text.strip())
             await self._carry_out(self._turns.user_said(frame.text))
         elif isinstance(frame, InterimTranscriptionFrame):
             await self._carry_out(self._turns.user_heard())
@@ -1522,11 +1530,14 @@ class CallTurns(FrameProcessor):
     async def _handle_client_message(self, frame: RTVIClientMessageFrame) -> None:
         data = frame.data if isinstance(frame.data, dict) else {}
         if frame.type == "user-text" and isinstance(data.get("text"), str):
+            self._said_anything = self._said_anything or bool(data["text"].strip())
             await self._carry_out(self._turns.user_typed(data["text"]))
         elif frame.type == "mute" and isinstance(data.get("muted"), bool):
             await self._carry_out(self._turns.text_only_switched(data["muted"]))
         elif frame.type == "hang-up":  # the browser closes the connection next
             self._outcome.ended_by("hung_up")
+        elif frame.type == "answered":
+            self._answer()
         elif frame.type == "ambience-auto" and isinstance(data.get("on"), bool):
             self._ambience_auto = data["on"]
             if self._ambience_auto:
@@ -1534,6 +1545,19 @@ class CallTurns(FrameProcessor):
                 self._pick_ambience()
             elif self._picking is not None:
                 await self.cancel_task(self._picking)
+
+    def _answer(self) -> None:
+        """The user hears her now, the ringback over (an `answered` client message): asleep by
+        her schedule, she answers the phone first, woken by it (GLOSSARY.md「行程」), as an
+        opening turn without words of the user's. Once in a call, before anything is said."""
+        if self._answered:
+            return
+        self._answered = True
+        if self._said_anything or not self._engine.asleep(
+            self._call.conversation, self._call.device_timezone
+        ):
+            return
+        self._inputs.put_nowait(OPENING)
 
     async def _carry_out(
         self,
@@ -1714,7 +1738,7 @@ class CallTurns(FrameProcessor):
         async for event in self._engine.turn(
             self._call.conversation, text, self._call.llms, self._call.device_timezone, stop,
             replace(self._outcome.in_call, asmr=self._call.asmr), self._call.voiced_by,
-            self._call.own_image,
+            self._call.own_image, opening=text == OPENING,
         ):
             if isinstance(event, CallTurnRecorded):
                 recorded = event

@@ -111,6 +111,16 @@ describe("conversationLog", () => {
     ]);
   });
 
+  it("answering a call first, she has no user line before her: none shown, live or recorded", () => {
+    const live = play([{ type: "user", text: "", at: NOW }]);
+    const loaded = play([
+      { type: "loaded", messages: [message(1, "user", ""), message(2, "character", "もしもし")] },
+    ]);
+
+    expect(live.entries.map((e) => e.kind)).toEqual(["character"]);
+    expect(loaded.entries.map((e) => e.key)).toEqual(["m2"]);
+  });
+
   it("opens a turn on `user` when nothing was typed, as in a call", () => {
     const log = play([{ type: "user", text: "在吗", at: NOW }], history);
     expect(log.turn?.confirmed).toBe(true);

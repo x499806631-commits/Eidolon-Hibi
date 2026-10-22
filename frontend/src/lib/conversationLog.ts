@@ -64,7 +64,7 @@ export const emptyLog: ConversationLog = { entries: [], turn: null };
 export function conversationLog(log: ConversationLog, action: LogAction): ConversationLog {
   switch (action.type) {
     case "loaded":
-      return { entries: action.messages.map(toEntry), turn: null };
+      return { entries: action.messages.filter((m) => !isBlankUserMessage(m)).map(toEntry), turn: null };
     case "submitted":
       return opened(withoutTurn(log), action.text, action.at, false);
     case "user":
@@ -143,7 +143,8 @@ function opened(log: ConversationLog, text: string, at: string, confirmed: boole
   return {
     entries: [
       ...log.entries,
-      { kind: "user", key: turn.userKey, text, at },
+      // 她先接起电话的那一轮没有用户的话：不画用户那一侧（GLOSSARY.md「行程」）。
+      ...(text ? [{ kind: "user" as const, key: turn.userKey, text, at }] : []),
       { kind: "character", key: turn.replyKey, segments: [], pending: true, at, affinity: null, photo: null },
     ],
     turn,
@@ -186,6 +187,11 @@ function withDelta(entry: Entry, event: TurnEvent & { type: "delta" }): Entry {
   const current = segments[event.segment] ?? { ja: "", zh: "" };
   segments[event.segment] = { ...current, [event.lang]: current[event.lang] + event.text };
   return { ...entry, segments };
+}
+
+/** 她先接起电话的那一轮，用户那条话是空的：不显示。 */
+function isBlankUserMessage(message: Recorded): boolean {
+  return !("type" in message) && message.role === "user" && !message.text;
 }
 
 function toEntry(message: Recorded): Entry {

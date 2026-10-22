@@ -62,9 +62,23 @@ CREATE TABLE IF NOT EXISTS schedules (
     slots TEXT NOT NULL,
     twists TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    wake TEXT,
+    sleep TEXT,
     PRIMARY KEY (user_id, character_id, day)
 );
 """
+
+Rest = Literal["asleep", "bedtime"]
+"""Asleep, or her bedtime near (`BEDTIME`)."""
+
+BEDTIME = timedelta(minutes=30)
+"""How long before she goes to bed it is her bedtime."""
+
+WAKE_HOURS = (time(4), time(12))
+"""When she may get up: from the first to the second."""
+
+SLEEP_HOURS = (time(20), time(4))
+"""When she may go to bed: from the first, through midnight, to the second."""
 
 
 @dataclass(frozen=True)
@@ -93,13 +107,23 @@ class Schedule:
     day: date
     slots: tuple[Slot, ...]
     twists: tuple[str, ...]
+    wake: time | None = None
+    """When she gets up that day; None if it was not written."""
+    sleep: time | None = None
+    """When she goes to bed that night, past midnight if before noon; None if not written."""
 
     def shown(self) -> dict:
         return {
             "day": self.day.isoformat(),
             "slots": [s.shown() for s in self.slots],
             "twists": list(self.twists),
+            "wake": _clock(self.wake),
+            "sleep": _clock(self.sleep),
         }
+
+    @property
+    def sleeps_after_midnight(self) -> bool:
+        return self.sleep is not None and self.sleep < time(12)
 
     def now(self, at: time) -> Slot | None:
         """The slot she is in at `at`; None between them."""
@@ -157,6 +181,62 @@ def _slot(entry: object, characters: Mapping[str, object]) -> Slot | None:
     )
 
 
+def parse_rest(answer: str) -> tuple[time | None, time | None]:
+    """When she gets up and goes to bed, as the model's answer says (`"wake"`, `"sleep"`);
+    either None where it cannot be read or falls outside its hours (`WAKE_HOURS`,
+    `SLEEP_HOURS`)."""
+    start_at, end_at = answer.find("{"), answer.rfind("}")
+    try:
+        written = json.loads(answer[start_at : end_at + 1]) if start_at >= 0 else None
+    except ValueError:
+        written = None
+    if not isinstance(written, dict):
+        return None, None
+    wake, sleep = _time(written.get("wake")), _time(written.get("sleep"))
+    if wake is not None and not WAKE_HOURS[0] <= wake <= WAKE_HOURS[1]:
+        wake = None
+    if sleep is not None and SLEEP_HOURS[1] < sleep < SLEEP_HOURS[0]:
+        sleep = None
+    return wake, sleep
+
+
+def rest(today: Schedule | None, yesterday: Schedule | None, at: datetime) -> Rest | None:
+    """Whether she is asleep at `at` (in the producer's time zone), or it is her bedtime, by
+    her schedules of the day and the day before; None awake, or not known. Before today's is
+    written she gets up as she did yesterday."""
+    now = at.time()
+    if yesterday is not None and yesterday.sleeps_after_midnight:
+        assert yesterday.sleep is not None
+        if now < yesterday.sleep:
+            return "bedtime" if _within(now, yesterday.sleep) else None
+    known = today or yesterday
+    wake = known.wake if known is not None else None
+    if wake is not None and now < wake:
+        return "asleep"
+    if today is not None and today.sleep is not None:
+        if today.sleeps_after_midnight:
+            return "bedtime" if _within(now, today.sleep) else None
+        if now >= today.sleep:
+            return "asleep"
+        if _within(now, today.sleep):
+            return "bedtime"
+    return None
+
+
+def _within(now: time, sleep: time) -> bool:
+    """Whether `now` is within `BEDTIME` before `sleep`, midnight between them or not."""
+    ahead = (_minutes(sleep) - _minutes(now)) % (24 * 60)
+    return 0 < ahead <= BEDTIME.total_seconds() // 60
+
+
+def _minutes(at: time) -> int:
+    return at.hour * 60 + at.minute
+
+
+def _clock(at: time | None) -> str | None:
+    return at.strftime("%H:%M") if at is not None else None
+
+
 def _time(text: object) -> time | None:
     if not isinstance(text, str) or not re.fullmatch(r"\d{1,2}:\d{2}", text.strip()):
         return None
@@ -178,12 +258,16 @@ class Schedules:
         self._clock = clock
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
+            columns = {row[1] for row in self._db.execute("PRAGMA table_info(schedules)")}
+            for column in ("wake", "sleep"):
+                if column not in columns:
+                    self._db.execute(f"ALTER TABLE schedules ADD COLUMN {column} TEXT")
 
     def of(self, user_id: str, character_id: str, day: date) -> Schedule | None:
         """Her schedule for `day` with the user; None if none was written, or it could not be."""
         with self._lock:
             row = self._db.execute(
-                "SELECT slots, twists FROM schedules WHERE user_id = ? AND character_id = ?"
+                "SELECT slots, twists, wake, sleep FROM schedules WHERE user_id = ? AND character_id = ?"
                 " AND day = ?",
                 (user_id, character_id, day.isoformat()),
             ).fetchone()
@@ -192,7 +276,11 @@ class Schedules:
         slots = tuple(_stored_slot(s) for s in json.loads(row[0]))
         if not slots:
             return None
-        return Schedule(day, slots, tuple(json.loads(row[1])))
+        return Schedule(
+            day, slots, tuple(json.loads(row[1])),
+            time.fromisoformat(row[2]) if row[2] else None,
+            time.fromisoformat(row[3]) if row[3] else None,
+        )
 
     def tried(self, user_id: str, character_id: str, day: date) -> bool:
         """Whether her schedule for `day` was written, or tried and could not be."""
@@ -204,20 +292,20 @@ class Schedules:
 
     def keep(
         self, user_id: str, character_id: str, day: date, slots: Sequence[Slot],
-        twists: Sequence[str],
+        twists: Sequence[str], wake: time | None = None, sleep: time | None = None,
     ) -> None:
         """Keep her schedule for `day`; none (`slots` empty) keeps the day from being tried
         again. One kept already is left as it is."""
         with self._lock, self._db:
             self._db.execute(
                 "INSERT OR IGNORE INTO schedules"
-                " (user_id, character_id, day, slots, twists, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
+                " (user_id, character_id, day, slots, twists, created_at, wake, sleep)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     user_id, character_id, day.isoformat(),
                     json.dumps([s.shown() for s in slots], ensure_ascii=False),
                     json.dumps(list(twists), ensure_ascii=False),
-                    self._clock().isoformat(),
+                    self._clock().isoformat(), _clock(wake), _clock(sleep),
                 ),
             )
 
@@ -242,25 +330,57 @@ class Schedules:
             self._db.close()
 
 
-def lines(schedule: Schedule | None, at: datetime, names: Mapping[str, str]) -> list[str]:
+WOKEN = (
+    "现在（{clock}）你本来已经睡着了，是被制作人的消息吵醒的：照你的性格迷迷糊糊地回，"
+    "可以小小抱怨一句或者撒个娇；聊着聊着可以慢慢清醒，困了也可以自然地道晚安。"
+)
+STILL_UP = (
+    "现在（{clock}）本来是你睡觉的时间，你们已经聊了一会儿，你还有点困；"
+    "不用再提被吵醒的事，困了可以自然地道晚安。"
+)
+WOKEN_BY_CALL = (
+    "现在（{clock}）本来是你睡觉的时间，你是被制作人的电话吵醒的，声音还有点迷糊；"
+    "不用每句都提被吵醒，困了可以自然地道晚安。"
+)
+BEDTIME_NEAR = "快到你睡觉的时间了，可以带一点困意，也可以提醒制作人早点休息。"
+
+
+def lines(
+    schedule: Schedule | None,
+    at: datetime,
+    names: Mapping[str, str],
+    resting: Rest | None = None,
+    woken: bool = True,
+    in_call: bool = False,
+) -> list[str]:
     """What she is told of her schedule at `at` (in the producer's time zone): the day in a
-    sentence and where she is now, and that it is only roughly so; nothing without one."""
+    sentence and where she is now, and that it is only roughly so; asleep (`resting`, by
+    `rest`), that she was woken, by a message (`woken` by this one, or awake a while) or a
+    call; near her bedtime, that it is. Nothing without a schedule, unless she is asleep."""
+    clock = at.strftime("%H:%M")
+    if resting == "asleep":
+        said = WOKEN_BY_CALL if in_call else WOKEN if woken else STILL_UP
+        return [said.format(clock=clock)]
     if schedule is None:
         return []
     day = "；".join(_said(s, names) for s in schedule.slots)
+    if schedule.sleep is not None:
+        day += f"；打算 {schedule.sleep.strftime('%H:%M')} 睡觉"
     current = schedule.now(at.time())
-    clock = at.strftime("%H:%M")
     if current is not None:
         now = f"现在（{clock}）你大概在：{_said(current, names, with_time=False)}。"
     elif at.time() < schedule.slots[0].start:
         now = f"现在（{clock}）今天的安排还没开始。"
     else:
         now = f"现在（{clock}）你没什么安排。"
-    return [
+    told = [
         f"你今天大概的安排：{day}。",
         now,
         "这是大概的安排，可以有出入。被问到在干嘛时自然地说，不要像念行程表一样一条条背出来。",
     ]
+    if resting == "bedtime":
+        told.append(BEDTIME_NEAR)
+    return told
 
 
 def said(schedule: Schedule | None, names: Mapping[str, str]) -> str | None:

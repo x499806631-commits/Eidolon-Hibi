@@ -10,13 +10,27 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 
 import httpx
+from pipecat.processors.frameworks.rtvi.frames import RTVIClientMessageFrame
+from pipecat.tests.utils import SleepFrame
 
 from eidolon.config import Settings
-from eidolon.engine import SCHEDULE_RULES, WANTS_TO_PLAN
+from eidolon.engine import ANSWERING, SCHEDULE_RULES, WANTS_TO_PLAN
 from eidolon.llm import LLMError
-from eidolon.schedules import TWISTS, Schedule, Slot, lines, parse_schedule
+from eidolon.schedules import (
+    TWISTS,
+    Schedule,
+    Schedules,
+    Slot,
+    lines,
+    parse_rest,
+    parse_schedule,
+    rest,
+)
 from tests.conftest import CharacterConfig, ClientFactory
 from tests.fakes import FakeClock, FakeLLM, FakeRandom, context_of
+from tests.test_call_turns import CallUnderTest
+from tests.test_call_turns import mano_call  # noqa: F401  # the fixture
+from tests.test_delete_account import user_id
 from tests.test_reach_outs import backend_of
 from tests.test_text_turn import send_turn, start_conversation
 from tests.test_world_setting import write_world
@@ -219,3 +233,97 @@ async def test_what_she_is_up_to_now_is_told_for_the_line_under_her_name(
     assert none_yet is None
     assert lesson == {"what": "舞蹈课", "where": "事务所", "kind": "lesson", "until": "12:00"}
     assert free == {"free": True}
+
+
+def rested(wake: str | None, sleep: str | None, day: date) -> Schedule:
+    return Schedule(
+        day, (Slot(time(10), time(12), "练习", "", "lesson"),), (),
+        time.fromisoformat(wake) if wake else None, time.fromisoformat(sleep) if sleep else None,
+    )
+
+
+def test_she_is_asleep_from_bedtime_to_waking_and_her_bedtime_comes_first():
+    day = date(2026, 10, 22)
+    early = rested("07:00", "23:00", day)
+    late = rested("09:00", "01:30", day)
+    before = rested("07:30", "23:00", day - timedelta(days=1))
+    night_owl = rested("09:00", "02:00", day - timedelta(days=1))
+
+    def at(hour: int, minute: int = 0) -> datetime:
+        return datetime.combine(day, time(hour, minute))
+
+    assert rest(early, before, at(6, 59)) == "asleep"
+    assert rest(early, before, at(7)) is None
+    assert rest(early, before, at(22, 40)) == "bedtime"
+    assert rest(early, before, at(23, 5)) == "asleep"
+    assert rest(late, before, at(23, 50)) is None
+    assert rest(late, before, at(1, 10)) == "asleep"  # yesterday's bedtime, before today's waking
+    assert rest(late, night_owl, at(1, 40)) == "bedtime"  # still up from last night
+    assert rest(early, night_owl, at(2, 30)) == "asleep"
+    assert rest(None, before, at(5)) == "asleep"  # today's not written: up as yesterday
+    assert rest(None, None, at(3)) is None
+
+
+def test_when_she_gets_up_and_goes_to_bed_is_read_within_their_hours():
+    assert parse_rest('{"wake": "07:30", "sleep": "00:30", "slots": []}') == (time(7, 30), time(0, 30))
+    assert parse_rest('{"wake": "03:00", "sleep": "18:00"}') == (None, None)
+    assert parse_rest('{"wake": "08:00", "sleep": "23:00"}') == (time(8), time(23))
+    assert parse_rest("没有 JSON") == (None, None)
+
+
+def keep_night(settings: Settings, wake: time, sleep: time, day: date) -> None:
+    schedules = Schedules(settings.database_path, lambda: datetime.now(UTC))
+    schedules.keep(
+        user_id(settings.database_path, "producer"), "mano", day,
+        [Slot(time(10), time(12), "练习", "", "lesson")], [], wake, sleep,
+    )
+    schedules.close()
+
+
+async def test_a_message_while_she_sleeps_wakes_her_and_after_that_she_is_up(
+    make_client: ClientFactory, settings: Settings
+):
+    llm = FakeLLM(REPLY, REPLY, REPLY)
+    clock = FakeClock(today_at(1))
+    client = make_client(llm, clock=clock)
+    await client.put("/api/profile", json={"timezone": "Etc/GMT"})
+    conversation = await start_conversation(client)
+    keep_night(settings, time(7), time(23), today_at(1).date())
+
+    await send_turn(client, conversation, "还醒着吗")
+    woken = context_of(llm.prompts[-1])
+    status = (await client.get("/api/characters/mano/schedule/now")).json()
+    clock.advance(minutes=5)
+    await send_turn(client, conversation, "抱歉吵醒你了")
+    up = context_of(llm.prompts[-1])
+
+    assert "是被制作人的消息吵醒的" in woken
+    assert "你们已经聊了一会儿" in up and "被制作人的消息吵醒" not in up
+    assert status == {"asleep": True, "woken": True}
+
+
+async def test_woken_by_a_call_she_answers_it_first(
+    mano_call: CallUnderTest, settings: Settings
+):
+    keep_night(settings, time(7), time(20), date(2026, 9, 25))  # Shanghai's 20:30: asleep
+    llm = FakeLLM(["<ja>……もしもし……？</ja><zh>……喂……？</zh>"])
+
+    spoken, messages = await mano_call.run(llm, [answered(), SleepFrame(0.5)])
+
+    assert spoken == ["……もしもし……？"]
+    assert messages[0]["type"] == "user" and messages[0]["text"] == ""
+    assert llm.prompts[0][-1].content == ANSWERING
+    assert "是被制作人的电话吵醒的" in context_of(llm.prompts[0])
+
+
+async def test_awake_she_waits_for_the_user_to_speak(mano_call: CallUnderTest, settings: Settings):
+    keep_night(settings, time(7), time(23, 30), date(2026, 9, 25))  # Shanghai's 20:30: awake
+    llm = FakeLLM()
+
+    spoken, _ = await mano_call.run(llm, [answered(), SleepFrame(0.3)])
+
+    assert spoken == [] and llm.prompts == []
+
+
+def answered() -> RTVIClientMessageFrame:
+    return RTVIClientMessageFrame(msg_id="a1", type="answered", data={})

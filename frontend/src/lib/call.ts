@@ -61,6 +61,8 @@ export type Call = {
   setTextOnly: (textOnly: boolean) => void;
   /** Ask the backend to pick the ambience (环境音「自动」), or to stop picking it. */
   setAmbienceAuto?: (on: boolean) => void;
+  /** The user hears her now, the ringback over: asleep by her schedule, she answers first (GLOSSARY.md「行程」). */
+  answered?: () => void;
   /** Turn the microphone's track on or off in the browser (GLOSSARY.md「麦克风静音」). */
   setMicEnabled: (enabled: boolean) => void;
   /** The microphone the call connected with. */
@@ -149,6 +151,7 @@ export async function startCall(
     sendText: (text) => connected.sendClientMessage("user-text", { text }),
     setTextOnly: (textOnly) => connected.sendClientMessage("mute", { muted: textOnly }),
     setAmbienceAuto: (on) => connected.sendClientMessage("ambience-auto", { on }),
+    answered: () => connected.sendClientMessage("answered", {}),
     setMicEnabled: (enabled) => microphone.enableMic(enabled),
     mic: microphone.inUse,
     switchMic: (micId) => microphone.updateMic(micId),

@@ -203,6 +203,9 @@ export const zh = {
       doing: (what: string) => what,
       doingAt: (what: string, where: string) => `${what} · ${where}`,
       free: "现在有空",
+      asleep: "在睡觉 💤",
+      woken: "被你吵醒了",
+      bedtime: "准备睡了",
       /** 读屏读的：「她现在大概在：舞蹈课 · 事务所」。 */
       label: (doing: string) => `她现在大概在：${doing}`,
     },

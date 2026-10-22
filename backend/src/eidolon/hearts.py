@@ -47,6 +47,8 @@ class Heart:
     romance: Mapping[str, str] = field(default_factory=dict)
     scenes: Mapping[str, str] = field(default_factory=dict)
     """How she plays her scene at the door of `close` and of `intimate` (GLOSSARY.md「重要的一幕」)."""
+    sleep: str | None = None
+    """When she tends to go to bed and get up, for her schedule (GLOSSARY.md「行程」)."""
 
     @property
     def adult(self) -> bool:
@@ -112,9 +114,13 @@ def _parse(file: Path, data: dict) -> Heart:
     unknown = set(scenes) - set(get_args(RomanceTier))
     if unknown:
         raise HeartsError(f"{file}：[scenes] 只能写 close、intimate，不认识 {'、'.join(sorted(unknown))}")
+    sleep = data.get("sleep")
+    if sleep is not None and (not isinstance(sleep, str) or not sleep.strip()):
+        raise HeartsError(f"{file}：sleep 要写一段文字（她的作息习惯）")
     return Heart(
         age, pleased, hurt, {k: v.strip() for k, v in tiers.items()},
         {k: v.strip() for k, v in romance.items()}, {k: v.strip() for k, v in scenes.items()},
+        sleep.strip() if sleep else None,
     )
 
 

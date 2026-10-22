@@ -551,6 +551,8 @@ export class LiveConversation {
     }
     this.call = started;
     this.ports.voice.callConnected?.((on) => started.setAmbienceAuto?.(on));
+    // 铃声响完、她听得到了：按行程她在睡觉时，由她先接起电话（GLOSSARY.md「行程」）。
+    started.answered?.();
     this.ports.tones.connect();
     this.update({
       call: {

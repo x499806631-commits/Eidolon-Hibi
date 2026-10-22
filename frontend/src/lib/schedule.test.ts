@@ -9,4 +9,13 @@ describe("她现在大概在干嘛", () => {
     expect(scheduleText({ free: true })).toBe("现在有空");
     expect(scheduleText(null)).toBeNull();
   });
+
+  it("睡着了写在睡觉，被你吵醒了写出来，快到睡觉的时间写准备睡了", () => {
+    expect(scheduleText({ asleep: true, woken: false })).toBe("在睡觉 💤");
+    expect(scheduleText({ asleep: true, woken: true })).toBe("被你吵醒了");
+    expect(scheduleText({ free: true, bedtime: true })).toBe("准备睡了");
+    expect(scheduleText({ what: "看动画", where: "家里", kind: "private", until: "23:30", bedtime: true })).toBe(
+      "准备睡了",
+    );
+  });
 });
