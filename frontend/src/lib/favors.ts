@@ -1,5 +1,6 @@
 // 拜托（GLOSSARY.md「拜托」）：用一张拜托券，再交出背包里的几件礼物当材料，请一位偶像做一件事：
-// 换个称呼、叫起床、结拜、托人和好、一起办聚会。每种要哪些礼物（`Slot`）由后端给；
+// 换个称呼、叫起床、结拜、托人和好、一起办聚会。她回了话，券和礼物就用掉了，答不答应都一样；
+// 换称呼她可能不答应，那就只叫这一次。每种要哪些礼物（`Slot`）由后端给；
 // 这里挑出背包里够格的、先替制作人选好，谁能拜托（档位）也在这里判断。
 
 import type { Tier } from "@/lib/affinity";
@@ -87,7 +88,10 @@ export async function getFavors(): Promise<FavorOverview> {
   return json(await api("/api/favors"));
 }
 
-async function ask(kind: FavorKind, body: object): Promise<{ conversation_id: string; left: number }> {
+/** 拜托以后：她回话的对话、答没答应（只有换称呼会不答应）、还剩几张拜托券。 */
+export type Asked = { conversation_id: string; accepted: boolean; left: number };
+
+async function ask(kind: FavorKind, body: object): Promise<Asked> {
   return json(
     await api(`/api/favors/${kind}`, {
       method: "POST",

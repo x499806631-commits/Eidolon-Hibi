@@ -67,11 +67,14 @@ class Ties:
     """What the producer asked of one character alone (GLOSSARY.md「拜托」), kept from then
     on: how she calls them, in place of the profile's (`address`), and whether they are sworn
     sisters, and who is the elder (`bond`); and, for a few days after another made peace
-    between them (GLOSSARY.md「托人和好」), who did (`made_up_by`, her name)."""
+    between them (GLOSSARY.md「托人和好」), who did (`made_up_by`, her name); and for a few
+    days after she would not call them as asked, how (`declined`)."""
 
     address: str | None = None
     bond: Elder | None = None
     made_up_by: str | None = None
+    declined: str | None = None
+    """A way to call the producer she was lately asked to and would not take up."""
 
 
 def bond_words(bond: Elder, gender: "Gender | None") -> tuple[str, str]:
@@ -139,6 +142,11 @@ def producer_prompt(profile: ProducerProfile, ties: Ties | None = None) -> str:
         )
     else:
         lines.append("制作人是男性，和原作一致。")
+    if ties is not None and ties.declined:
+        lines.append(
+            f"前几天制作人拜托你改叫对方「{ties.declined}」，你没有答应，只在那一次这样叫过。"
+            "平时还是照你原来的习惯称呼制作人。"
+        )
     if ties is not None and ties.bond:
         pair, producer_is = bond_words(ties.bond, profile.gender)
         you_are = "妹妹" if ties.bond == "producer" else "姐姐"

@@ -2,8 +2,10 @@
 ticket (GLOSSARY.md「体验券」), giving up gifts from the backpack for it (`MATERIALS`), each a
 kind of slot a gift fills: of a category, of a rarity, or any.
 
-- `address`: she calls the producer as they ask from then on, she alone (`Ties.address`);
-  asked again, as she used to. Not while she is cold or distant to them, or cooling.
+- `address`: she calls the producer as they ask from then on, she alone (`Ties.address`),
+  if she takes it up, as the name and her character have it; if not, she calls them so
+  that once, and knows for a few days she would not (`Ties.declined`); asked again, as she
+  used to. Not while she is cold or distant to them, or cooling.
 - `wake`: she wakes the producer at a time of the morning, for some days on end, with a few
   words in their conversation (`run_due`).
 - `bond`: the two of them sworn sisters (or siblings), one of them the elder (`Ties.bond`),
@@ -22,16 +24,20 @@ kind of slot a gift fills: of a category, of a rarity, or any.
 
 She answers each as she is asked, in her current conversation, which is to be open; what
 she says, and says later, is a reach-out (GLOSSARY.md「搭话」), on the deployer's chat model.
-A favor whose answer fails is not kept, and its gifts are given back; what comes of it later
-is tried again `RETRY_AFTER` later, `TRIES` times in all.
+Once she has answered, the ticket and the gifts are used up, whatever she answered: asked to
+call the producer otherwise, she may not take it up (`<answer>no</answer>`), calling them so
+that once only. Only a favor she never got to answer (the model failing) is not kept, and
+its ticket and gifts are given back; one that cannot be asked (`CannotAsk`) takes nothing.
+What comes of a favor later is tried again `RETRY_AFTER` later, `TRIES` times in all.
 """
 
 import asyncio
 import json
+import re
 import logging
 import sqlite3
 import threading
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from itertools import permutations
@@ -134,7 +140,7 @@ class CannotAsk(Exception):
 _SCHEMA = """
 -- What the producer asked of one character alone (GLOSSARY.md「拜托」): how she calls them,
 -- whether they are sworn sisters and who is the elder (her, producer), and when; who made
--- peace between them last and when.
+-- peace between them last and when; a way to call them she lately would not take up, and when.
 CREATE TABLE IF NOT EXISTS favor_ties (
     user_id TEXT NOT NULL REFERENCES users(id),
     character_id TEXT NOT NULL,
@@ -143,6 +149,8 @@ CREATE TABLE IF NOT EXISTS favor_ties (
     bonded_at TEXT,
     made_up_by TEXT,
     made_up_at TEXT,
+    declined TEXT,
+    declined_at TEXT,
     PRIMARY KEY (user_id, character_id)
 );
 -- The mornings she is to wake the producer: when, the how-many-th of how many, done or not.
@@ -193,9 +201,28 @@ CREATE TABLE IF NOT EXISTS favor_parties (
 """
 
 ADDRESS_RULES = """# 拜托：换个称呼
-制作人拜托你，{change}，还送了你{gifts}当谢礼。照你的性格和你们现在的关系回应：可以害羞、嘴硬、开心，但你会答应。{try_it}
+制作人拜托你，以后叫对方「{address}」，还送了你{gifts}当谢礼。答不答应由你自己决定：想想这个叫法和你的性格、说话习惯、你们现在的关系合不合，你叫得出口吗？
+- 先单独写一行 <answer>yes</answer>（答应）或 <answer>no</answer>（不答应），再写你说的话。
+- 答应的话，回应时就这样叫一次，以后一直这样叫，直到制作人再拜托你换。
+- 不答应的话，照你的性格说清楚为什么，但看在礼物的份上，就这一次这样叫对方一声；说明以后还是照原来的叫法。
 - 用 <ja><zh> 写一到两段。
 - 不发照片，也不说要给制作人打电话。"""
+
+ADDRESS_BACK_RULES = """# 拜托：换回原来的称呼
+制作人拜托你，以后还是照你原来的习惯称呼对方，不用再叫「{address}」了，还送了你{gifts}当谢礼。照你的性格回应，你会答应。
+- 用 <ja><zh> 写一到两段。
+- 不发照片，也不说要给制作人打电话。"""
+
+DECLINED_FOR = timedelta(days=3)
+"""How long she remembers a way to call the producer she would not take up."""
+
+_ANSWER = re.compile(r"<answer>\s*(yes|no)\s*</answer>", re.IGNORECASE)
+
+
+def answered_no(raw: str) -> bool:
+    """Whether she wrote she would not; an answer left out is a yes."""
+    found = _ANSWER.search(raw)
+    return found is not None and found.group(1).lower() == "no"
 
 WAKE_ACCEPT_RULES = """# 拜托：叫起床
 制作人拜托你从{first}起，连续{days}天，每天早上{at}叫对方起床，还送了你{gifts}当谢礼。照你的性格回应：你会答应，可以调侃一句、叮嘱一句。
@@ -315,6 +342,10 @@ class Favors:
         self._lock = threading.Lock()
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
+            have = {r[1] for r in self._db.execute("PRAGMA table_info(favor_ties)")}
+            for column in ("declined", "declined_at"):
+                if column not in have:
+                    self._db.execute(f"ALTER TABLE favor_ties ADD COLUMN {column} TEXT")
 
     # What the rest read.
 
@@ -331,7 +362,10 @@ class Favors:
         if row["made_up_at"] and self._clock() - datetime.fromisoformat(row["made_up_at"]) < MADE_UP_FOR:
             mediator = self._characters.get(row["made_up_by"])
             made_up_by = mediator.name if mediator else None
-        ties = Ties(row["address"], row["bond"], made_up_by)
+        declined = None
+        if row["declined_at"] and self._clock() - datetime.fromisoformat(row["declined_at"]) < DECLINED_FOR:
+            declined = row["declined"]
+        ties = Ties(row["address"], row["bond"], made_up_by, declined)
         return ties if ties != Ties() else None
 
     def twists_on(self, user_id: str, character_id: str, day: date) -> list[str]:
@@ -407,27 +441,36 @@ class Favors:
 
     async def ask_address(
         self, user_id: str, character_id: str, address: str | None, gift_ids: Sequence[str]
-    ) -> str:
+    ) -> tuple[str, bool]:
         """Ask her to call the producer `address`, or, None, as she used to: the conversation
-        she answers in."""
+        she answers in, and whether she took it up. She may not, as her character and the
+        name have it: then she calls them so this once and goes on as before, the ticket
+        and the gifts used up all the same."""
         conversation = self._open(user_id, character_id)
         self._willing(user_id, character_id)
         address = (address or "").strip() or None
         if address is not None and len(address) > ADDRESS_MAX:
             raise CannotAsk("称呼太长了")
         gifts = self._fitting("address", gift_ids)
-        change = (
-            f"以后叫对方「{address}」" if address
-            else "以后还是照你原来的习惯称呼对方，不用再用之前说好的叫法了"
-        )
-        try_it = "回答里试着这样叫一次。" if address else ""
-        rules = ADDRESS_RULES.format(change=change, gifts=gifts, try_it=try_it)
+        if address is None:
+            before = self.ties(user_id, character_id)
+            rules = ADDRESS_BACK_RULES.format(
+                address=(before and before.address) or "之前说好的叫法", gifts=gifts
+            )
+        else:
+            rules = ADDRESS_RULES.format(address=address, gifts=gifts)
+        accepted = True
 
-        async def done() -> None:
-            await asyncio.to_thread(self._set_tie, user_id, character_id, "address", address)
+        async def done(raw: str) -> None:
+            nonlocal accepted
+            if address is not None and answered_no(raw):
+                accepted = False
+                await asyncio.to_thread(self._declined, user_id, character_id, address)
+            else:
+                await asyncio.to_thread(self._set_tie, user_id, character_id, "address", address)
 
         await self._ask(user_id, conversation, gift_ids, rules, "（制作人刚刚拜托你换个称呼。）", done)
-        return conversation.id
+        return conversation.id, accepted
 
     async def ask_wake(
         self, user_id: str, character_id: str, at: time, days: int, gift_ids: Sequence[str]
@@ -449,7 +492,7 @@ class Favors:
             first=first_said, days=days, at=at.strftime("%H:%M"), gifts=gifts
         )
 
-        async def done() -> None:
+        async def done(_: str) -> None:
             await asyncio.to_thread(self._plan_wakes, user_id, character_id, mornings)
 
         await self._ask(user_id, conversation, gift_ids, rules, "（制作人刚刚拜托你叫他起床。）", done)
@@ -469,7 +512,7 @@ class Favors:
         you_are = "妹妹" if elder == "producer" else "姐姐"
         rules = BOND_RULES.format(pair=pair, you_are=you_are, producer_is=producer_is, gifts=gifts)
 
-        async def done() -> None:
+        async def done(_: str) -> None:
             now = self._clock()
             await asyncio.to_thread(self._set_tie, user_id, character_id, "bond", elder, now)
             self._keepsakes.favor_done(
@@ -511,7 +554,7 @@ class Favors:
             minutes=5 * self._random(int(MAKE_UP_SPREAD.total_seconds() // 300))
         )
 
-        async def done() -> None:
+        async def done(_: str) -> None:
             with self._lock, self._db:
                 self._db.execute(
                     "INSERT INTO favor_make_ups (user_id, mediator_id, target_id, gift, due_at,"
@@ -561,7 +604,7 @@ class Favors:
             minutes=5 * self._random(AFTER_PARTY_SPREAD // 5)
         )
 
-        async def done() -> None:
+        async def done(_: str) -> None:
             with self._lock, self._db:
                 cursor = self._db.execute(
                     "INSERT OR IGNORE INTO favor_parties (user_id, day, helper_id, guests, what,"
@@ -584,24 +627,25 @@ class Favors:
 
     async def _ask(
         self, user_id: str, conversation: Conversation, gift_ids: Sequence[str], rules: str,
-        wants: str, done: Callable[[], object],
+        wants: str, done: Callable[[str], Awaitable[None]],
     ) -> None:
-        """Take the gifts, have her answer, keep what she said and what was asked (`done`);
-        the gifts given back should any of it fail."""
+        """Take the gifts, have her answer, keep what she said and what was asked (`done`,
+        given all the model wrote). Once she has answered they are used up, whatever she
+        answered; given back only should she not get to (the model failing), or what was
+        asked not be kept."""
         self._gifts.take_gifts(user_id, gift_ids)
         try:
-            said, _ = await self._say(conversation, rules, wants)
-            result = done()
-            if asyncio.iscoroutine(result):
-                await result
-            self._store.add_photo_reach_out(conversation.id, said, None)
+            said, _, raw = await self._say(conversation, rules, wants)
+            # Keeping it fails only should the same day be taken meanwhile: nothing is kept.
+            await done(raw)
         except BaseException:
             self._gifts.put_back_gifts(user_id, gift_ids)
             raise
+        self._store.add_photo_reach_out(conversation.id, said, None)
 
     async def _say(
         self, conversation: Conversation, rules: str, wants: str, with_photo: bool = False
-    ) -> tuple[list[Segment], str | None]:
+    ) -> tuple[list[Segment], str | None, str]:
         recording = self._activity.begin(
             "reach_out", conversation.user_id, conversation.character_id, own_llm=False,
             exempt=False,
@@ -609,7 +653,7 @@ class Favors:
         lease = self._config.lease()
         try:
             with recording.current():
-                said, tag = await self._engine.favor_reply(
+                said, tag, raw = await self._engine.favor_reply(
                     conversation, lease.keys.chat_llm, rules, wants, with_photo
                 )
         except Exception:
@@ -618,7 +662,7 @@ class Favors:
         finally:
             lease.release()
         recording.finish("success")
-        return said, tag
+        return said, tag, raw
 
     def _open(self, user_id: str, character_id: str) -> Conversation:
         if character_id not in self._characters:
@@ -687,7 +731,7 @@ class Favors:
         )
         rules = WAKE_RULES.format(at=due.astimezone(zone).strftime("%H:%M"), which=which)
         try:
-            said, _ = await self._say(conversation, rules, WANTS_TO_WAKE)
+            said, _, _ = await self._say(conversation, rules, WANTS_TO_WAKE)
         except Exception as e:
             log.warning("waking the producer failed: %s", type(e).__name__)
             self._tried("favor_wakes", key, now)
@@ -721,7 +765,7 @@ class Favors:
             if self._busy(conversation):
                 return
             try:
-                said, _ = await self._say(
+                said, _, _ = await self._say(
                     conversation, MADE_UP_RULES.format(mediator=mediator.name, gifts=row["gift"]),
                     WANTS_TO_MAKE_UP.format(mediator=mediator.name),
                 )
@@ -738,7 +782,7 @@ class Favors:
         if self._busy(conversation):
             return
         try:
-            said, _ = await self._say(
+            said, _, _ = await self._say(
                 conversation, MADE_UP_REPORT_RULES.format(target=target.name), WANTS_TO_REPORT
             )
         except Exception as e:
@@ -777,7 +821,7 @@ class Favors:
                     self._characters[c].name for c in [helper_id, *guests] if c != honoree_id
                 )
                 try:
-                    said, _ = await self._say(
+                    said, _, _ = await self._say(
                         conversation,
                         PARTY_THANKS_RULES.format(helper=helper.name, what=row["what"], names=others),
                         WANTS_TO_THANK,
@@ -830,7 +874,7 @@ class Favors:
             )
         wants = WANTS_TO_TELL_OF_PARTY.format(what=row["what"])
         try:
-            said, tag = await self._say(conversation, rules, wants, with_photo)
+            said, tag, _ = await self._say(conversation, rules, wants, with_photo)
         except Exception as e:
             log.warning("telling of a party failed: %s", type(e).__name__)
             self._tried("favor_parties", (user_id, row["day"]), now)
@@ -857,11 +901,26 @@ class Favors:
                 f"UPDATE favor_ties SET {field} = ? WHERE user_id = ? AND character_id = ?",
                 (value, user_id, character_id),
             )
+            if field == "address":
+                self._db.execute(
+                    "UPDATE favor_ties SET declined = NULL, declined_at = NULL"
+                    " WHERE user_id = ? AND character_id = ?",
+                    (user_id, character_id),
+                )
             if at is not None and field == "bond":
                 self._db.execute(
                     "UPDATE favor_ties SET bonded_at = ? WHERE user_id = ? AND character_id = ?",
                     (at.astimezone(UTC).isoformat(), user_id, character_id),
                 )
+
+    def _declined(self, user_id: str, character_id: str, address: str) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO favor_ties (user_id, character_id, declined, declined_at)"
+                " VALUES (?, ?, ?, ?) ON CONFLICT (user_id, character_id) DO UPDATE SET"
+                " declined = excluded.declined, declined_at = excluded.declined_at",
+                (user_id, character_id, address, self._clock().astimezone(UTC).isoformat()),
+            )
 
     def _plan_wakes(self, user_id: str, character_id: str, mornings: Sequence[datetime]) -> None:
         with self._lock, self._db:

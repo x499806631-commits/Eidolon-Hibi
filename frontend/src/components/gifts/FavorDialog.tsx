@@ -49,7 +49,8 @@ function among(list: Character[], id: string): Character | undefined {
 /**
  * 用一张拜托券（DESIGN.md「礼物页」）：宽屏对话框、窄屏底部面板，版式同用体验券的框。最上面一排五个键选拜托什么，
  * 下面一句这件事的说明，再下面按这件事选人和细节，最后是「要用的礼物」：每件材料一个下拉框，先替你选好背包里够格的，
- * 没有够格的就说缺什么、不能拜托。「拜托她」以后转圈，成了换成一句结果和「去对话」；没成在框里说原因，券和礼物都不扣。
+ * 没有够格的就说缺什么、不能拜托；最下面一句提醒拜托出去券和礼物就用掉了。「拜托她」以后转圈，她回了话就换成一句结果
+ * （换称呼她没答应时说只叫这一次）和「去对话」；拜托不了的（条件不对、她没能回话）在框里说原因，券和礼物都不扣。
  */
 export function FavorDialog({
   isOpen,
@@ -172,8 +173,8 @@ export function FavorDialog({
       let note: string;
       let href = chatOf(her);
       if (kind === "address") {
-        await askAddress(her.id, address.trim() || null, gifts);
-        note = t.done.address(her.name);
+        const { accepted } = await askAddress(her.id, address.trim() || null, gifts);
+        note = accepted ? t.done.address(her.name) : t.done.addressDeclined(her.name);
       } else if (kind === "wake") {
         await askWake(her.id, at, mornings, gifts);
         note = t.done.wake(her.name);
@@ -431,6 +432,7 @@ export function FavorDialog({
               )}
             </Labeled>
           )}
+          <p className="text-meta text-muted-foreground">{t.spent}</p>
           {failure && <FailureNotice failure={failure} />}
         </>
       )}

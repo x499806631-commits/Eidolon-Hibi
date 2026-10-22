@@ -1714,18 +1714,21 @@ class ConversationEngine:
     async def favor_reply(
         self, conversation: Conversation, llm: ChatLLM, rules: str, wants: str,
         with_photo: bool = False,
-    ) -> tuple[list[Segment], str | None]:
+    ) -> tuple[list[Segment], str | None, str]:
         """What she says first in `conversation` about a favor the producer asked
         (GLOSSARY.md「拜托」), as `rules` say, `wants` where the user's words would be; and,
-        `with_photo`, the photo tag she wrote. Raises EmptyReply if she says nothing, or
-        writes no photo tag where she is to."""
-        said, tag = await self._reaching_out(conversation, llm, rules, wants)
+        `with_photo`, the photo tag she wrote; and all the model wrote, for what she answered
+        outside her lines (`<answer>`). Raises EmptyReply if she says nothing, or writes no
+        photo tag where she is to."""
+        raw: list[str] = []
+        said, tag = await self._reaching_out(conversation, llm, rules, wants, raw)
         if with_photo and tag is None:
             raise EmptyReply("对话模型没有写照片标签")
-        return said, tag
+        return said, tag, "".join(raw)
 
     async def _reaching_out(
-        self, conversation: Conversation, llm: ChatLLM, rules: str, wants: str
+        self, conversation: Conversation, llm: ChatLLM, rules: str, wants: str,
+        raw: list[str] | None = None,
     ) -> tuple[list[Segment], str | None]:
         """What she says first in `conversation`, the user not talking to her (GLOSSARY.md
         「搭话」), on `llm`: its segments, as the model wrote them, delivery cues and all. Her
@@ -1785,6 +1788,8 @@ class ConversationEngine:
         try:
             async for item in stream:
                 if isinstance(item, str):
+                    if raw is not None:
+                        raw.append(item)
                     for event in parser.feed(item):
                         if isinstance(event, PhotoTagged):
                             tag = event.tag

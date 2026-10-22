@@ -1,7 +1,9 @@
 """Favors over HTTP (GLOSSARY.md「拜托」): `GET /api/favors` for what the page shows, and
 `POST /api/favors/<kind>` to ask one, using a favor ticket (GLOSSARY.md「体验券」) and the gifts
-named (`gift_ids`): the conversation she answers in, and how many favor tickets are left. The
-ticket is given back should asking fail, as the gifts are: 409 with what went wrong."""
+named (`gift_ids`): the conversation she answers in, whether she took it up (only a way to
+call the producer may be turned down), and how many favor tickets are left. Once she has
+answered, the ticket and the gifts are used up, whatever she answered; a favor that cannot be
+asked takes nothing (409 with why), and one she never got to answer gives them back."""
 
 from collections.abc import Awaitable, Callable
 from datetime import date, time
@@ -59,14 +61,19 @@ def add_favor_routes(app: FastAPI, backend: Backend) -> None:
     async def cannot_ask(_: Request, e: CannotAsk) -> JSONResponse:
         return JSONResponse({"detail": str(e)}, status_code=409)
 
-    async def asking(user_id: str, ask: Callable[[], Awaitable[str]]) -> dict:
+    async def asking(user_id: str, ask: Callable[[], Awaitable[str | tuple[str, bool]]]) -> dict:
+        """Use a favor ticket on `ask`; given back only should she not get to answer."""
         gifts.take_ticket(user_id, "favor")
         try:
-            conversation_id = await ask()
+            asked = await ask()
         except BaseException:
             gifts.put_back_ticket(user_id, "favor")
             raise
-        return {"conversation_id": conversation_id, "left": gifts.tickets(user_id, "favor")}
+        conversation_id, accepted = asked if isinstance(asked, tuple) else (asked, True)
+        return {
+            "conversation_id": conversation_id, "accepted": accepted,
+            "left": gifts.tickets(user_id, "favor"),
+        }
 
     @app.get("/api/favors")
     async def overview(user_id: UserId) -> dict:

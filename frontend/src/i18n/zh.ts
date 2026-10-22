@@ -2015,7 +2015,7 @@ export const zh = {
       title: "拜托",
       description: "选一件要拜托的事，再从背包里交出要用的礼物。",
       kinds: {
-        address: { name: "换个称呼", note: "只有她改口，以后一直这样叫你。" },
+        address: { name: "换个称呼", note: "她觉得合适就答应，以后一直这样叫你；不合适就只叫这一次。" },
         wake: { name: "叫起床", note: "约好时间，接下来几天早上她来叫你起床。" },
         bond: { name: "结拜", note: "亲近以上才行。结拜以后她一直记得，还会回一件信物。" },
         make_up: { name: "托人和好", note: "托一位偶像去和闹别扭的她说情，过几个小时就和好。" },
@@ -2061,8 +2061,10 @@ export const zh = {
       missing: (what: string) => `背包里没有可以当「${what}」的礼物，抽到了再来吧。`,
       nobody: "现在没有可以拜托的偶像。",
       confirm: "拜托她",
+      spent: "拜托出去，券和礼物就用掉了，她答不答应都一样。",
       done: {
         address: (name: string) => `${name}答应了，去对话里听听她怎么叫你吧。`,
+        addressDeclined: (name: string) => `${name}没有答应，只这一次这样叫你。去对话里看看她怎么说吧。`,
         wake: (name: string) => `${name}答应了，到时候她会来叫你。`,
         bond: (name: string) => `你和${name}结拜了，去对话里看看吧。`,
         make_up: (mediator: string, target: string) => `${mediator}答应去找${target}说情，过几个小时会有消息。`,

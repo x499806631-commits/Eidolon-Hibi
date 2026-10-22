@@ -109,11 +109,33 @@ async def test_asked_to_call_the_producer_otherwise_she_answers_and_does_from_th
     await send_turn(client, conversation, "早上好")
 
     assert asked.status_code == 200, asked.text
-    assert asked.json() == {"conversation_id": conversation, "left": 0}
-    assert "以后叫对方「小茶」" in str(llm.prompts[1])
+    assert asked.json() == {"conversation_id": conversation, "accepted": True, "left": 0}
+    assert "以后叫对方「小茶」" in str(llm.prompts[1]) and "<answer>yes</answer>" in str(llm.prompts[1])
     assert "以后叫对方「小茶」，这是只属于你们俩的叫法" in system_of(llm.prompts[2])
     assert [r["segments"][0]["zh"] for r in reach_outs(await record(client, conversation))] == ["嗯，好呀"]
     assert (await gifts_state(client))["backpack"] == []
+
+
+async def test_a_name_she_will_not_take_up_she_calls_them_once_and_the_ticket_is_used_all_the_same(
+    make_client: ClientFactory, settings: Settings
+):
+    no = ["<answer>no</answer>\n<ja>今回だけですよ、ご主人様</ja><zh>就这一次哦，主人</zh>"]
+    client, llm, conversation = await talked(make_client, no, ["<ja>はい</ja><zh>好的</zh>"])
+    holding(client, settings, "cake")
+
+    asked = await client.post("/api/favors/address", json={
+        "character_id": "mano", "address": "主人", "gift_ids": ["cake"],
+    })
+    await send_turn(client, conversation, "早上好")
+    kept = await gifts_state(client)
+    [said] = reach_outs(await record(client, conversation))
+
+    assert asked.json() == {"conversation_id": conversation, "accepted": False, "left": 0}
+    assert said["segments"] == [{"ja": "今回だけですよ、ご主人様", "zh": "就这一次哦，主人"}]
+    assert "你没有答应，只在那一次这样叫过" in system_of(llm.prompts[2])
+    assert "这是只属于你们俩的叫法" not in system_of(llm.prompts[2])
+    assert (await client.get("/api/favors")).json()["ties"] == []
+    assert kept["tickets"] == [] and kept["backpack"] == []
 
 
 async def test_a_favor_asked_with_the_wrong_gifts_keeps_the_ticket_and_the_gifts(
