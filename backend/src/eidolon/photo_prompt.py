@@ -101,6 +101,8 @@ class PhotoTag:
 class ImagePrompt:
     positive: str
     negative: str
+    size: tuple[int, int] | None = None
+    """The picture's width and height; None for a photo's, portrait."""
 
 
 def read_tag(text: str) -> PhotoTag:
@@ -140,6 +142,67 @@ def image_prompt(character: Character, tag: PhotoTag, style: str = "") -> ImageP
         *tag.outfit, *action, *QUALITY_TAGS,
     )
     return ImagePrompt(", ".join(positive), NEGATIVE_PROMPT)
+
+
+KEEPSAKE_SIZE = (1024, 1024)
+"""A keepsake's picture: square (GLOSSARY.md「纪念品」)."""
+
+KEEPSAKE_TAGS = 6
+"""The most tags a keepsake's picture keeps from what was written for it."""
+
+KEEPSAKE_NEGATIVE = ", ".join((
+    NEGATIVE_PROMPT, "1girl", "1boy", "solo focus", "person", "hands", "text", "watermark",
+))
+"""A keepsake's picture shows no one: the thing alone."""
+
+
+def keepsake_prompt(tags: str, style: str = "") -> tuple[ImagePrompt, tuple[Crossing, ...]]:
+    """The prompts a keepsake's picture (GLOSSARY.md「纪念品」) is generated from: the thing
+    alone, no one in it, square, in the art style `style`, from the English tags written for
+    it (`tags`, comma-separated), cleaned and stripped as a photo's are, `KEEPSAKE_TAGS` at
+    most; and which part of the line each stripped crossed.
+
+    It starts with `background dataset`, NovelAI's tag for a scene with no one in it. One
+    entry of `tags` in double quotes is the words written on the thing (`keepsake_words`):
+    kept in its quotes, which is how V5 is asked to draw text, after the tags, with `text`
+    no longer kept out of the picture."""
+    seen = {*_FIXED, *_KEEPSAKE_START}
+    stripped: list[Crossing] = []
+    kept: list[str] = []
+    words = ""
+    for raw in re.split(r"[,，、]", tags):
+        if quoted := _QUOTED.fullmatch(raw.strip()):
+            words = words or keepsake_words(quoted.group(1))
+            continue
+        written = _cleaned(raw)
+        tag = _TABLE.rewrites.get(written, written)
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        if (crossing := _TABLE.crossing(tag)) is not None:
+            stripped.append(crossing)
+            continue
+        kept.append(tag)
+    quality = QUALITY_TAGS if not words else tuple(t for t in QUALITY_TAGS if t != "no text")
+    positive = (
+        *_KEEPSAKE_START, *_styled(style), *(kept[:KEEPSAKE_TAGS] or ["gift box"]),
+        *((f'"{words}"',) if words else ()), *quality,
+    )
+    negative = KEEPSAKE_NEGATIVE if not words else KEEPSAKE_NEGATIVE.replace(", text,", ",")
+    return ImagePrompt(", ".join(positive), negative, KEEPSAKE_SIZE), tuple(stripped)
+
+
+_KEEPSAKE_START = ("background dataset", "no humans", "still life", "object focus")
+_QUOTED = re.compile(r'["“”「」](.*)["“”「」]')
+_WORDS_KEPT = re.compile(r"[^A-Za-z0-9 !?'.&+♥♡-]")
+KEEPSAKE_WORDS = 24
+"""The most characters of words a keepsake's picture shows written on it."""
+
+
+def keepsake_words(words: str) -> str:
+    """`words` as they may be written on a keepsake's picture: short English, no commas,
+    quotes or prompt syntax (V5 draws Latin letters best), `KEEPSAKE_WORDS` at most."""
+    return " ".join(_WORDS_KEPT.sub("", words).split())[:KEEPSAKE_WORDS].strip()
 
 
 def check_prompt(style: str = "") -> ImagePrompt:

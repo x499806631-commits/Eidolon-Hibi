@@ -3,6 +3,7 @@
 // 页面打开时读一次，之后每分钟读一次，读了一封信马上减掉。
 
 import { api, json, type Segment } from "@/lib/api";
+import type { Keepsake } from "@/lib/keepsakes";
 
 /** 她为什么写这封信：平时、制作人的生日、她自己的生日、节日。 */
 export type Occasion = "ordinary" | "producer_birthday" | "her_birthday" | "holiday";
@@ -19,6 +20,8 @@ export type Letter = {
   created_at: string;
   /** 第一次打开的时间；没读过是 null。 */
   read_at: string | null;
+  /** 随信附上的礼物（GLOSSARY.md「纪念品」）；没有是 null。 */
+  keepsake: Keepsake | null;
 };
 
 export async function getLetters(): Promise<Letter[]> {
@@ -99,6 +102,11 @@ export class UnreadLetters {
   /** 读了一封原来没读过的信。 */
   read(): void {
     this.set(Math.max(0, this.count - 1));
+  }
+
+  /** 一下子全看过了（纪念品柜打开时）。 */
+  clear(): void {
+    this.set(0);
   }
 
   private set(count: number): void {

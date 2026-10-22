@@ -40,6 +40,9 @@ export const zh = {
     diary: "日记",
     /** 「日记」图标上有点时读屏读的名字。 */
     diaryUnread: "日记，有没读过的日记",
+    keepsakes: "纪念品",
+    /** 「纪念品」图标上有点时读屏读的名字。 */
+    keepsakesUnseen: "纪念品，有新收到的",
     settings: "设置",
   },
   /** 落地页的链接贴到聊天软件、社交网站时预览卡片上的文字（Open Graph、Twitter 卡片）。页面上不显示，不进字体子集。 */
@@ -192,6 +195,8 @@ export const zh = {
       ended: (name: string) => `${name}结束了对话`,
       /** 她在洗澡没接（GLOSSARY.md「洗澡」）：只说没接到，不说为什么。 */
       missed_call: (name: string) => `${name}没接到你的电话`,
+      /** 她送了一件纪念品（GLOSSARY.md「纪念品」）：下面是礼物卡。 */
+      keepsake: (name: string) => `${name}送了你一件礼物`,
     },
     /** 她结束了对话（GLOSSARY.md「已结束的对话」）时换掉输入栏的结束卡：那句话同对话事件（`events.ended`），不写原因；
      * 她在冷却中时换成 `cooling`，写上解除时刻。 */
@@ -743,6 +748,10 @@ export const zh = {
         special_days: { label: "节日和生日", hint: "她会提起今天是什么日子，当天早上还会先来找你。" },
         promises: { label: "约定", hint: "她会记住你答应的事，到了那天会问起。" },
         weather: { label: "天气", hint: "她知道你那边的天气。" },
+        keepsakes: {
+          label: "回礼和纪念品",
+          hint: "她会在重要的时候送你东西，收进纪念品柜。关掉后不再送，导航里也不显示纪念品。",
+        },
       },
     },
     appearance: {
@@ -1848,6 +1857,38 @@ export const zh = {
     goChat: "去找她",
     showTranslation: "显示翻译",
     hideTranslation: "只看原文",
+  },
+  /** 纪念品柜（GLOSSARY.md「纪念品」）。 */
+  keepsakes: {
+    title: "纪念品",
+    loading: "正在打开纪念品柜",
+    empty: "柜子里还空着",
+    emptyHint: "她会在重要的时候送你东西：关系更近一步、纪念日、你的生日、从外地回来……",
+    all: "全部偶像",
+    filterLabel: "按偶像筛选",
+    occasions: {
+      scene: "重要的一幕之后",
+      anniversary: "纪念日",
+      birthday: "你的生日",
+      gift: "回礼",
+      promise: "谢谢你守约",
+      souvenir: "出外景的土特产",
+      holiday: "随节日的信附赠",
+    },
+    /** 详情里的缘由：「回礼 · 布丁」。 */
+    why: (occasion: string, about: string) => (about ? `${occasion} · ${about}` : occasion),
+    date: (year: number, month: number, day: number) => `${year}年${month}月${day}日`,
+    from: (name: string) => `${name}送的`,
+    said: "她说",
+    /** 格子读屏读的：「真乃送的手作书签」。 */
+    tileLabel: (name: string, thing: string) => `${name}送的${thing}`,
+    fill: (count: number) => `补上图片（${count} 张）`,
+    filling: "正在补图，画好一张就会出现",
+    fillHint: "用部署者的生图服务把还没有图的纪念品画出来，每张都会用掉一些额度。",
+    cannotDraw: (count: number) => `${count} 件还没有图，配好生图服务以后可以在这里一键补上。`,
+    goChat: "去找她",
+    /** 信里附赠的礼物上方一行。 */
+    attached: "随信附上的礼物",
   },
   diary: {
     title: "日记",

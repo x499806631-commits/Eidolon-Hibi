@@ -99,6 +99,7 @@ the judge model read those the user answers, after the last turn, as her latest 
 
 import asyncio
 import logging
+import re
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, replace
@@ -141,6 +142,7 @@ from eidolon.llm import ChatLLM, ChatMessage, Reasoning, Tool, ToolCall, TurnLLM
 from eidolon.memory import Memories, last_turn_query
 from eidolon.own_keys import OwnKeyFailed
 from eidolon.photos import CANNOT_SEND, NOT_RECEIVED, Eligibility, Photos, photo_turn
+from eidolon.photo_prompt import keepsake_words
 from eidolon.producer import effective_timezone, local_date, now_prompt, producer_prompt
 from eidolon.reply_format import (
     format_instructions,
@@ -170,7 +172,7 @@ from eidolon.store import (
 )
 from eidolon.titles import Titles
 from eidolon.features import AllOn, Feature, Switches
-from eidolon.schedules import Schedules, bath_began
+from eidolon.schedules import LIVE_CITIES, Schedules, bath_began
 from eidolon.schedules import lines as schedule_lines
 from eidolon.schedules import rest as schedule_rest
 from eidolon.schedules import summary as schedule_summary
@@ -432,6 +434,8 @@ def _narration(event: ConversationEvent, gift_catalog: Mapping[str, Gift]) -> st
         return "（你结束了和制作人的对话。）"
     if event.kind == "missed_call":
         return "（制作人打来电话，你那会儿在洗澡，没接到。）"
+    if event.kind == "keepsake":
+        return f"（你送给了制作人「{event.note}」。）"
     assert event.gift_id is not None
     liked = "这是你喜欢的东西。" if event.liked else ""
     return f"（制作人送给你一份{gift_catalog[event.gift_id].name}。{liked}）"
@@ -581,6 +585,92 @@ def letter_rules(occasion: Occasion, about: str = "") -> str:
 
 WANTS_TO_WRITE = "（制作人这会儿没在和你说话。你想给他写一封信。）"
 """Where the user's words would be as she writes a letter."""
+
+KEEPSAKE_RULES = """# 送制作人一件东西
+{occasion}
+先写一个标签，再用 <ja>…</ja><zh>…</zh> 写送的时候对制作人说的话（一到两段）：
+<keepsake>
+name: 东西的名字，中文，十五个字以内，例如「手作的四叶草书签」
+look: 这件东西的样子，中文一两句
+emoji: 一个最能代表它的 emoji
+tags: 4–6 个英文 tag，只写这件东西本身：是什么、样子、材质、颜色，可以加一个放置的地方（例如 on wooden table）；不写人
+words: （可以不写这一行）东西上写着的一句很短的英文，例如 Thank you、For Producer、Happy Birthday；卡片、包装、点心上真的会写字时才写
+</keepsake>
+- 照你的性格、喜好和你们最近聊过的事来挑，要是你真的会送、也送得起的东西：手作的小东西、日常小物、吃的、你喜欢的东西的周边……不送贵重的东西、钱和礼券。
+- {limits}
+- 说的话照你的性格和口吻，自然地说说为什么送它；不写方括号里的语气提示。
+- 不附照片，也不说要给制作人打电话。{before}"""
+"""How she is to choose and give the producer a keepsake (GLOSSARY.md「纪念品」)."""
+
+KEEPSAKE_OCCASIONS: dict[str, str] = {
+    "scene": "你们刚刚好好谈过一次，关系更近了一步（{about}）。你想送一件东西，纪念这一刻。",
+    "anniversary": "今天是{about}。你想送一件东西纪念这一天。",
+    "birthday": "今天是制作人的生日。这是你给制作人的生日礼物，会和你的生日信一起送到。",
+    "gift": "制作人前几天送了你{about}，你很喜欢，想回一份礼。",
+    "promise": "制作人做到了答应你的事：{about}。你想送一件小东西谢谢制作人守约。",
+    "souvenir": "你刚从{about}回来，给制作人带了当地的土特产或者纪念品。",
+    "holiday": "今天是{about}。这份小礼物会随你的信一起送到。",
+}
+"""Why she gives a keepsake, by its occasion (`keepsakes.Occasion`); `about` says the rest."""
+
+WANTS_TO_GIVE = "（制作人这会儿没在和你说话。你想送制作人一件东西。）"
+"""Where the user's words would be as she gives a keepsake."""
+
+
+def keepsake_rules(occasion: str, about: str, adult: bool, before: Sequence[str]) -> str:
+    """How she is to give a keepsake for `occasion`, `about` saying the rest; an idol under
+    `hearts.ADULT` (or not known to be one) gives nothing with romance in it; told what she
+    gave before (`before`), not to give the same again."""
+    limits = (
+        "不送酒、烟，也不送内衣之类贴身的东西。"
+        if adult else
+        "不送戒指、情侣用品这类有恋爱意味的东西，也不送酒、烟和贴身的东西。"
+    )
+    given = f"\n- 你之前送过：{'、'.join(before)}。别送一样的。" if before else ""
+    return KEEPSAKE_RULES.format(
+        occasion=KEEPSAKE_OCCASIONS[occasion].format(about=about), limits=limits, before=given
+    )
+
+
+@dataclass(frozen=True)
+class KeepsakeDraft:
+    """A keepsake as she wrote it: its name, how it looks, its emoji, the English tags its
+    picture is drawn from, and what she said giving it, in segments."""
+
+    name: str
+    look: str
+    emoji: str
+    tags: str
+    said: list[Segment]
+
+
+MAX_KEEPSAKE_NAME = 20
+_KEEPSAKE_TAG = re.compile(r"<keepsake>(.*?)</keepsake>", re.DOTALL)
+
+
+def read_keepsake(answer: str) -> KeepsakeDraft:
+    """The keepsake the model's `answer` gives: its tag's fields and the segments after it.
+    Raises EmptyReply where it names nothing, or says nothing."""
+    found = _KEEPSAKE_TAG.search(answer)
+    fields: dict[str, str] = {}
+    if found is not None:
+        for line in found.group(1).splitlines():
+            key, colon, value = line.partition(":")
+            if colon:
+                fields.setdefault(key.strip().lower(), value.strip())
+        answer = answer[: found.start()] + answer[found.end() :]
+    name = fields.get("name", "").strip("「」『』 ")[:MAX_KEEPSAKE_NAME]
+    parser = ReplyParser()
+    parser.feed(answer)
+    parser.finish()
+    said = [Segment(without_cues(s.ja), without_cues(s.zh)) for s in parser.complete]
+    if not name or not said:
+        raise EmptyReply("对话模型没有写出要送的东西")
+    emoji = fields.get("emoji", "").strip()[:8] or "🎁"
+    tags = fields.get("tags", "")[:300]
+    if words := keepsake_words(fields.get("words", "")):
+        tags = f'{tags}, "{words}"'  # kept with the tags; `keepsake_prompt` reads it back
+    return KeepsakeDraft(name, fields.get("look", "")[:200], emoji, tags, said)
 
 DIARY_RULES = """# 写日记
 现在是晚上，你在写今天的日记。日记是写给自己看的，不是写给制作人的信：用第一人称，照你自己的性格和口吻，写今天发生的事和你的心情。
@@ -970,6 +1060,18 @@ class ConversationEngine:
             ends = began + timedelta(minutes=found.bath.minutes)
             if began <= local < ends:
                 return ends
+        return None
+
+    def live_away(self, character_id: str, day: date) -> str | None:
+        """The city her live on `day` is in, away from Tokyo, by the world setting; None
+        without one (GLOSSARY.md「纪念品」)."""
+        if self._world is None:
+            return None
+        name = self._characters[character_id].name
+        for _, days in self._world.lives_of(name):
+            for live_day in days:
+                if live_day.date == day:
+                    return next((c for c in LIVE_CITIES if c in live_day.venue), None)
         return None
 
     def _schedule_summary(
@@ -1573,6 +1675,58 @@ class ConversationEngine:
         if not parser.complete:
             raise EmptyReply("对话模型没有返回任何内容")
         return parser.complete
+
+    async def write_keepsake(
+        self,
+        conversation: Conversation,
+        llm: ChatLLM,
+        occasion: str,
+        about: str,
+        before: Sequence[str] = (),
+    ) -> KeepsakeDraft:
+        """A keepsake she gives the user (GLOSSARY.md「纪念品」) for `occasion`, `about` saying
+        the rest, on `llm`, from what she knows in `conversation`, her current one; told what
+        she gave before (`before`). Her prompt is a letter's (`write_letter`), told how to
+        give one (`keepsake_rules`). Raises EmptyReply if the model names nothing or says
+        nothing, and whatever the model raises."""
+        character = self._characters[conversation.character_id]
+        record = self._store.record(conversation.id)
+        messages = [entry for entry in record if isinstance(entry, Message)]
+        profile = self._store.get_profile(conversation.user_id)
+        timezone = effective_timezone(profile, None)
+        now = self._clock()
+        affinity = self._affinity(conversation)
+        world_prompt = (
+            self._world.prompt(character.name, local_date(now, timezone)) if self._world else None
+        )
+        told = narrations(record, self._gift_catalog, timezone)
+        told[None] = _since_last_turn(record, self._gift_catalog, timezone)
+        memories = await self._memory.for_reaching_out(
+            conversation, timezone, last_turn_query(messages)
+        )
+        adult = character.heart is not None and character.heart.adult
+        prompt = self._prompt(
+            character, world_prompt, producer_prompt(profile),
+            chat_history(messages, self._history_turns()), told,
+            [
+                now_prompt(
+                    profile, now, timezone, "apart",
+                    affinity_prompt(
+                        affinity.tier, None, heart=character.heart,
+                        female_producer=profile.gender == "female",
+                    ) if affinity is not None else [],
+                    self._store.last_contact(conversation.user_id, conversation.character_id),
+                    await self._day_lines(character, conversation.user_id, now, timezone),
+                ),
+            ],
+            [
+                *([memories] if memories else []),
+                keepsake_rules(occasion, about, adult, before),
+            ],
+            WANTS_TO_GIVE, None,
+        )
+        answer = "".join([item async for item in llm.stream(prompt) if isinstance(item, str)])
+        return read_keepsake(answer)
 
     async def write_diary(
         self,

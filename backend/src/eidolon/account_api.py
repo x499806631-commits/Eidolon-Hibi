@@ -232,6 +232,7 @@ def available_features(backend: Backend) -> list[Feature]:
         "scenes": backend.config.affinity_on,
         "diary": settings.diary,
         "letters": settings.letters,
+        "keepsakes": settings.keepsakes,
         "schedules": settings.schedules,
         "sleep": settings.schedules,
         "bath": settings.schedules,

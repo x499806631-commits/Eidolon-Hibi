@@ -1,5 +1,5 @@
 """Each user's own switches for the fork's features (GLOSSARY.md「玩法开关」): her scenes at
-the doors, her diary, her letters, her schedule and, within it, her sleep and her bath, the
+the doors, her diary, her letters, her keepsakes, her schedule and, within it, her sleep and her bath, the
 anniversaries she brings up, the special days she brings up, the promises she keeps track of,
 and the weather she knows of. All on by default; a user switches off what they would rather
 not have, for all the characters, and only for themselves. What the deployer has off is off
@@ -15,7 +15,7 @@ from typing import Literal, get_args
 from eidolon.database import connect
 
 Feature = Literal[
-    "scenes", "diary", "letters", "schedules", "sleep", "bath",
+    "scenes", "diary", "letters", "keepsakes", "schedules", "sleep", "bath",
     "anniversaries", "special_days", "promises", "weather",
 ]
 """A feature a user may switch off."""

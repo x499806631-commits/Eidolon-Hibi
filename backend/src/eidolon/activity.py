@@ -100,7 +100,7 @@ LLM_SERVICES: tuple[ServiceName, ...] = ("chat_llm", "memory_llm")
 """The LLMs among them (`llm_origin`): a user's own is recorded as `OWN`, and each call
 says how soon its first word came and at which reasoning effort."""
 
-RecordKind = Literal["turn", "call", "reach_out", "letter", "diary", "schedule"]
+RecordKind = Literal["turn", "call", "reach_out", "letter", "diary", "schedule", "keepsake"]
 """A reach-out is neither a turn nor a call, nor counted as one anywhere; it is always on the
 deployer's keys."""
 Result = Literal["success", "failed", "rejected", "left", "not_connected"]

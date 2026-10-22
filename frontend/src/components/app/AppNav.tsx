@@ -10,6 +10,7 @@ import { copy } from "@/i18n";
 import type { Account } from "@/lib/api";
 import { hasUnseen } from "@/lib/conversationList";
 import { unreadDiary } from "@/lib/diary";
+import { unseenKeepsakes } from "@/lib/keepsakes";
 import { unreadLetters } from "@/lib/letters";
 import { currentNavItem, FIRST_LEVEL, isTyping, NAV_ITEMS, navDestination, type NavItem } from "@/lib/navShell";
 import { REPOSITORY_URL } from "@/lib/repository";
@@ -19,6 +20,7 @@ import {
   ConversationsIcon,
   DiaryIcon,
   GiftIcon,
+  KeepsakesIcon,
   GitHubIcon,
   LettersIcon,
   SettingsIcon,
@@ -30,6 +32,7 @@ const ICONS: Record<NavItem, typeof SettingsIcon> = {
   calendar: CalendarIcon,
   letters: LettersIcon,
   diary: DiaryIcon,
+  keepsakes: KeepsakesIcon,
   settings: SettingsIcon,
 };
 
@@ -93,10 +96,12 @@ function NavLinks({ className }: { className: string }) {
   const unseen = characters !== null && hasUnseen(characters, latest, { preferences, onScreen });
   const unread = useSyncExternalStore(unreadLetters.subscribe, unreadLetters.snapshot, () => 0) > 0;
   const unreadEntries = useSyncExternalStore(unreadDiary.subscribe, unreadDiary.snapshot, () => 0) > 0;
+  const unseenGifts = useSyncExternalStore(unseenKeepsakes.subscribe, unseenKeepsakes.snapshot, () => 0) > 0;
   const dotted: Partial<Record<NavItem, string>> = {
     ...(unseen ? { conversations: copy.nav.conversationsUnseen } : {}),
     ...(unread ? { letters: copy.nav.lettersUnread } : {}),
     ...(unreadEntries ? { diary: copy.nav.diaryUnread } : {}),
+    ...(unseenGifts ? { keepsakes: copy.nav.keepsakesUnseen } : {}),
   };
   // 关掉了日记、来信的（GLOSSARY.md「玩法开关」）不显示那一项。
   const shown = NAV_ITEMS.filter((item) => !hiddenBySwitch(item, account?.features));
@@ -143,7 +148,7 @@ function NavLinks({ className }: { className: string }) {
 
 /** 用户自己关掉了的玩法，导航里不显示它那一项（GLOSSARY.md「玩法开关」）。 */
 export function hiddenBySwitch(item: NavItem, features: Account["features"] | undefined): boolean {
-  return (item === "diary" || item === "letters") && features?.[item] === false;
+  return (item === "diary" || item === "letters" || item === "keepsakes") && features?.[item] === false;
 }
 
 /** 手机上在打字（焦点在输入框里），大致就是键盘弹起来了。失去焦点那一刻焦点还没落下，等它落下再看。 */

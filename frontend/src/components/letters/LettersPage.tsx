@@ -5,8 +5,9 @@ import { useEffect, useMemo, useState } from "react";
 import { FailureNotice } from "@/components/app/FailureNotice";
 import { MarkedAvatar } from "@/components/app/MarkedAvatar";
 import { PageShell } from "@/components/app/PageShell";
-import { useDirectory } from "@/components/conversations/ConversationDirectory";
+import { useDirectory, useWide } from "@/components/conversations/ConversationDirectory";
 import { useProducerTimezone } from "@/components/conversations/useProducerTimezone";
+import { KeepsakeCard } from "@/components/keepsakes/KeepsakeParts";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { copy } from "@/i18n";
@@ -24,7 +25,7 @@ const t = copy.letters;
  * 信箱页（`/letters`）：导航外壳里一栏，版式同日历页（内容最宽 `max-w-3xl`、居中）。
  * 清单一行一封信，最新的在上：她的头像、名字、正文第一句（单行截断）、送到的日子；没读过的名字加粗、行尾一个小点。
  * 点开一封换成信纸：她的壁纸色铺底，称呼、正文、落款，每段日语原文下面是中文翻译（可以收起只看原文），
- * 右下角送到的日子和时刻；下面「回到信箱」和「去找她」。打开就算读过。日子按制作人的时区。
+ * 右下角送到的日子和时刻；随信附了纪念品的，信纸下面一张礼物卡（GLOSSARY.md「纪念品」）；再下面「回到信箱」和「去找她」。打开就算读过。日子按制作人的时区。
  */
 export function LettersPage() {
   const timeZone = useProducerTimezone();
@@ -32,6 +33,7 @@ export function LettersPage() {
   const [open, setOpen] = useState<Letter | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const { characters, go } = useDirectory();
+  const isWide = useWide();
   const byId = useMemo(() => new Map((characters ?? []).map((c) => [c.id, c])), [characters]);
 
   useEffect(() => {
@@ -71,6 +73,12 @@ export function LettersPage() {
               </Button>
             </div>
             <LetterPaper letter={open} her={her} timeZone={timeZone} />
+            {her && open.keepsake && (
+              <div className="flex flex-col gap-2">
+                <span className="text-meta text-muted-foreground">{copy.keepsakes.attached}</span>
+                <KeepsakeCard keepsake={open.keepsake} her={her} isWide={isWide} />
+              </div>
+            )}
             {her && (
               <div className="flex justify-end">
                 <Button variant="outline" size="sm" onClick={() => go(`/conversation/${encodeURIComponent(her.id)}`)}>

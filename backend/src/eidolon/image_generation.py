@@ -4,7 +4,7 @@ a photo is kept as.
 An image service is reached in the format whoever configured it chose (`ImageFormat`),
 never found out. In NovelAI's own: `POST {base_url}/ai/generate-image` with a bearer
 token, answering with a ZIP of the picture, at NovelAI or a relay passing requests on as
-they are; every request asks for one picture of 832×1216 at 23 steps, scale 7 with Euler
+they are; every request asks for one picture of 832×1216 (a keepsake's, 1024×1024) at 23 steps, scale 7 with Euler
 Ancestral, from a random seed, in the shape of V4's prompts and later. In OpenAI's image
 format: `POST {base_url}/images/generations`, the address up to `/v1`, asking at the top
 level for one picture of that size with the negative prompt, as base64 (`b64_json`, with
@@ -71,16 +71,22 @@ class GeneratedImage:
     webp: bytes
 
 
+def size_of(prompt: ImagePrompt) -> tuple[int, int]:
+    """The width and height `prompt` asks for: a photo's, `WIDTH`×`HEIGHT`, unless it says."""
+    return prompt.size or (WIDTH, HEIGHT)
+
+
 def generation_request(model: str, prompt: ImagePrompt, seed: int) -> dict:
     """The body NovelAI's `/ai/generate-image` is sent for `prompt` with `model`."""
+    width, height = size_of(prompt)
     return {
         "input": prompt.positive,
         "model": model,
         "action": "generate",
         "parameters": {
             "params_version": 3,
-            "width": WIDTH,
-            "height": HEIGHT,
+            "width": width,
+            "height": height,
             "scale": SCALE,
             "sampler": SAMPLER,
             "steps": STEPS,
@@ -127,7 +133,7 @@ class ImageGenerator:
             raise ImageFailed("timeout", f"生图服务没有及时回应：{e!r}") from e
         except httpx.HTTPError as e:
             raise ImageFailed("service_error", f"无法连接生图服务：{e!r}") from e
-        return GeneratedImage(kept_as_webp(picture))
+        return GeneratedImage(kept_as_webp(picture, size_of(prompt)))
 
     async def _novelai(self, prompt: ImagePrompt) -> bytes:
         body = generation_request(
@@ -188,7 +194,7 @@ def openai_request(model: str, prompt: ImagePrompt) -> dict:
         "model": model,
         "prompt": prompt.positive,
         "negative_prompt": prompt.negative,
-        "size": f"{WIDTH}x{HEIGHT}",
+        "size": "{}x{}".format(*size_of(prompt)),
         "n": 1,
         "response_format": "b64_json",
     }
@@ -227,15 +233,15 @@ def files_in(archive: bytes) -> list[bytes]:
         raise _bad_image(f"不是 ZIP：{e}") from None
 
 
-def kept_as_webp(picture: bytes) -> bytes:
+def kept_as_webp(picture: bytes, asked: tuple[int, int] = (WIDTH, HEIGHT)) -> bytes:
     """`picture` as a photo is kept: WebP, nothing but its pixels. Raises ImageFailed unless
-    it is a picture of `WIDTH`×`HEIGHT`."""
+    it is a picture of the size `asked`, a photo's unless it says."""
     try:
         with Image.open(io.BytesIO(picture)) as opened:
             opened.load()
             size = opened.size
-            if size != (WIDTH, HEIGHT):
-                raise _bad_image(f"{size[0]}×{size[1]}，不是 {WIDTH}×{HEIGHT}")
+            if size != asked:
+                raise _bad_image(f"{size[0]}×{size[1]}，不是 {asked[0]}×{asked[1]}")
             # Made anew from its pixels alone, so nothing of what came with it is written.
             pixels = opened.convert("RGB")
             bare = Image.frombytes("RGB", size, pixels.tobytes())

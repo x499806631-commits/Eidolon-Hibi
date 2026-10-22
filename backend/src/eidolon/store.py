@@ -24,7 +24,7 @@ from eidolon.producer import Birthday, ProducerProfile
 from eidolon.reply_format import Segment
 
 Role = Literal["user", "character"]
-EventKind = Literal["hung_up", "gift", "ended", "missed_call"]
+EventKind = Literal["hung_up", "gift", "ended", "missed_call", "keepsake"]
 PhotoStatus = Literal["pending", "ready", "failed"]
 """A photo being generated, sent, or not sent after all."""
 PhotoFailure = Literal["timeout", "service_error", "bad_image", "own_key_failed", "used_up"]
@@ -364,7 +364,8 @@ class ConversationEvent:
     """Something that happened in a conversation that is not a turn (GLOSSARY.md「对话事件」):
     her hanging up on the user (`hung_up`), her ending the conversation (`ended`), after which
     it can only be read, a call of the user's she did not answer, in the bath (`missed_call`,
-    GLOSSARY.md「洗澡」), or the user giving her a gift (`gift`), which
+    GLOSSARY.md「洗澡」), her giving the user a keepsake (`keepsake`, GLOSSARY.md「纪念品」),
+    which (`keepsake_id`) and its name (`note`), or the user giving her a gift (`gift`), which
     one (`gift_id`) and whether she liked it as it was given (`liked`), kept as it was
     should what she likes change. It can carry how it changed her affinity (`affinity`)."""
 
@@ -374,12 +375,15 @@ class ConversationEvent:
     affinity: Change | None = None
     gift_id: str | None = None
     liked: bool = False
+    keepsake_id: int | None = None
+    note: str | None = None
     type: Literal["event"] = field(default="event", init=False)
 
     def shown(self) -> dict:
         """As the browser is told it: whether she liked the gift is for her prompt alone;
-        which gift, for a gift's only."""
-        hidden = {"liked"} | ({"gift_id"} if self.gift_id is None else set())
+        which gift, for a gift's only; which keepsake, for a keepsake's only."""
+        hidden = {"liked", "note"} | ({"gift_id"} if self.gift_id is None else set())
+        hidden |= {"keepsake_id"} if self.keepsake_id is None else set()
         return {k: v for k, v in asdict(self).items() if k not in hidden}
 
 
@@ -586,6 +590,8 @@ class Store:
         self._add_missing_columns("conversations", ("title",), "TEXT")
         self._add_missing_columns("conversation_events", ("gift_id",), "TEXT")
         self._add_missing_columns("conversation_events", ("liked",), "INTEGER NOT NULL DEFAULT 0")
+        self._add_missing_columns("conversation_events", ("keepsake_id",), "INTEGER")
+        self._add_missing_columns("conversation_events", ("note",), "TEXT")
         # Whether she has responded to an event is whether she has replied since; never kept.
         if "responded" in self._columns("conversation_events"):
             self._db.execute("ALTER TABLE conversation_events DROP COLUMN responded")
@@ -964,8 +970,9 @@ class Store:
                             bool(e["liked"]),
                         )
                         for e in self._db.execute(
+                            # A keepsake's event goes with the keepsake, which a package does not carry.
                             f"SELECT {_EVENT_COLUMNS} FROM conversation_events"
-                            " WHERE conversation_id = ? ORDER BY id",
+                            " WHERE conversation_id = ? AND kind <> 'keepsake' ORDER BY id",
                             (c["id"],),
                         )
                     ],
@@ -1228,6 +1235,26 @@ class Store:
             return self._ended(conversation_id) or self._insert_event(
                 conversation_id, "hung_up", _now()
             )
+
+    def give_keepsake(
+        self, conversation_id: str, keepsake_id: int, name: str, at: str | None = None
+    ) -> ConversationEvent | None:
+        """Record that she gave the user the keepsake `keepsake_id`, named `name`, in the
+        conversation, now or `at` (`keepsake`); nothing if she has ended it."""
+        with self._lock, self._db:
+            if self._ended(conversation_id) is not None:
+                return None
+            cursor = self._db.execute(
+                "INSERT INTO conversation_events"
+                " (conversation_id, kind, created_at, keepsake_id, note) VALUES (?, ?, ?, ?, ?)",
+                (conversation_id, "keepsake", at or _now(), keepsake_id, name),
+            )
+            assert cursor.lastrowid is not None
+            row = self._db.execute(
+                f"SELECT {_EVENT_COLUMNS} FROM conversation_events WHERE id = ?",
+                (cursor.lastrowid,),
+            ).fetchone()
+        return _event(row)
 
     def miss_call(self, conversation_id: str) -> ConversationEvent:
         """Record that she did not answer the user's call in the conversation, now
@@ -1709,7 +1736,7 @@ _MESSAGE_WITH_PHOTO = (
     " FROM messages m LEFT JOIN photos p ON p.message_id = m.id"
 )
 """A message with its photo, if any, but not its picture (`_message_with_photo`)."""
-_EVENT_COLUMNS = "id, kind, created_at, affinity, gift_id, liked"
+_EVENT_COLUMNS = "id, kind, created_at, affinity, gift_id, liked, keepsake_id, note"
 _REACH_OUT_COLUMNS = "id, ja, zh, segments, created_at"
 _LETTER_COLUMNS = "id, character_id, occasion, ja, zh, segments, created_at, read_at"
 
@@ -1846,7 +1873,7 @@ def _message_with_photo(row: sqlite3.Row) -> Message:
 def _event(row: sqlite3.Row) -> ConversationEvent:
     return ConversationEvent(
         row["id"], row["kind"], row["created_at"], _change(row["affinity"]),
-        row["gift_id"], bool(row["liked"]),
+        row["gift_id"], bool(row["liked"]), row["keepsake_id"], row["note"],
     )
 
 

@@ -114,8 +114,8 @@ async def test_her_bath_is_drawn_with_her_schedule_as_her_heart_says(
 ):
     characters.write("hearts/mano.toml", SHOWERS)
     plan = PLAN.replace('{"slots"', '{"wake": "07:00", "sleep": "23:30", "slots"')
-    # No twist (0); her bath 60 + 5 × 2 minutes before bed, 15 + 5 × 1 long.
-    client, _, clock = await talked(make_client, settings, [plan], numbers=(0, 2, 1))
+    # No twist (0), no trip (1); her bath 60 + 5 × 2 minutes before bed, 15 + 5 × 1 long.
+    client, _, clock = await talked(make_client, settings, [plan], numbers=(0, 1, 2, 1))
     clock.now = at(6)
 
     await backend_of(client).schedule_writer.run_due()

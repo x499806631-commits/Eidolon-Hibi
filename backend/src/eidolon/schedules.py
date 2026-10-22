@@ -58,6 +58,22 @@ TWISTS = (
 )
 """The day's twists one or two are drawn from, for the model to work into the day."""
 
+TRIP_PLACES = (
+    "大阪", "京都", "北海道", "福冈", "冲绳", "横滨", "名古屋", "仙台", "神户", "金泽", "广岛", "长野",
+)
+"""Where a trip away from Tokyo a day may have takes her (GLOSSARY.md「纪念品」)."""
+
+TRIP_ODDS = 8
+"""One day in so many has a trip, drawn as its twists are."""
+
+TRIP_TWIST = "要去{place}出外景，当天来回"
+"""The twist a trip is to the model writing the day."""
+
+LIVE_CITIES = (
+    "横浜", "大阪", "名古屋", "福岡", "札幌", "仙台", "神戸", "京都", "広島", "静岡", "金沢", "新潟",
+)
+"""The cities a live's venue away from Tokyo names, as the world setting writes them."""
+
 _SCHEMA = """
 -- Her schedule for a day of the producer's (GLOSSARY.md「行程」): `slots` and the day's
 -- `twists` as JSON; slots '[]' for a day it could not be written, which is not tried again.
@@ -72,6 +88,7 @@ CREATE TABLE IF NOT EXISTS schedules (
     sleep TEXT,
     bath_at TEXT,
     bath_minutes INTEGER,
+    trip TEXT,
     PRIMARY KEY (user_id, character_id, day)
 );
 """
@@ -152,6 +169,8 @@ class Schedule:
     """When she goes to bed that night, past midnight if before noon; None if not written."""
     bath: Bath | None = None
     """Her bath that night; None without a time she goes to bed."""
+    trip: str | None = None
+    """Where she went that day, away from Tokyo, if she did (GLOSSARY.md「纪念品」)."""
 
     def shown(self) -> dict:
         return {
@@ -163,6 +182,7 @@ class Schedule:
             "bath": None if self.bath is None else {
                 "at": _clock(self.bath.at), "minutes": self.bath.minutes,
             },
+            "trip": self.trip,
         }
 
     @property
@@ -318,7 +338,8 @@ class Schedules:
             self._db.executescript(_SCHEMA)
             columns = {row[1] for row in self._db.execute("PRAGMA table_info(schedules)")}
             for column, kind in (
-                ("wake", "TEXT"), ("sleep", "TEXT"), ("bath_at", "TEXT"), ("bath_minutes", "INTEGER")
+                ("wake", "TEXT"), ("sleep", "TEXT"), ("bath_at", "TEXT"), ("bath_minutes", "INTEGER"),
+                ("trip", "TEXT"),
             ):
                 if column not in columns:
                     self._db.execute(f"ALTER TABLE schedules ADD COLUMN {column} {kind}")
@@ -327,7 +348,7 @@ class Schedules:
         """Her schedule for `day` with the user; None if none was written, or it could not be."""
         with self._lock:
             row = self._db.execute(
-                "SELECT slots, twists, wake, sleep, bath_at, bath_minutes FROM schedules"
+                "SELECT slots, twists, wake, sleep, bath_at, bath_minutes, trip FROM schedules"
                 " WHERE user_id = ? AND character_id = ?"
                 " AND day = ?",
                 (user_id, character_id, day.isoformat()),
@@ -342,6 +363,7 @@ class Schedules:
             time.fromisoformat(row[2]) if row[2] else None,
             time.fromisoformat(row[3]) if row[3] else None,
             Bath(time.fromisoformat(row[4]), row[5]) if row[4] and row[5] else None,
+            row[6],
         )
 
     def tried(self, user_id: str, character_id: str, day: date) -> bool:
@@ -355,7 +377,7 @@ class Schedules:
     def keep(
         self, user_id: str, character_id: str, day: date, slots: Sequence[Slot],
         twists: Sequence[str], wake: time | None = None, sleep: time | None = None,
-        bath: Bath | None = None,
+        bath: Bath | None = None, trip: str | None = None,
     ) -> None:
         """Keep her schedule for `day`; none (`slots` empty) keeps the day from being tried
         again. One kept already is left as it is."""
@@ -363,13 +385,13 @@ class Schedules:
             self._db.execute(
                 "INSERT OR IGNORE INTO schedules"
                 " (user_id, character_id, day, slots, twists, created_at, wake, sleep, bath_at,"
-                " bath_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " bath_minutes, trip) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     user_id, character_id, day.isoformat(),
                     json.dumps([s.shown() for s in slots], ensure_ascii=False),
                     json.dumps(list(twists), ensure_ascii=False),
                     self._clock().isoformat(), _clock(wake), _clock(sleep),
-                    _clock(bath.at) if bath else None, bath.minutes if bath else None,
+                    _clock(bath.at) if bath else None, bath.minutes if bath else None, trip,
                 ),
             )
 

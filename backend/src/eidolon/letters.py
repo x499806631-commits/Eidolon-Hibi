@@ -29,7 +29,7 @@ as reach-outs are, held only while she writes, each with an activity record of i
 import asyncio
 import logging
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -46,7 +46,7 @@ from eidolon.live_config import LiveConfig
 from eidolon.producer import ProducerProfile, effective_timezone, is_birthday
 from eidolon.randomness import Random
 from eidolon.special_days import SpecialDays
-from eidolon.store import Conversation, CurrentConversation, Occasion, Store
+from eidolon.store import Conversation, CurrentConversation, Letter, Occasion, Store
 
 log = logging.getLogger(__name__)
 
@@ -151,6 +151,7 @@ class Letters:
         features: Switches = AllOn(),
     ) -> None:
         self._features = features
+        self._written: list[Callable[[Conversation, Letter, str], None]] = []
         self._store = store
         self._engine = engine
         self._characters = characters
@@ -165,6 +166,11 @@ class Letters:
         self._lock = threading.Lock()
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
+
+    def on_written(self, listener: Callable[[Conversation, Letter, str], None]) -> None:
+        """Have `listener` told each letter written ahead as it is kept: in which conversation,
+        the letter, and what it is about (a holiday's, which)."""
+        self._written.append(listener)
 
     async def keep_writing(self) -> None:
         """`run_due` at every `TICK`, until cancelled."""
@@ -206,7 +212,11 @@ class Letters:
             said = await self._engine.write_letter(newest[0], lease.keys.chat_llm, occasion, now, about)
         finally:
             lease.release()
-        await asyncio.to_thread(self._store.add_letter, user_id, character_id, occasion, said, now)
+        letter = await asyncio.to_thread(
+            self._store.add_letter, user_id, character_id, occasion, said, now
+        )
+        for written in self._written:
+            written(newest[0], letter, about)
         return True
 
     def close(self) -> None:
@@ -381,11 +391,16 @@ class Letters:
             return
         finally:
             lease.release()
-        await asyncio.to_thread(
+        letter = await asyncio.to_thread(
             self._store.add_letter, conversation.user_id, conversation.character_id,
             plan.occasion, said, plan.deliver_at,
         )
         await asyncio.to_thread(self._done, due)
+        for written in self._written:
+            try:
+                written(conversation, letter, plan.about)
+            except Exception:
+                log.exception("telling of letter %s failed", letter.id)
 
         recording.finish("success")
 

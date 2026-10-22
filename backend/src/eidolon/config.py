@@ -428,6 +428,10 @@ class Settings:
     schedules: bool = False
     """Whether characters have a schedule written for each day (GLOSSARY.md「行程」), on the
     deployer's chat model; off unless `.env` turns it on (`EIDOLON_SCHEDULES`)."""
+    keepsakes: bool = False
+    """Whether characters give users keepsakes (GLOSSARY.md「纪念品」), chosen on the deployer's
+    chat model and drawn on its image generation, if any; off unless `.env` turns it on
+    (`EIDOLON_KEEPSAKES`)."""
     diary: bool = False
     """Whether characters keep a diary of the days that mattered (GLOSSARY.md「日记」), on the
     deployer's chat model; off unless `.env` turns it on (`EIDOLON_DIARY`)."""
@@ -536,6 +540,7 @@ class Settings:
             letters=_switch("EIDOLON_LETTERS"),
             diary=_switch("EIDOLON_DIARY"),
             schedules=_switch("EIDOLON_SCHEDULES"),
+            keepsakes=_switch("EIDOLON_KEEPSAKES"),
             proxy=proxy_from_env(),
             service_status=service_status_from_env(),
             search_key=os.environ.get("EIDOLON_SEARCH_KEY", "").strip() or None,

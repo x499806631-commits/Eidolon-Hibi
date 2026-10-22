@@ -13,6 +13,7 @@ function letter(zh: string[], at = "2026-10-20T22:00:00+00:00"): Letter {
     segments,
     created_at: at,
     read_at: null,
+    keepsake: null,
   };
 }
 

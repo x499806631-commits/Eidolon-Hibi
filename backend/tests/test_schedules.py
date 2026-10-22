@@ -96,7 +96,7 @@ def test_she_is_told_the_day_in_a_sentence_and_where_she_is_now():
 
 
 async def talked(
-    make_client: ClientFactory, settings: Settings, *replies, numbers=(1, 0),
+    make_client: ClientFactory, settings: Settings, *replies, numbers=(1, 0, 1),
 ) -> tuple[httpx.AsyncClient, FakeLLM, FakeClock]:
     llm = FakeLLM(REPLY, *replies, REPLY)
     clock = FakeClock(today_at(4))
@@ -120,7 +120,7 @@ async def schedule(client: httpx.AsyncClient, character: str = "mano") -> dict |
 async def test_hers_for_today_is_written_once_from_the_early_morning(
     make_client: ClientFactory, settings: Settings
 ):
-    # One twist (1), the first of them (0).
+    # One twist (1), the first of them (0); no trip (1).
     client, llm, clock = await talked(make_client, settings, [PLAN])
     writer = backend_of(client).schedule_writer
 
@@ -148,7 +148,7 @@ async def test_hers_for_today_is_written_once_from_the_early_morning(
 async def test_a_day_the_model_fails_is_none_and_not_tried_again(
     make_client: ClientFactory, settings: Settings
 ):
-    client, llm, clock = await talked(make_client, settings, LLMError("挂了"), numbers=(0,))
+    client, llm, clock = await talked(make_client, settings, LLMError("挂了"), numbers=(0, 1))
     writer = backend_of(client).schedule_writer
     clock.now = today_at(6)
 

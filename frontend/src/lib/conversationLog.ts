@@ -19,6 +19,8 @@ export type Entry =
       event: EventKind;
       at: string;
       gift: string | null;
+      /** The keepsake she gave, for a keepsake's (GLOSSARY.md「纪念品」); null for the others. */
+      keepsakeId: number | null;
       affinity: AffinityChange | null;
     }
   | {
@@ -214,6 +216,7 @@ function toEntry(message: Recorded): Entry {
       event: message.kind,
       at: message.created_at,
       gift: message.gift_name ?? null,
+      keepsakeId: message.keepsake_id ?? null,
       affinity: message.affinity,
     };
   }

@@ -160,7 +160,7 @@ export async function getPhoto(id: string): Promise<PhotoStatus> {
 
 /** The kinds of conversation event (GLOSSARY.md「对话事件」): she hung up on the user; the user
  * gave her a gift; she ended the conversation, which can then only be read (GLOSSARY.md「已结束的对话」). */
-export type EventKind = "hung_up" | "gift" | "ended" | "missed_call";
+export type EventKind = "hung_up" | "gift" | "ended" | "missed_call" | "keepsake";
 
 /** Something that happened in a conversation that is not a turn, recorded among its messages. */
 export type ConversationEvent = {
@@ -172,6 +172,8 @@ export type ConversationEvent = {
   /** A gift record's gift, and its name; other events have none. */
   gift_id?: string;
   gift_name?: string;
+  /** The keepsake she gave, for a keepsake's (GLOSSARY.md「纪念品」); other events have none. */
+  keepsake_id?: number;
 };
 
 /** What she said first in a conversation, the user not talking to her (GLOSSARY.md「搭话」): neither a
@@ -473,6 +475,7 @@ export const FEATURES = [
   "scenes",
   "diary",
   "letters",
+  "keepsakes",
   "schedules",
   "sleep",
   "bath",

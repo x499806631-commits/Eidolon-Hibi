@@ -14,6 +14,7 @@ import {
 
 import { FailureNotice, SignInButton } from "@/components/app/FailureNotice";
 import { MarkedAvatar } from "@/components/app/MarkedAvatar";
+import { KeepsakeCard } from "@/components/keepsakes/KeepsakeParts";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Button } from "@/components/ui/button";
 import {
@@ -616,6 +617,7 @@ function Messages({
   onAppeal?: (key: string) => Promise<string | null>;
 }) {
   const lines = linesOf(entries, new Date(), affinityOn);
+  const isWide = useWide();
   const appealed = new Set(entries.flatMap((e) => (e.kind === "character" && e.appealed ? [`cue-${e.key}`] : [])));
   const last = entries.at(-1);
   const appealable =
@@ -661,6 +663,12 @@ function Messages({
               ) : line.entry.kind === "event" ? (
                 <MessageScrollerItem key={line.entry.key} messageId={line.entry.key} className="my-3">
                   <EventLine entry={line.entry} name={character.name} />
+                  {line.entry.keepsakeId !== null && (
+                    <div className="mt-2 flex justify-center px-2">
+                      {/* 她送的纪念品：在她的颜色里的一张小卡，点开是详情（GLOSSARY.md「纪念品」） */}
+                      <KeepsakeCard id={line.entry.keepsakeId} her={character} isWide={isWide} />
+                    </div>
+                  )}
                 </MessageScrollerItem>
               ) : (
                 <MessageScrollerItem key={line.entry.key} messageId={line.entry.key} className={cn(line.first && "mt-2")}>

@@ -10,7 +10,9 @@ on from. One the model fails on, or writes nothing usable in, is kept as none an
 again that day. Written on the deployer's chat model as letters are, each with an activity
 record of its own (`schedule`). A turn never waits for one: without it, she has none that day.
 A night she goes to bed, her bath before it is drawn on `random` too (`schedules.draw_bath`),
-in the tub unless her heart says she showers (GLOSSARY.md「洗澡」).
+in the tub unless her heart says she showers (GLOSSARY.md「洗澡」). A day she has a live away
+from Tokyo, or one day in `TRIP_ODDS` otherwise (a twist of its own), she is away on a trip,
+kept with the day, for the souvenir she brings the day after (GLOSSARY.md「纪念品」).
 """
 
 import asyncio
@@ -27,7 +29,18 @@ from eidolon.features import AllOn, Switches
 from eidolon.live_config import LiveConfig
 from eidolon.producer import effective_timezone
 from eidolon.randomness import Random
-from eidolon.schedules import TWISTS, Bath, Schedules, Slot, draw_bath, parse_rest, parse_schedule
+from eidolon.schedules import (
+    TRIP_ODDS,
+    TRIP_PLACES,
+    TRIP_TWIST,
+    TWISTS,
+    Bath,
+    Schedules,
+    Slot,
+    draw_bath,
+    parse_rest,
+    parse_schedule,
+)
 from eidolon.schedules import said as schedule_said
 from eidolon.store import Conversation, Store
 
@@ -144,6 +157,10 @@ class ScheduleWriter:
     async def _write(self, conversation: Conversation, day: date, again: bool = False) -> None:
         user_id, character_id = conversation.user_id, conversation.character_id
         twists = self._twists()
+        trip = self._engine.live_away(character_id, day)
+        if trip is None and self._random(TRIP_ODDS) == 0:
+            trip = TRIP_PLACES[self._random(len(TRIP_PLACES))]
+            twists.append(TRIP_TWIST.format(place=trip))
         names = {c.id: c.name for c in self._characters.values()}
         before = self._schedules.of(user_id, character_id, day - timedelta(days=1))
         yesterday = schedule_said(before, names)
@@ -173,5 +190,6 @@ class ScheduleWriter:
         if again:
             await asyncio.to_thread(self._schedules.forget, user_id, character_id, day)
         await asyncio.to_thread(
-            self._schedules.keep, user_id, character_id, day, slots, twists, wake, sleep, bath
+            self._schedules.keep, user_id, character_id, day, slots, twists, wake, sleep, bath,
+            trip if slots else None,
         )
