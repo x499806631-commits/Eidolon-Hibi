@@ -24,6 +24,7 @@ text turn and lands in the same conversation record.
 """
 
 import asyncio
+import re
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import nullcontext
@@ -404,6 +405,41 @@ class InterruptsFirst(InterruptibleTTSService):
             self._reconnecting = None
 
 
+LATENCY = "normal"
+"""Fish Audio's latency mode for the character's voice: "normal", its steadiest delivery,
+rather than "balanced", whose first audio comes sooner but whose delivery wavers more."""
+
+_LEADING_CUE = re.compile(r"^\s*\[[^\]]+\]")
+_ANY_CUE = re.compile(r"\[([^\]]+)\]")
+_SOUND = re.compile(
+    r"\b(?:laugh|giggle|chuckle|sigh|breath|gasp|pause|cough|sniffle|sniff|yawn|gulp|hum"
+    r"|inhale|exhale)s?\b",
+    re.IGNORECASE,
+)
+
+
+def last_cue(text: str) -> str:
+    """The last delivery cue in `text` saying how the words are said, `[shyly]`; not one
+    that is a sound made where it is (`[small laugh]`, `[sigh]`, `[pause]`), which is not
+    to be made again. Empty if none."""
+    for cue in reversed(_ANY_CUE.findall(text)):
+        if not _SOUND.search(cue):
+            return f"[{cue}]"
+    return ""
+
+
+def carried_cue(text: str, cue: str) -> str:
+    """`text` with `cue` in front of it, unless it starts with a cue of its own, or there
+    is none to carry."""
+    if not cue or _LEADING_CUE.match(text):
+        return text
+    return f"{cue} {text.lstrip()}"
+
+
+PREROLL = 0.5
+"""How many seconds of a segment's audio are held before any of it plays, for Fish Audio
+sending it unevenly not to be heard as stops: a little more before she starts speaking."""
+
 FINISH_TIMEOUT = 10.0
 """How long, in seconds, Fish Audio may take to finish a segment once told it has all its
 Japanese: to send the rest of its audio, some seconds of it at most. A session that takes
@@ -434,18 +470,30 @@ class FishTTS(InterruptsFirst, ProxiedWebsocket, FishAudioTTSService):
 
     Each session starts with `readings` as its pronunciation dictionary (`readings`), so
     that names are said as the deployer has them read, the Japanese sent as written, its
-    delivery cues as the model reads them (`delivery_cues.spoken_by`)."""
+    delivery cues as the model reads them (`delivery_cues.spoken_by`).
+
+    Within a segment only its first sentence is flushed, to be heard at once; the rest is
+    sent as it comes and voiced together once the segment is told to stop, so that it is
+    said in one breath, as one line, not a sentence at a time, each with a tone of its own.
+    What is voiced after the first sentence starts with the delivery cue last in effect in
+    the segment, if it has none of its own (`carried_cue`): a cue at the head of a segment is
+    for all of it, and Fish Audio, voicing the rest apart, would not otherwise hear it. Each
+    session is `LATENCY` "normal", Fish Audio's steadiest, its first audio a little later."""
 
     def __init__(
         self,
         readings: Sequence[Reading] = (),
         proxy: Callable[[], str | None] = lambda: None,
+        preroll: float = PREROLL,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._proxy = proxy
+        self._preroll = preroll
         self._dictionary = pronunciation_dictionary(readings)
         self._arriving: tuple[int, int] | None = None  # (reply, segment) of the Japanese coming in
+        self._sentences = 0  # of the segment being voiced, sent so far
+        self._cue = ""  # the delivery cue last in effect in it
         self._voiced: tuple[int, int] | None = None  # (reply, segment) being voiced
         self._announced = False  # its `segment-playing` message is queued
         # The Fish Audio session voicing it, and what receives the session's audio until it
@@ -473,6 +521,7 @@ class FishTTS(InterruptsFirst, ProxiedWebsocket, FishAudioTTSService):
     async def _handle_interruption(self, frame: InterruptionFrame, direction: FrameDirection):
         await super()._handle_interruption(frame, direction)
         self._arriving = self._voiced = None
+        self._sentences, self._cue = 0, ""
 
     def _holds_speech(self) -> bool:
         return super()._holds_speech() or self._session is not None
@@ -483,6 +532,7 @@ class FishTTS(InterruptsFirst, ProxiedWebsocket, FishAudioTTSService):
             await self._end_segment()
             self._voiced = self._arriving
             self._announced = self._arriving is None  # Japanese under no segment: nothing to say
+            self._sentences, self._cue = 0, ""
         if self._session is None or self._finished.is_set():  # or it ended early
             await self._start_session(context_id)
         if self._session is None:  # it could not be opened, and the error is reported
@@ -492,10 +542,16 @@ class FishTTS(InterruptsFirst, ProxiedWebsocket, FishAudioTTSService):
             await self.append_to_audio_context(context_id, segment_playing(*self._voiced))
             self._announced = True
         text = spoken_by(text, self._settings.model)  # pyright: ignore[reportArgumentType]
+        sent = text
+        if self._sentences == 1:  # the first of the rest of the segment, voiced apart
+            sent = carried_cue(text, self._cue)
+        self._cue = last_cue(text) or self._cue
+        self._sentences += 1
         try:
-            await self._session.send(ormsgpack.packb({"event": "text", "text": text}))
+            await self._session.send(ormsgpack.packb({"event": "text", "text": sent}))
             await self.start_tts_usage_metrics(text)
-            await self._session.send(ormsgpack.packb({"event": "flush"}))
+            if self._sentences == 1:  # heard at once; the rest when the segment stops
+                await self._session.send(ormsgpack.packb({"event": "flush"}))
         except Exception as e:
             yield ErrorFrame(error=f"Unknown error occurred: {e}")
             await self._close_session()  # this sentence is lost; the next opens another
@@ -552,7 +608,30 @@ class FishTTS(InterruptsFirst, ProxiedWebsocket, FishAudioTTSService):
         self, session: ClientConnection, context_id: str, finished: asyncio.Event
     ) -> None:
         """Take the session's audio into the audio context `context_id` until the session
-        finishes, then set `finished` and close it."""
+        finishes, then set `finished` and close it.
+
+        All of it is kept, however small a piece Fish Audio sends (Pipecat's own receiver
+        drops those of 1 KB or less, words and all), cut at whole samples, a byte left over
+        going with the next piece. The first `PREROLL` seconds (`preroll`) are held until all of them
+        are in, or the session finishes, so that Fish Audio sending a little slower than
+        she speaks now and then is not heard as a stop every few words."""
+        leftover = b""
+        held: list[bytes] = []
+        preroll = int(self.sample_rate * 2 * self._preroll)  # 16-bit mono
+        holding = True
+
+        async def play(audio: bytes) -> None:
+            frame = TTSAudioRawFrame(audio, self.sample_rate, 1, context_id=context_id)
+            await self.append_to_audio_context(context_id, frame)
+            await self.stop_ttfb_metrics()
+
+        async def release() -> None:
+            nonlocal holding, held
+            holding = False
+            if held:
+                await play(b"".join(held))
+                held = []
+
         try:
             async for message in session:
                 if not isinstance(message, bytes):
@@ -561,11 +640,17 @@ class FishTTS(InterruptsFirst, ProxiedWebsocket, FishAudioTTSService):
                 if not isinstance(event, dict):
                     continue
                 if event.get("event") == "audio":
-                    audio = event.get("audio")
-                    if audio and len(audio) > 1024:  # as Pipecat's own receiver has it
-                        frame = TTSAudioRawFrame(audio, self.sample_rate, 1, context_id=context_id)
-                        await self.append_to_audio_context(context_id, frame)
-                        await self.stop_ttfb_metrics()
+                    audio = leftover + (event.get("audio") or b"")
+                    whole = len(audio) - len(audio) % 2
+                    audio, leftover = audio[:whole], audio[whole:]
+                    if not audio:
+                        continue
+                    if holding:
+                        held.append(audio)
+                        if sum(map(len, held)) >= preroll:
+                            await release()
+                    else:
+                        await play(audio)
                 elif event.get("event") == "finish":
                     if event.get("reason") == "error":
                         await self.push_error(error_msg="Fish Audio server error during synthesis")
@@ -575,10 +660,16 @@ class FishTTS(InterruptsFirst, ProxiedWebsocket, FishAudioTTSService):
             # cut short where it could no longer be masked.
             code = e.rcvd.code if e.rcvd is not None else None
             log.warning("Fish Audio closed a session before it finished (code %s)", code)
+        except asyncio.CancelledError:
+            held = []  # dropped with the session: not to play after an interruption
+            raise
         except Exception as e:
             await self.push_error(error_msg=f"Unknown error occurred: {e}", exception=e)
         finally:
-            finished.set()
+            try:
+                await release()  # what is held of a session that finished short of it
+            finally:
+                finished.set()
         await session.close()
 
     async def _close_session(self) -> None:
@@ -612,7 +703,7 @@ class FishTTS(InterruptsFirst, ProxiedWebsocket, FishAudioTTSService):
         request: dict[str, Any] = {
             "text": "",
             "sample_rate": self._fish_sample_rate,
-            "latency": self._settings.latency,
+            "latency": LATENCY,
             "format": self._output_format,
             "normalize": self._settings.normalize,
             "prosody": {

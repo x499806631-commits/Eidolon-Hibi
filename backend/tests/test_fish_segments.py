@@ -31,7 +31,14 @@ from websockets.frames import Close
 from websockets.protocol import State
 
 from eidolon.assembly import build
-from eidolon.call import FishTTS, SegmentCompleteFrame, SegmentTextFrame, SpeechServices
+from eidolon.call import (
+    FishTTS,
+    SegmentCompleteFrame,
+    SegmentTextFrame,
+    SpeechServices,
+    carried_cue,
+    last_cue,
+)
 from eidolon.config import FishAudioModel, Settings
 from eidolon.readings import Reading
 from tests.conftest import CharacterConfig
@@ -186,11 +193,13 @@ class FishUnderTest(FishTTS):
     then."""
 
     def __init__(
-        self, fish: FakeFish, pausing: bool = False, model: FishAudioModel = "s2.1-pro-free"
+        self, fish: FakeFish, pausing: bool = False, model: FishAudioModel = "s2.1-pro-free",
+        preroll: float = 0,
     ) -> None:
         super().__init__(
             api_key="fish-key",
             sample_rate=16000,
+            preroll=preroll,
             settings=FishAudioTTSService.Settings(voice="mano-voice", model=model),
             readings=fish.readings,
             stop_frame_timeout_s=CONTEXT_IDLE,
@@ -270,8 +279,8 @@ async def test_each_segment_is_voiced_in_a_session_of_its_own_announced_as_it_pl
     assert heard(fish) == [
         "playing 1/0", "audio ほわっ。", "audio おはよう。", "playing 1/1", "audio 今日も。"
     ]
-    assert fish.of(1) == [
-        "connected", "start", "text ほわっ。", "flush", "text おはよう。", "flush", "stop",
+    assert fish.of(1) == [  # the first sentence at once, the rest together as it stops
+        "connected", "start", "text ほわっ。", "flush", "text おはよう。", "stop",
         "finished", "closed",
     ]
     assert fish.of(2) == [
@@ -279,6 +288,29 @@ async def test_each_segment_is_voiced_in_a_session_of_its_own_announced_as_it_pl
     ]
     assert fish.log.index("2 connected") < fish.log.index("1 finished")
     assert fish.at["2 text 今日も。"] - fish.at["1 finished"] < CONNECTION / 2
+
+
+async def test_the_cue_in_effect_is_carried_to_the_rest_of_the_segment_but_not_a_sound():
+    fish = await run(
+        *reply(1, ["[shyly] えっと。", "ありがとう。", "またね。"], ["[small laugh] ふふ。", "うん。"])
+    )
+
+    assert fish.of(1)[2:7] == [
+        "text [shyly] えっと。", "flush", "text [shyly] ありがとう。", "text またね。", "stop"
+    ]
+    assert "text うん。" in fish.of(2)  # a laugh is not laughed again
+    assert all(start["latency"] == "normal" for start in fish.starts)
+
+
+async def test_the_first_of_a_segments_audio_is_held_till_enough_is_in_to_play_on_evenly():
+    """Two pieces of 2 KB, at 16 kHz 64 ms each: held for 0.1 s, the first waits for the
+    second, and they play as one."""
+    fish = FakeFish()
+
+    await run(*reply(1, ["ほわっ。", "おはよう。"]), fish=fish, tts=FishUnderTest(fish, preroll=0.1))
+
+    [played] = [e for e in heard(fish) if e.startswith("audio")]
+    assert "ほわっ。" in played and "おはよう。" in played
 
 
 async def test_paired_tags_reach_only_a_model_that_reads_them():
@@ -471,3 +503,12 @@ async def test_the_server_speaks_with_the_readings_file_beside_the_character_con
         assert speech.readings == (Reading("283", "つばさ", "tsu0ba1sa1"),)
     finally:
         await backend.aclose()
+
+
+def test_the_cue_carried_is_the_last_saying_how_and_none_goes_before_a_line_with_its_own():
+    assert last_cue("そっか……[disappointed] 行けないんだ。") == "[disappointed]"
+    assert last_cue("[sadly] うん……[sigh]") == "[sadly]"
+    assert last_cue("[small laugh] ふふ。") == ""
+    assert carried_cue("また今度ね。", "[disappointed]") == "[disappointed] また今度ね。"
+    assert carried_cue("[happily] でも！", "[sadly]") == "[happily] でも！"
+    assert carried_cue("うん。", "") == "うん。"
