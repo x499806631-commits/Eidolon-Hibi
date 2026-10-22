@@ -567,6 +567,28 @@ def letter_rules(occasion: Occasion, about: str = "") -> str:
 WANTS_TO_WRITE = "（制作人这会儿没在和你说话。你想给他写一封信。）"
 """Where the user's words would be as she writes a letter."""
 
+DIARY_RULES = """# 写日记
+现在是晚上，你在写今天的日记。日记是写给自己看的，不是写给制作人的信：用第一人称，照你自己的性格和口吻，写今天发生的事和你的心情。
+- 写两到四段，每段一个 <ja>…</ja><zh>…</zh>。不写称呼也不写落款；第一段的开头可以写今天的天气或者一句心情。
+- 今天你想记下来的事：
+{moments}
+  从里面挑你最在意的写，不必每件都写；可以接着今天和制作人聊过的话写，写你当时没说出口的想法。
+- 写到制作人时，照你平时心里怎么称呼制作人来写。
+- 如果有一句绝对不想让制作人看到的心里话，可以在最后另起一段，<ja> 和 <zh> 都以「※」开头；没有就不写，不要硬写。这一段也要合你们现在的关系。
+- 说到你自己那边，只写平常的事，或者世界设定里有日期的 live 和新歌；不要编原作的剧情，也不要写别的偶像出了什么大事。
+- 不写方括号里的语气提示，也不用 <whisper> 这类标签：日记是写的，不是念的。不附照片。"""
+"""How she is to write her diary (GLOSSARY.md「日记」), with what made the day matter filled
+in."""
+
+WANTS_TO_WRITE_DIARY = "（今天结束了。你翻开日记本，想把今天记下来。）"
+"""Where the user's words would be as she writes her diary."""
+
+
+def diary_rules(moments: Sequence[str]) -> str:
+    """How she is to write the diary of a day that mattered for `moments`."""
+    listed = "\n".join(f"  - {what}" for what in moments) or "  - （今天没有特别的事）"
+    return DIARY_RULES.format(moments=listed)
+
 LETTER_LINES = 3
 """How many of her latest letters to the user she is told of."""
 
@@ -688,6 +710,7 @@ class ConversationEngine:
         self._experiences = experiences
         self._random = random
         self._ended_listeners: list[Callable[[str, EndsFor], None]] = []
+        self._recorded_listeners: list[Callable[[Conversation, Message, datetime, str], None]] = []
 
     def _special_lines(self, character: Character, today: date) -> list[str]:
         """What `today`, the producer's local date, is besides their birthday, as `character`
@@ -817,6 +840,14 @@ class ConversationEngine:
             self._promises.asked(due.ask.id, now)
         if due.complain is not None:
             self._promises.complained(due.complain.id, now, timezone)
+
+    def on_recorded(
+        self, listener: Callable[[Conversation, Message, datetime, str], None]
+    ) -> None:
+        """Have `listener` told each turn as it is recorded: the conversation, her reply as
+        kept, when, and the producer's time zone. One that fails is logged, the turn none the
+        worse."""
+        self._recorded_listeners.append(listener)
 
     def on_ended(self, listener: Callable[[str, EndsFor], None]) -> None:
         """Have `listener` told the conversation's id, and why, as she ends one, once it is
@@ -1086,6 +1117,11 @@ class ConversationEngine:
             photo.recorded = True
             self._photos.recorded(photo.id)
         self._promises_told(promises_due, now, timezone)
+        for recorded in self._recorded_listeners:
+            try:
+                recorded(conversation, reply, now, timezone)
+            except Exception:
+                log.exception("telling of a turn recorded in %s failed", conversation.id)
         memory.write_down(history, text, reply, retrieved.query_vector, found)
         self._judge_promise(conversation, history, text)
         turn = sum(m.role == "user" for m in messages) + 1
@@ -1237,6 +1273,64 @@ class ConversationEngine:
         if not parser.complete:
             raise EmptyReply("对话模型没有返回任何内容")
         return parser.complete
+
+    async def write_diary(
+        self,
+        conversation: Conversation,
+        llm: ChatLLM,
+        moments: Sequence[str],
+        at: datetime,
+    ) -> list[Segment]:
+        """Her diary of the day ending `at` (GLOSSARY.md「日记」), for what made it matter
+        (`moments`), on `llm`, from what she knows in `conversation`, her current one: its
+        segments, as the model wrote them, a page she did not mean the producer to see last
+        if she wrote one (`diary.split_secret`). Her prompt is a letter's (`write_letter`),
+        her history as it was by `at`, told how to write a diary (`diary_rules`). Raises
+        EmptyReply if the model writes nothing, and whatever the model raises."""
+        character = self._characters[conversation.character_id]
+        record = [
+            entry for entry in self._store.record(conversation.id)
+            if datetime.fromisoformat(entry.created_at) <= at
+        ]
+        messages = [entry for entry in record if isinstance(entry, Message)]
+        profile = self._store.get_profile(conversation.user_id)
+        timezone = effective_timezone(profile, None)
+        affinity = self._affinity(conversation)
+        world_prompt = (
+            self._world.prompt(character.name, local_date(at, timezone)) if self._world else None
+        )
+        told = narrations(record, self._gift_catalog, timezone)
+        told[None] = _since_last_turn(record, self._gift_catalog, timezone)
+        prompt = self._prompt(
+            character, world_prompt, producer_prompt(profile),
+            chat_history(messages, self._history_turns()), told,
+            [
+                now_prompt(
+                    profile, at, timezone, "apart",
+                    affinity_prompt(
+                        affinity.tier, None, heart=character.heart,
+                        female_producer=profile.gender == "female",
+                    ) if affinity is not None else [],
+                    self._store.last_contact(conversation.user_id, conversation.character_id),
+                    await self._day_lines(character, conversation.user_id, at, timezone),
+                ),
+            ],
+            [diary_rules(moments)],
+            WANTS_TO_WRITE_DIARY, None,
+        )
+        parser = ReplyParser()
+        stream = llm.stream(prompt)
+        try:
+            async for item in stream:
+                if isinstance(item, str):
+                    parser.feed(item)  # a photo tag is dropped: she sends none
+        finally:
+            if (close := getattr(stream, "aclose", None)) is not None:
+                await close()
+        parser.finish()
+        if not parser.complete:
+            raise EmptyReply("对话模型没有返回任何内容")
+        return [Segment(without_cues(s.ja), without_cues(s.zh)) for s in parser.complete]
 
     def _photo_eligibility(
         self,

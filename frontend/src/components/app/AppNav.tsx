@@ -8,22 +8,32 @@ import { opensNewTab, useDirectory } from "@/components/conversations/Conversati
 import { Button } from "@/components/ui/button";
 import { copy } from "@/i18n";
 import { hasUnseen } from "@/lib/conversationList";
+import { unreadDiary } from "@/lib/diary";
 import { unreadLetters } from "@/lib/letters";
 import { currentNavItem, FIRST_LEVEL, isTyping, NAV_ITEMS, navDestination, type NavItem } from "@/lib/navShell";
 import { REPOSITORY_URL } from "@/lib/repository";
 import { cn } from "@/lib/utils";
-import { CalendarIcon, ConversationsIcon, GiftIcon, GitHubIcon, LettersIcon, SettingsIcon } from "@/theme/icons";
+import {
+  CalendarIcon,
+  ConversationsIcon,
+  DiaryIcon,
+  GiftIcon,
+  GitHubIcon,
+  LettersIcon,
+  SettingsIcon,
+} from "@/theme/icons";
 
 const ICONS: Record<NavItem, typeof SettingsIcon> = {
   conversations: ConversationsIcon,
   gifts: GiftIcon,
   calendar: CalendarIcon,
   letters: LettersIcon,
+  diary: DiaryIcon,
   settings: SettingsIcon,
 };
 
 /**
- * 导航栏（电脑）：最左一条 72px，右边一条细线，不能收起；对话、礼物、日历、信箱、设置从上往下，GitHub 仓库链接在最底下
+ * 导航栏（电脑）：最左一条 72px，右边一条细线，不能收起；对话、礼物、日历、信箱、日记、设置从上往下，GitHub 仓库链接在最底下
  * （DESIGN.md「Layout」）。窄屏由 CSS 藏起来，换成 dock。通话层只盖住它右边，展开时它照样能点（见 NavLinks）。
  */
 export function NavRail() {
@@ -73,7 +83,7 @@ export function NavDock({ isInert }: { isInert: boolean }) {
  * 标 `aria-current="page"`。点别的项去那一项的第一级；在二级页面上（她的对话页）再点当前项回到第一级，已在第一级时不动。
  * 通话层展开着（只有电脑上点得到，手机上它盖住 dock）时先收起，结束卡就放下，通话照常，去处顶上是通话条。
  * 对话列表里有一行有没看过的搭话（正开着的那段对话除外）时，「对话」图标右上角一个前景色的小点，和公告铃铛上的一样；
- * 有没读过的信时，「信箱」图标上也是这样一个点。
+ * 有没读过的信时，「信箱」图标上也是这样一个点；有能读又没读过的日记时，「日记」图标上也是。
  */
 function NavLinks({ className }: { className: string }) {
   const pathname = usePathname();
@@ -81,9 +91,11 @@ function NavLinks({ className }: { className: string }) {
   const current = currentNavItem(pathname);
   const unseen = characters !== null && hasUnseen(characters, latest, { preferences, onScreen });
   const unread = useSyncExternalStore(unreadLetters.subscribe, unreadLetters.snapshot, () => 0) > 0;
+  const unreadEntries = useSyncExternalStore(unreadDiary.subscribe, unreadDiary.snapshot, () => 0) > 0;
   const dotted: Partial<Record<NavItem, string>> = {
     ...(unseen ? { conversations: copy.nav.conversationsUnseen } : {}),
     ...(unread ? { letters: copy.nav.lettersUnread } : {}),
+    ...(unreadEntries ? { diary: copy.nav.diaryUnread } : {}),
   };
   return NAV_ITEMS.map((item) => {
     const Icon = ICONS[item];

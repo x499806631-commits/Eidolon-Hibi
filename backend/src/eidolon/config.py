@@ -425,6 +425,9 @@ class Settings:
     letters: bool = False
     """Whether characters write users letters (GLOSSARY.md「来信」), on the deployer's chat
     model; off unless `.env` turns it on (`EIDOLON_LETTERS`)."""
+    diary: bool = False
+    """Whether characters keep a diary of the days that mattered (GLOSSARY.md「日记」), on the
+    deployer's chat model; off unless `.env` turns it on (`EIDOLON_DIARY`)."""
     reach_outs: bool = False
     """Whether characters reach out to users (GLOSSARY.md「搭话」), on the deployer's chat
     model; off unless `.env` turns it on, and the admin console may override it."""
@@ -528,6 +531,7 @@ class Settings:
             affinity_and_gifts=_switch("EIDOLON_AFFINITY_AND_GIFTS", default=True),
             reach_outs=_switch("EIDOLON_REACH_OUTS"),
             letters=_switch("EIDOLON_LETTERS"),
+            diary=_switch("EIDOLON_DIARY"),
             proxy=proxy_from_env(),
             service_status=service_status_from_env(),
             search_key=os.environ.get("EIDOLON_SEARCH_KEY", "").strip() or None,

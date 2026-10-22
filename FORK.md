@@ -17,6 +17,7 @@ shadcn 纪律检查通过，前后端全部测试通过。
 | 偶像来信 | `.env` 里 `EIDOLON_LETTERS=1` | `letters.py`、`letters_api.py`、`components/letters/`、`lib/letters.ts` |
 | 日语里不混中文 | 默认 | `reply_format.py` |
 | 她的心（每位偶像自己的好感度档案） | 有 `characters/hearts/{id}.toml` 就有 | `hearts.py`、`characters/hearts/`、`affinity.py`、`affinity_judge.py` |
+| 偶像日记 | `.env` 里 `EIDOLON_DIARY=1` | `diary.py`、`diary_api.py`、`components/diary/`、`lib/diary.ts` |
 | 「我不是这个意思」 | 好感度下降的胶囊下面 | `appeals.py`、`appeals_api.py`、`lib/appeals.ts` |
 | 天气 | `.env` 里填坐标 | `weather.py` |
 | 番茄钟「一起专心」 | 对话页「更多」菜单 | `components/conversations/FocusSetup.tsx`、`FocusTimerBar.tsx`、`lib/focusTimer.ts` |
@@ -77,6 +78,14 @@ shadcn 纪律检查通过，前后端全部测试通过。
 点了以后这一回合扣的分退回来，也不再算进她结束对话、挂电话的账里；你下一句话时，她会知道你说刚才是开玩笑或她误会了。
 每条回复一次，每天 3 次（所有偶像一起算）；冷却中、对话结束了、电话里说的话都不能用。
 
+### 偶像日记
+
+导航多了「日记」：偶像只在对她来说重要的日子写日记——关系第一次变成「亲近」「亲密」、收到喜欢的礼物、约定做到或落空、
+认识满一百天或一年、谁的生日，以及聊天里后台模型认为对她特别重要的一刻。那天过完，她在第二天凌晨写一篇，日语原文配中文翻译。
+
+能看多少按你们现在的关系：冷淡或疏远时日记本合上，信任时只给看开头，亲近能看全文，亲密时连她「没打算给你看的一页」也能看到。
+看不到的部分不会发到浏览器。开发登录下可以用 `POST /api/diary/write-now` 让她立刻写一篇来试。
+
 ### 天气、番茄钟、纪念日、约定、联网、她们的经历
 
 这一批是朋友（用 DeepSeek）做的，克劳德审阅并修正过（约定不会被失败的回合白白用掉、提示词里不把制作人写成「他」、
@@ -99,6 +108,7 @@ shadcn 纪律检查通过，前后端全部测试通过。
 ```
 EIDOLON_REACH_OUTS=1      # 搭话（节日和生日早上的那句要用到）
 EIDOLON_LETTERS=1         # 来信
+EIDOLON_DIARY=1           # 偶像日记
 FISH_AUDIO_MODEL=drama-3  # ASMR 推荐
 # EIDOLON_WEATHER_LAT=    # 天气：你所在位置的纬度和经度，两个一起填（北纬、东经为正）
 # EIDOLON_WEATHER_LON=

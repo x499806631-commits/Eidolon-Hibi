@@ -42,6 +42,9 @@ export { AudioLines as AmbienceIcon, Moon as AsmrIcon } from "lucide-react";
 // 信箱（来信）。
 export { Mail as LettersIcon } from "lucide-react";
 
+// 日记：导航上的日记本；合上时的锁；她夹起来的那一页。
+export { BookLock as DiaryIcon, Lock as DiaryClosedIcon, Paperclip as DiarySecretIcon } from "lucide-react";
+
 // 「一起专心」的番茄钟（对话页更多菜单里打开，页首下方那条计时条）：闹钟、暂停、继续；
 // 结束用已有的 CloseIcon。
 export { AlarmClock as FocusIcon, Pause as PauseFocusIcon, Play as ResumeFocusIcon } from "lucide-react";

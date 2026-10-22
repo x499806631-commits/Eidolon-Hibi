@@ -37,6 +37,7 @@ export function isInShell(href: string): boolean {
     path === "/gifts" ||
     path === "/calendar" ||
     path === "/letters" ||
+    path === "/diary" ||
     path === "/settings" ||
     path.startsWith("/settings/")
   );
@@ -61,7 +62,7 @@ export function departure(href: string, callee: string | null): Departure {
 }
 
 /** The items of the rail and the dock, top to bottom (left to right on the dock). */
-export const NAV_ITEMS = ["conversations", "gifts", "calendar", "letters", "settings"] as const;
+export const NAV_ITEMS = ["conversations", "gifts", "calendar", "letters", "diary", "settings"] as const;
 export type NavItem = (typeof NAV_ITEMS)[number];
 
 /** Each item's first level; her conversation page and a settings category below it are its second.
@@ -71,6 +72,7 @@ export const FIRST_LEVEL: Record<NavItem, string> = {
   gifts: "/gifts",
   calendar: "/calendar",
   letters: "/letters",
+  diary: "/diary",
   settings: "/settings",
 };
 
@@ -81,6 +83,7 @@ export function currentNavItem(href: string): NavItem | null {
   if (path === "/gifts") return "gifts";
   if (path === "/calendar") return "calendar";
   if (path === "/letters") return "letters";
+  if (path === "/diary") return "diary";
   return path === "/settings" || path.startsWith("/settings/") ? "settings" : "conversations";
 }
 

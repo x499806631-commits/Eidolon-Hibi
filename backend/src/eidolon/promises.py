@@ -20,7 +20,7 @@ import logging
 import re
 import sqlite3
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -136,6 +136,10 @@ def _a_day(text: str) -> date | None:
         return None
 
 
+PromiseListener = Callable[[str, str, str, datetime], None]
+"""Told the user, the idol, a promise's words, and when."""
+
+
 class Promises:
     """Every user's promises to every idol, in the database at `path` beside the users they
     belong to; `random` draws the minute she asks about one at."""
@@ -146,8 +150,28 @@ class Promises:
         self._lock = threading.Lock()
         self._clock = clock
         self._random = random
+        self._kept: list[PromiseListener] = []
+        self._broken: list[PromiseListener] = []
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
+
+    def on_kept(self, listener: "PromiseListener") -> None:
+        """Have `listener` told the user, the idol, the promise's words and when, as one is
+        kept, however it is (`fulfil`, `by_gift`)."""
+        self._kept.append(listener)
+
+    def on_broken(self, listener: "PromiseListener") -> None:
+        """Have `listener` told the same as she first complains of one (`complained`)."""
+        self._broken.append(listener)
+
+    def _tell(self, listeners: "Sequence[PromiseListener]", promises: "Sequence[Promise]") -> None:
+        now = self._clock()
+        for promise in promises:
+            for listener in listeners:
+                try:
+                    listener(promise.user_id, promise.character_id, promise.text, now)
+                except Exception:
+                    log.exception("telling of promise %s failed", promise.id)
 
     def record(
         self, user_id: str, character_id: str, made: Sequence[NewPromise], now: datetime
@@ -246,11 +270,16 @@ class Promises:
         """She complained of it at `now`, in what was kept: not again that day."""
         today = now.astimezone(ZoneInfo(timezone)).date().isoformat()
         with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT * FROM promises WHERE id = ?", (promise_id,)
+            ).fetchone()
             self._db.execute(
                 "UPDATE promises SET complained_at = COALESCE(complained_at, ?), complained_on = ?"
                 " WHERE id = ?",
                 (now.astimezone(UTC).isoformat(), today, promise_id),
             )
+        if row is not None and row["complained_at"] is None:
+            self._tell(self._broken, [_promise(row)])
 
     def complaining(
         self, user_id: str, character_id: str, now: datetime, timezone: str
@@ -265,26 +294,33 @@ class Promises:
     def fulfil(self, user_id: str, promise_id: int) -> bool:
         """It was done: the promise is gone. False where it is not theirs, or already gone."""
         with self._lock, self._db:
-            return self._db.execute(
-                "DELETE FROM promises WHERE id = ? AND user_id = ?", (promise_id, user_id)
-            ).rowcount > 0
+            row = self._db.execute(
+                "SELECT * FROM promises WHERE id = ? AND user_id = ?", (promise_id, user_id)
+            ).fetchone()
+            if row is not None:
+                self._db.execute("DELETE FROM promises WHERE id = ?", (promise_id,))
+        if row is None:
+            return False
+        self._tell(self._kept, [_promise(row)])
+        return True
 
     def by_gift(self, user_id: str, character_id: str, gift_name: str) -> bool:
         """A gift named in the promise was given to her: that promise is gone. Judged by the
         promise's own words, since what wrote it knows no gift catalog."""
         if not gift_name:
             return False
-        found = False
+        found: list[Promise] = []
         with self._lock, self._db:
             rows = self._db.execute(
-                "SELECT id, text FROM promises WHERE user_id = ? AND character_id = ?",
+                "SELECT * FROM promises WHERE user_id = ? AND character_id = ?",
                 (user_id, character_id),
             ).fetchall()
             for row in rows:
                 if gift_name in row["text"]:
-                    found = True
+                    found.append(_promise(row))
                     self._db.execute("DELETE FROM promises WHERE id = ?", (row["id"],))
-        return found
+        self._tell(self._kept, found)
+        return bool(found)
 
     def open_for(self, user_id: str) -> list[Promise]:
         """Every promise still standing with any idol: for the calendar."""

@@ -56,6 +56,7 @@ from eidolon.prices import Prices
 from eidolon.own_keys import LLMService, OwnImageService, OwnKeys, ProviderLLMService
 from eidolon.photos import Photos
 from eidolon.proxy import ProxyRoutes
+from eidolon.diary import Diary
 from eidolon.letters import Letters
 from eidolon.reach_outs import ReachOuts
 from eidolon.readings import load_readings, readings_path
@@ -137,6 +138,8 @@ class Backend:
     """Has characters write users letters once their time comes."""
     appeals: Appeals
     """Gives back what turns the user did not mean so took off affinity."""
+    diary: Diary
+    """Has characters keep a diary of the days that mattered."""
     world: World | None = None
     """The world setting; None without its data file."""
     special_days: SpecialDays | None = None
@@ -155,6 +158,7 @@ class Backend:
     _probing: asyncio.Task[None] | None = field(default=None, repr=False)
     _reaching_out: asyncio.Task[None] | None = field(default=None, repr=False)
     _writing: asyncio.Task[None] | None = field(default=None, repr=False)
+    _keeping_diaries: asyncio.Task[None] | None = field(default=None, repr=False)
 
     async def start(self) -> None:
         """What is done as the server starts, on its event loop: try the overrides of the
@@ -166,10 +170,14 @@ class Backend:
         self._probing = asyncio.create_task(self.service_status.keep_probing())
         self._reaching_out = asyncio.create_task(self.reach_outs.keep_reaching_out())
         self._writing = asyncio.create_task(self.letters.keep_writing())
+        self._keeping_diaries = asyncio.create_task(self.diary.keep_writing())
 
     async def aclose(self) -> None:
         """Close what `build` opened, last opened first."""
-        for task in (self._keeping_fresh, self._probing, self._reaching_out, self._writing):
+        for task in (
+            self._keeping_fresh, self._probing, self._reaching_out, self._writing,
+            self._keeping_diaries,
+        ):
             if task is not None:
                 task.cancel()
         for close in reversed(self._closers):
@@ -426,6 +434,16 @@ def build(
         clock, random or secure_random, settings.letters, special_days,
     )
     closers.append(letters.close)
+    diary = Diary(
+        settings.database_path, store, engine, characters, config, affinities, activity,
+        clock, settings.diary, special_days,
+    )
+    closers.append(diary.close)
+    engine.on_recorded(diary.turn_recorded)
+    gifts.on_given(diary.gift_given)
+    memories.on_moment(diary.moment)
+    promises.on_kept(diary.promise_kept)
+    promises.on_broken(diary.promise_broken)
     config.on_change(gifts.notice)
     return Backend(
         settings=settings,
@@ -460,6 +478,7 @@ def build(
         reach_outs=reach_outs,
         letters=letters,
         appeals=Appeals(store, affinities, clock),
+        diary=diary,
         world=world,
         special_days=special_days,
         weather=weather,

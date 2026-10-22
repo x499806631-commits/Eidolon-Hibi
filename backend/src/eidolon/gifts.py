@@ -24,6 +24,7 @@ them retired since or not. The numbers come from the random source the backend i
 with (`randomness.Random`). Drawing calls no model and leaves no activity record.
 """
 
+import logging
 import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -49,6 +50,8 @@ from eidolon.gift_catalog import Gift
 from eidolon.promises import Promises
 from eidolon.randomness import Random
 from eidolon.store import Conversation, Store
+
+log = logging.getLogger(__name__)
 
 _SCHEMA = """
 -- One row per user given any draw chances: how many they have, the day they were last given
@@ -256,6 +259,7 @@ class Gifts:
         self._catalog = catalog
         self._random = random
         self._promises = promises
+        self._given: list[Callable[[str, str, str, bool, Change | None, datetime], None]] = []
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
         self.notice()
@@ -389,7 +393,21 @@ class Gifts:
         if self._promises is not None:
             # 约定里写着这件礼物（例如「给她一块布丁」），送了就算是兑现了
             self._promises.by_gift(user_id, character_id, gift.name)
+        now = self._clock()
+        for given in self._given:
+            try:
+                given(user_id, character_id, gift.name, liked, change, now)
+            except Exception:
+                log.exception("telling of a gift given failed")
         return Given(conversation.id, change, affinity, taken[0])
+
+    def on_given(
+        self, listener: Callable[[str, str, str, bool, Change | None, datetime], None]
+    ) -> None:
+        """Have `listener` told each gift given as it is recorded: the user, the character,
+        the gift's name, whether she liked it, how her affinity changed (None if it did not),
+        and when."""
+        self._given.append(listener)
 
     def use_reset_card(self, user_id: str) -> Reset:
         """Use one of the user's reset cards, bringing every character below trust with them

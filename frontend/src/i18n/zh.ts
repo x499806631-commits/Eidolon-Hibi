@@ -37,6 +37,9 @@ export const zh = {
     letters: "信箱",
     /** 「信箱」图标上有点时读屏读的名字。 */
     lettersUnread: "信箱，有没读过的信",
+    diary: "日记",
+    /** 「日记」图标上有点时读屏读的名字。 */
+    diaryUnread: "日记，有没读过的日记",
     settings: "设置",
   },
   /** 落地页的链接贴到聊天软件、社交网站时预览卡片上的文字（Open Graph、Twitter 卡片）。页面上不显示，不进字体子集。 */
@@ -1804,6 +1807,29 @@ export const zh = {
       holiday: "节日",
     },
     back: "回到信箱",
+    goChat: "去找她",
+    showTranslation: "显示翻译",
+    hideTranslation: "只看原文",
+  },
+  diary: {
+    title: "日记",
+    loading: "正在读取日记",
+    empty: "还没有日记",
+    /** 日记是空的时下面一句。 */
+    emptyHint: "发生了对她来说重要的事的那天，她会在晚上写日记。",
+    /** 清单一行读屏读的：「真乃的日记，10月21日，没读过」。 */
+    rowLabel: (name: string, date: string, unread: boolean) => `${name}的日记，${date}${unread ? "，没读过" : ""}`,
+    date: (month: number, day: number) => `${month}月${day}日`,
+    /** 合上的日记在清单上露出的那句、打开后的那句。 */
+    closedRow: "她把日记本合上了",
+    closed: (name: string) => `${name}现在不想让你看她的日记。等你们和好一些再来吧。`,
+    /** 只给看开头时，开头下面那句。 */
+    opening: (name: string) => `${name}只让你看到这里。再亲近一些，她也许会给你看完。`,
+    /** 有一页没给看时，正文下面那句。 */
+    secretHidden: (name: string) => `最后一页被${name}用夹子夹住了。`,
+    /** 给看了那一页时，那一页上面的小标题。 */
+    secretTitle: "她没打算给你看的一页",
+    back: "回到日记",
     goChat: "去找她",
     showTranslation: "显示翻译",
     hideTranslation: "只看原文",

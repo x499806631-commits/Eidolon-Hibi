@@ -229,6 +229,7 @@ class Memories:
         self._clock = clock
         self._promises = promises
         self._experiences = experiences
+        self._moments: list[Callable[[str, str, str, datetime], None]] = []
         self._embedder = embedder
         self._services = (
             _Services(embedder, reranker, min_relevance)
@@ -385,6 +386,12 @@ class Memories:
         found = await self._relevant(query_text, candidates)
         character = self._characters[conversation.character_id]
         return _memories_prompt(found, character, timezone, _FOUND) if found else None
+
+    def on_moment(self, listener: Callable[[str, str, str, datetime], None]) -> None:
+        """Have `listener` told what the background model, writing a turn's memories, found
+        mattered to her in it (`parse_moment`): the user, the character, what, and when, in
+        the producer's time zone."""
+        self._moments.append(listener)
 
     async def _her_own(
         self,
@@ -598,6 +605,13 @@ class Memories:
                     self._experiences.record(
                         user_id, conversation.character_id, written_experiences, now
                     )
+            moment = parse_moment(answer)
+            if moment is not None:
+                for listener in self._moments:
+                    try:
+                        listener(user_id, conversation.character_id, moment, now)
+                    except Exception:
+                        log.exception("telling of a moment in %s failed", conversation.id)
             if self._clearings.get(user_id, 0) != clearings:
                 return  # cleared since the turn began
             added = await asyncio.to_thread(self._add, conversation, written, shown, now)
@@ -828,9 +842,9 @@ _INSTRUCTIONS = """\
 现在狗去世了，就写「制作人的狗去世了，现在还养着那只猫」，取代原来那条。
 - 两件事可以同时成立的（例如喜欢喝咖啡，最近也开始喝茶），新的照常写，不取代旧的。
 
-只输出 JSON，格式为 {"memories": [{"text": "……", "supersedes": [编号]}], "promises": [], "experiences": []}，不取代任何记忆时 \
-supersedes 写 []；没有约定时 promises 写 []；没有经历时 experiences 写 []；三样都没有就输出 \
-{"memories": [], "promises": [], "experiences": []}。
+只输出 JSON，格式为 {"memories": [{"text": "……", "supersedes": [编号]}], "promises": [], "experiences": [], "moment": null}，\
+不取代任何记忆时 supersedes 写 []；没有约定时 promises 写 []；没有经历时 experiences 写 []；没有值得写进日记的事时 \
+moment 写 null；都没有就输出 {"memories": [], "promises": [], "experiences": [], "moment": null}。
 
 除了记忆，还要记下制作人的**约定**：制作人明确说了要在某一天为她做一件事时（给她一样东西、带她去某个地方、\
 那天要来找她），把这件事和那一天写进 promises。只认制作人明确说出口的日子，或者能从制作人说的「明天」「后天」\
@@ -848,7 +862,13 @@ supersedes 写 []；没有约定时 promises 写 []；没有经历时 experience
 - text 以她自己的名字开头，一句能单独看懂的话，例如「甜花去看过那个花道展」；\
 summary 写当时查到的要点（一两句，没有就留空）；url 是她这一回合查到的那条网页地址（没有就写 null）。
 - 一回合最多写 2 条。
-- 制作人去的记进 memories，她去的记进 experiences；两个人一起去的，两边各记一条。"""
+- 制作人去的记进 memories，她去的记进 experiences；两个人一起去的，两边各记一条。
+
+# 日记
+这一轮里如果发生了对她来说**特别重要**、她今晚会想写进日记的事——制作人第一次对她说了某句话、\
+两个人一起决定了什么、她被深深打动了或者被伤到了——就在 moment 里用一句话写下来，以她的名字开头，\
+例如「冬优子第一次听制作人说她不用一直逞强」。大多数回合都没有这样的事，写 null；平常的闲聊、\
+普通的开心不算。"""
 
 
 def _extraction_prompt(
@@ -926,6 +946,20 @@ class NewMemory:
     supersedes: tuple[int, ...] = ()
     """The numbers it was shown the memories this one supersedes under, counting from 1;
     any it was not shown are left for `Memories._add` to ignore."""
+
+
+MAX_MOMENT = 120
+"""How long what mattered to her in a turn may be, in characters; a longer one is cut."""
+
+
+def parse_moment(answer: str) -> str | None:
+    """What the background model found mattered to her in the turn, for her diary
+    (GLOSSARY.md「日记」); None where it found nothing, or wrote it in a way that cannot be
+    read."""
+    written = _array(answer, "moment")
+    if not isinstance(written, str) or not (said := written.strip()):
+        return None
+    return said[:MAX_MOMENT]
 
 
 def _array(answer: str, key: str) -> object:
