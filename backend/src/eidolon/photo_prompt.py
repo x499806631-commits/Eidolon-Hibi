@@ -193,7 +193,8 @@ def group_prompt(
     """The prompts a photo of `characters` together (the first the one who sends it, all with
     their photo tags, `MAX_IN_GROUP` at most) is generated from, as `tag` says it is taken,
     in the art style `style`: what all of them share in the base prompt (how many girls,
-    the work, the style, how it is taken, where, her sentence and the words), and each a
+    the work, the style, how it is taken, as close as `group_framing` lets it be, where, her
+    sentence and the words), and each a
     character prompt of her own (V5's), `girl` and who she is, her looks, then what she
     wears and does: hers from `tag`'s outfit and action, the others' from its `others`, or
     hers where it says nothing. With one, it is `image_prompt`'s."""
@@ -207,7 +208,7 @@ def group_prompt(
         action = (*action, LOOKING_AT_VIEWER)
     n = len(characters)
     base = (
-        f"{n}girls", WORK_TAG, *_styled(style), *_shot_tags(tag.shot), tag.framing,
+        f"{n}girls", WORK_TAG, *_styled(style), *_shot_tags(tag.shot), group_framing(tag.framing, n),
         *(("side-by-side",) if n <= SIDE_BY_SIDE else ()), *tag.place,
         f"exactly {n} girls in the whole picture",  # each one drawn once, by her own prompt
         *_said(tag.scene, tag.writing), *_finish(style, tag.writing),
@@ -223,6 +224,15 @@ def group_prompt(
         ", ".join(base), _negative(NEGATIVE_PROMPT, style, tag.writing), GROUP_SIZE,
         tuple(each),
     )
+
+
+def group_framing(framing: Framing, n: int) -> Framing:
+    """How much of them a photo of `n` together shows: never so far off that their faces are
+    too small to be drawn (a picture `GROUP_SIZE` across): two no further than `cowboy shot`,
+    three or more `upper body`."""
+    if n >= 3:
+        return "upper body" if framing != "portrait" else framing
+    return "cowboy shot" if framing == "full body" else framing
 
 
 WORN_TAGS = 8

@@ -228,3 +228,13 @@ def test_a_group_prompt_takes_each_one_her_own_and_openai_gets_them_after():
     assert openai_request("m", prompt)["prompt"].endswith("girl, tsukioka kogane, blonde hair, swimsuit, smile")
     assert len(generation_request("m", prompt, 1)["parameters"]["v4_prompt"]["caption"]["char_captions"]) == 2
     assert tag.stripped == ("people",)  # how many are in it is not hers to write
+
+
+def test_a_photo_of_them_together_is_never_so_far_off_their_faces_blur():
+    from eidolon.photo_prompt import group_framing
+
+    assert group_framing("full body", 2) == "cowboy shot"
+    assert group_framing("cowboy shot", 2) == "cowboy shot"
+    assert group_framing("full body", 3) == "upper body"
+    assert group_framing("cowboy shot", 4) == "upper body"
+    assert group_framing("portrait", 3) == "portrait"
