@@ -28,6 +28,7 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useWhileVisible } from "@/hooks/useWhileVisible";
 import { copy } from "@/i18n";
 import { getAffinity } from "@/lib/affinity";
+import { appeal } from "@/lib/appeals";
 import { DEFAULT_APPEARANCE, keepAppearance, loadAppearance, withAppearance, type Appearance } from "@/lib/appearance";
 import {
   createConversation,
@@ -327,6 +328,7 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
         sendTurn: (conversationId, text) => sendTurn(conversationId, text, userId),
         getPhoto,
         getAffinity,
+        appeal,
         preferences: { load: loadCallPreferences, save: saveCallPreferences },
         voice,
         tones,

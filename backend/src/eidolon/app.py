@@ -15,6 +15,7 @@ from starlette.types import Receive, Scope, Send
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from eidolon.admission import CoolingDown
+from eidolon.appeals_api import add_appeal_routes
 from eidolon.assembly import Backend
 from eidolon.call import (
     CallFailed,
@@ -356,6 +357,7 @@ def create_app(backend: Backend) -> FastAPI:
     add_gift_routes(app, backend)
     add_calendar_routes(app, backend)
     add_letter_routes(app, backend)
+    add_appeal_routes(app, backend.appeals)
     add_photo_routes(app, backend)
     add_sponsor_routes(app, backend)
     add_data_package_routes(app, backend)

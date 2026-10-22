@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS conversations (
 );
 -- `hurt` and `out_of_line`, on the user's message of a typed turn (`Typed`), are what the
 -- turn took off her affinity and whether it was out of line; NULL for a turn of a call, or
--- one recorded before typed turns were counted.
+-- one recorded before typed turns were counted: an appeal (`appeals`) sets them back to nothing.
+-- `appealed_at`, on her reply, is when the user said they did not mean it so (GLOSSARY.md「我不是这个意思」).
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id TEXT NOT NULL REFERENCES conversations(id),
@@ -94,7 +95,8 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at TEXT NOT NULL,
     affinity TEXT,
     hurt REAL,
-    out_of_line INTEGER
+    out_of_line INTEGER,
+    appealed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages(conversation_id, id);
 CREATE TABLE IF NOT EXISTS conversation_events (
@@ -292,6 +294,9 @@ class Message:
     segments: list[Segment] = field(default_factory=list)
     affinity: Change | None = None
     photo: Photo | None = None
+    appealed: bool = False
+    """On her reply: the user said they did not mean what lowered her affinity (GLOSSARY.md
+    「我不是这个意思」), and it was given back."""
 
     @property
     def photo_sent(self) -> bool:
@@ -316,6 +321,7 @@ class Message:
             [Segment(without_cues(s.ja), without_cues(s.zh)) for s in self.segments],
             self.affinity,
             self.photo,
+            self.appealed,
         )
 
     def shown(self) -> dict:
@@ -324,6 +330,23 @@ class Message:
         shown = asdict(self.without_cues())
         del shown["photo"]
         return shown | ({"photo": self.photo.shown()} if self.photo else {})
+
+
+@dataclass(frozen=True)
+class AppealTarget:
+    """Her reply as an appeal weighs it (`appeals`): whose conversation, how it changed her
+    affinity, whether it was appealed already, is the conversation's latest message, and the
+    conversation ended; the user's message before it (`said_id`, None if none) and what that
+    took off her affinity (`hurt`, nothing for a turn of a call)."""
+
+    conversation_id: str
+    character_id: str
+    change: Change | None
+    appealed: bool
+    latest: bool
+    ended: bool
+    said_id: int | None
+    hurt: float
 
 
 @dataclass(frozen=True)
@@ -558,6 +581,7 @@ class Store:
         self._add_missing_columns("messages", ("affinity",), "TEXT")
         self._add_missing_columns("messages", ("hurt",), "REAL")
         self._add_missing_columns("messages", ("out_of_line",), "INTEGER")
+        self._add_missing_columns("messages", ("appealed_at",), "TEXT")
         self._add_missing_columns("conversations", ("title",), "TEXT")
         self._add_missing_columns("conversation_events", ("gift_id",), "TEXT")
         self._add_missing_columns("conversation_events", ("liked",), "INTEGER NOT NULL DEFAULT 0")
@@ -1229,6 +1253,65 @@ class Store:
             ).fetchall()
         return [Typed(row["hurt"], bool(row["out_of_line"])) for row in reversed(rows)]
 
+    def appeal_target(self, user_id: str, reply_id: int) -> "AppealTarget | None":
+        """Her reply `reply_id` in one of the user's conversations, as an appeal weighs it
+        (`appeals`); None if there is no such reply of theirs."""
+        with self._lock:
+            reply = self._db.execute(
+                "SELECT m.id, m.conversation_id, m.affinity, m.appealed_at, c.character_id"
+                " FROM messages m JOIN conversations c ON c.id = m.conversation_id"
+                " WHERE m.id = ? AND c.user_id = ? AND m.role = 'character'",
+                (reply_id, user_id),
+            ).fetchone()
+            if reply is None:
+                return None
+            said = self._db.execute(
+                "SELECT id, hurt FROM messages WHERE conversation_id = ? AND id < ?"
+                " ORDER BY id DESC LIMIT 1",
+                (reply["conversation_id"], reply_id),
+            ).fetchone()
+            later = self._db.execute(
+                "SELECT 1 FROM messages WHERE conversation_id = ? AND id > ? LIMIT 1",
+                (reply["conversation_id"], reply_id),
+            ).fetchone()
+            ended = self._db.execute(
+                "SELECT 1 FROM conversation_events WHERE conversation_id = ? AND kind = 'ended'"
+                " LIMIT 1",
+                (reply["conversation_id"],),
+            ).fetchone()
+        return AppealTarget(
+            conversation_id=reply["conversation_id"],
+            character_id=reply["character_id"],
+            change=_change(reply["affinity"]),
+            appealed=reply["appealed_at"] is not None,
+            latest=later is None,
+            ended=ended is not None,
+            said_id=None if said is None else said["id"],
+            hurt=0.0 if said is None or said["hurt"] is None else said["hurt"],
+        )
+
+    def record_appeal(self, reply_id: int, said_id: int, at: str) -> None:
+        """Record the appeal of her reply `reply_id` at `at`: what the user's message
+        `said_id` before it came to is set back to nothing."""
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE messages SET appealed_at = ? WHERE id = ?", (at, reply_id)
+            )
+            self._db.execute(
+                "UPDATE messages SET hurt = 0, out_of_line = 0 WHERE id = ?", (said_id,)
+            )
+
+    def appeals_made(self, user_id: str) -> list[str]:
+        """When the user appealed, every time, with every character (ISO)."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT m.appealed_at FROM messages m"
+                " JOIN conversations c ON c.id = m.conversation_id"
+                " WHERE c.user_id = ? AND m.appealed_at IS NOT NULL",
+                (user_id,),
+            ).fetchall()
+        return [row[0] for row in rows]
+
     def list_messages(self, conversation_id: str) -> list[Message]:
         """The conversation's messages, each reply with its photo, if any, but not its
         picture."""
@@ -1598,7 +1681,8 @@ class Store:
 
 _USER_COLUMNS = "id, name, created_at, consented_at, banned_at, ban_note"
 _MESSAGE_COLUMNS = (
-    "m.id AS id, role, text, ja, zh, segments, m.created_at AS created_at, affinity"
+    "m.id AS id, role, text, ja, zh, segments, m.created_at AS created_at, affinity,"
+    " appealed_at"
 )
 _MESSAGE_WITH_PHOTO = (
     f"{_MESSAGE_COLUMNS}, p.id AS photo_id, p.status AS photo_status,"
@@ -1728,6 +1812,7 @@ def _message(row: sqlite3.Row) -> Message:
         row["id"], row["role"], row["text"], row["ja"], row["zh"], row["created_at"],
         [Segment(**s) for s in json.loads(row["segments"] or "[]")],
         _change(row["affinity"]),
+        appealed=row["appealed_at"] is not None,
     )
 
 

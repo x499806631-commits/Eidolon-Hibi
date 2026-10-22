@@ -38,6 +38,10 @@ chance a day, and now and then a reset card instead (GLOSSARY.md「抽奖」「�
 brings every character below trust back to the normal value, out of any cooldown, none of
 them the wiser. How much and how likely are here with the rest.
 
+The judge model can be wrong: the user may say they did not mean it so (GLOSSARY.md
+「我不是这个意思」, `appeals`), a few times a day, and what that turn took off is given back
+(`Affinities.give_back`), and she is told of it as she replies next (`EXPLAINED`).
+
 It is on only where the deployment has the judge model and the switch「好感度和礼物」is on
 (`LiveConfig.affinity_on`); off, nothing of it is shown, but what is kept stays as it is.
 Deleting the user deletes it (`database.USER_DATA`); deleting memories does not touch it.
@@ -48,12 +52,15 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
-from typing import Literal, TypeVar
+from typing import TYPE_CHECKING, Literal, TypeVar
 from zoneinfo import ZoneInfo
 
 from eidolon.clock import Clock
 from eidolon.database import connect
 from eidolon.gift_catalog import Rarity
+
+if TYPE_CHECKING:  # hearts know the tiers
+    from eidolon.hearts import Heart
 
 T = TypeVar("T")
 
@@ -264,6 +271,20 @@ _WHATEVER_THE_TIER = (
     "如果想不起具体是因为什么，就不要编造原因。"
 )
 
+_WHATEVER_THE_TIER_BUT_ROMANCE = (
+    "除了恋爱这一处，人设里的硬性规则照旧；一起经历过的事和你们偶像与制作人的关系都不会改变。"
+    "如果想不起具体是因为什么，就不要编造原因。"
+)
+
+_ROMANCE_ALLOWED = (
+    "人设里「不接受越界的恋爱或性方面的要求」这一条，在你们现在的关系里只放宽恋爱这一半："
+    "你可以按你的性格表达心动和喜欢；性方面的要求仍然不接受，照人设里的方式挡回去。"
+)
+"""For an adult idol whose heart writes romance in this tier (`hearts.Heart.romance_in`)."""
+
+_NOT_ROMANCE = "这份亲近是信赖和依赖，不是恋爱；就算制作人往那个方向说，你也照人设里的方式带过去。"
+"""For an idol under age whose heart writes her closer tiers: close as she is, never romance."""
+
 _FEELINGS = (
     "制作人刚才说的话伤到了你。",
     "制作人刚才说的话让你有点不舒服。",
@@ -334,18 +355,30 @@ def affinity_prompt(
     judged: Judged | None,
     parting: Parting | None = None,
     warning: Parting | None = None,
+    heart: "Heart | None" = None,
+    female_producer: bool = False,
 ) -> list[str]:
     """What the prompt's section about the producer says of her affinity, as the turn begins
     in `tier` and is `judged` (None if it was not): how she speaks to the producer in her
     tier, and how sweet on them she may be above trust, nothing in trust; how what the producer just said makes her feel; and, if she is
     `parting` with the producer after replying, that she does, or else if she is `warning`
-    the producer she will part that way should it go on (`warns`), that she does."""
+    the producer she will part that way should it go on (`warns`), that she does.
+
+    With her `heart` (`hearts`), she shows her tier as it says, trust too; an adult idol's
+    closer tiers are romance as it says, to a producer who is a woman (`female_producer`) or
+    not, and an under-age idol's closer tiers are told they are none."""
     lines = []
-    if tier != "trust":
-        lines.append(_TIER_PROMPTS[tier] + _IN_HER_OWN_WAY)
+    shown = heart.tiers.get(tier) if heart is not None else None
+    if tier != "trust" or shown:
+        lines.append((shown or _TIER_PROMPTS[tier]) + _IN_HER_OWN_WAY)
+        romance = heart.romance_in(tier, female_producer) if heart is not None else None
+        if romance:
+            lines.append(romance + _ROMANCE_ALLOWED)
+        elif heart is not None and not heart.adult and tier in ("close", "intimate"):
+            lines.append(_NOT_ROMANCE)
         if tier in _FONDNESS:
             lines.append(_FONDNESS[tier] + _SWEET_WITHIN_BOUNDS)
-        lines.append(_WHATEVER_THE_TIER)
+        lines.append(_WHATEVER_THE_TIER_BUT_ROMANCE if romance else _WHATEVER_THE_TIER)
     if judged is not None and (feeling := judged.feeling):
         lines.append(feeling)
     if parting is not None:
@@ -416,6 +449,17 @@ def _gift_step(rarity: Rarity, liked: bool, cooling: bool) -> float:
     `COOLDOWN_GIFT_STEP` while `cooling`."""
     step = GIFT_STEPS[rarity] + (LIKED_GIFT_STEP if liked else 0.0)
     return min(step, COOLDOWN_GIFT_STEP) if cooling else step
+
+
+EXPLAINED = (
+    "制作人刚才解释说：上一句是开玩笑，或者是你误会了，制作人并没有那个意思。"
+    "请照你的性格自然地回应这个解释——接受、半信半疑、或者小小抱怨一句都可以，然后接着聊。"
+)
+"""Told her as she replies next after the user appealed her last reply."""
+
+
+class Cooling(Exception):
+    """She is in a cooldown with the user: what was asked of her affinity waits until it ends."""
 
 
 class Affinities:
@@ -507,6 +551,31 @@ class Affinities:
         if change is not None and change.cooldown and until is not None:
             for listener in self._cooling:
                 listener(user_id, character_id, until)
+        return recorded, Status(after.tier, after.cooldown_until)
+
+    def give_back(
+        self, user_id: str, character_id: str, step: float, record: Callable[[], T]
+    ) -> tuple[T, Status]:
+        """Give back to the user's affinity with the character what a turn took off it
+        (`step`), as the user appeals it (GLOSSARY.md「我不是这个意思」), as it is recorded by
+        `record`: if recording fails, nothing changes. No day's limit holds it, nor does it
+        count towards one. Raises Cooling, changing nothing, while she is in a cooldown: an
+        appeal does not bring her out of one. Returns what `record` returned, and the
+        affinity left."""
+        with self._lock:
+            now = self._clock()
+            before = self._row(user_id, character_id, now)[0]
+            if before.cooling:
+                raise Cooling()
+            after = before.stepped(max(step, 0.0))
+            recorded = record()
+            with self._db:
+                self._db.execute(
+                    "INSERT INTO affinities (user_id, character_id, value, updated_at, cooling)"
+                    " VALUES (?, ?, ?, ?, 0) ON CONFLICT (user_id, character_id) DO UPDATE SET"
+                    " value = excluded.value, updated_at = excluded.updated_at",
+                    (user_id, character_id, after.value, now.isoformat()),
+                )
         return recorded, Status(after.tier, after.cooldown_until)
 
     def receive_gift(

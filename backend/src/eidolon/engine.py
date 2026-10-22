@@ -107,6 +107,7 @@ from zoneinfo import ZoneInfo
 from typing import Literal, ParamSpec, TypeVar
 
 from eidolon.affinity import (
+    EXPLAINED,
     FED_UP_TURNS,
     Affinities,
     Change,
@@ -371,6 +372,12 @@ class _Photo:
     id: str | None = None
     tag: str = ""
     recorded: bool = False
+
+
+def _appealed(messages: list[Message]) -> bool:
+    """Whether her latest reply was appealed (GLOSSARY.md「我不是这个意思」): she is told of it
+    as she replies next."""
+    return bool(messages) and messages[-1].role == "character" and messages[-1].appealed
 
 
 def latest_turns(messages: list[Message], turns: int | None) -> list[Message]:
@@ -793,6 +800,8 @@ class ConversationEngine:
                 judged,
                 way if ending or cools else None,
                 way if warns(judged, cools, out_of_line_before, hurt_before) else None,
+                character.heart,
+                profile.gender == "female",
             )
             if affinity is not None
             else []
@@ -814,6 +823,7 @@ class ConversationEngine:
                     affinity_lines, last_contact,
                     self._day_lines(character, conversation.user_id, now, timezone),
                 ),
+                *([EXPLAINED] if _appealed(messages) else []),
                 *([about_photo] if about_photo else []),
                 *([asmr_rules(voiced_by)] if in_call is not None and in_call.asmr else []),
             ],
@@ -948,7 +958,10 @@ class ConversationEngine:
             [
                 now_prompt(
                     profile, now, timezone, "apart",
-                    affinity_prompt(affinity.tier, None) if affinity is not None else [],
+                    affinity_prompt(
+                        affinity.tier, None, heart=character.heart,
+                        female_producer=profile.gender == "female",
+                    ) if affinity is not None else [],
                     self._store.last_contact(conversation.user_id, conversation.character_id),
                     self._day_lines(character, conversation.user_id, now, timezone),
                 ),
@@ -1008,7 +1021,10 @@ class ConversationEngine:
             [
                 now_prompt(
                     profile, now, timezone, "apart",
-                    affinity_prompt(affinity.tier, None) if affinity is not None else [],
+                    affinity_prompt(
+                        affinity.tier, None, heart=character.heart,
+                        female_producer=profile.gender == "female",
+                    ) if affinity is not None else [],
                     self._store.last_contact(conversation.user_id, conversation.character_id),
                     self._day_lines(character, conversation.user_id, now, timezone),
                 ),

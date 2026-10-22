@@ -31,6 +31,8 @@ export type Entry =
       photo: Photo | null;
       photosUsedUp?: string;
       reachOut?: true;
+      /** The user said they did not mean what lowered her affinity (GLOSSARY.md「我不是这个意思」). */
+      appealed?: true;
     };
 
 /** The exchange under way: the user's words and the reply, both the last entries shown.
@@ -53,7 +55,9 @@ export type LogAction =
   /** Something that is not a turn happened, just recorded: she hung up. */
   | { type: "event"; event: ConversationEvent }
   /** A photo being generated was asked how it is coming along. */
-  | { type: "photo-status"; id: string; status: PhotoStatus };
+  | { type: "photo-status"; id: string; status: PhotoStatus }
+  /** The user appealed her reply `key` (GLOSSARY.md「我不是这个意思」). */
+  | { type: "appealed"; key: string };
 
 export const emptyLog: ConversationLog = { entries: [], turn: null };
 
@@ -102,6 +106,10 @@ export function conversationLog(log: ConversationLog, action: LogAction): Conver
       return withoutTurn(log);
     case "event":
       return { ...log, entries: [...log.entries, toEntry(action.event)] };
+    case "appealed": {
+      const appealed = (e: Entry): Entry => (e.kind === "character" ? { ...e, appealed: true } : e);
+      return { ...log, entries: replaced(log.entries, action.key, appealed) };
+    }
     case "photo-status": {
       if (action.status.status === "pending") return log;
       const photo = { id: action.id, ...action.status };
@@ -213,5 +221,6 @@ function toEntry(message: Recorded): Entry {
         at: message.created_at,
         affinity: message.affinity,
         photo: message.photo ?? null,
+        ...(message.appealed ? { appealed: true as const } : {}),
       };
 }

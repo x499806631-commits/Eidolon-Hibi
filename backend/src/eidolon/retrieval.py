@@ -55,6 +55,7 @@ from typing import Any, Literal, Protocol
 
 from eidolon.affinity import Judged
 from eidolon.affinity_judge import QUESTIONS as AFFINITY_QUESTIONS
+from eidolon.affinity_judge import questions_for
 from eidolon.affinity_judge import read_judged
 from eidolon.characters import Character
 from eidolon.corpus import CatalogSource, Episode, StoryCorpus
@@ -644,12 +645,16 @@ _QUESTIONS = {
 }
 
 
-def judge_questions(affinity: bool = False, photo: bool = False) -> dict[str, dict]:
+def judge_questions(
+    affinity: bool = False, photo: bool = False, character: Character | None = None
+) -> dict[str, dict]:
     """What the judge model is asked of a turn: retrieval's three questions, affinity's in
-    the same request if `affinity`, and whether it asks for a photo if `photo`."""
+    the same request if `affinity` (weighed by `character`'s heart, if given and she has one),
+    and whether it asks for a photo if `photo`."""
+    affinity_questions = AFFINITY_QUESTIONS if character is None else questions_for(character)
     return (
         _QUESTIONS
-        | (AFFINITY_QUESTIONS if affinity else {})
+        | (affinity_questions if affinity else {})
         | (PHOTO_QUESTIONS if photo else {})
     )
 
@@ -688,7 +693,7 @@ class ModelRetrievalJudge:
         """As `RetrievalJudge.judge`, affinity's questions and the photo's asked in the same
         request."""
         answers = await self._judge_model.ask(
-            turn_state(character, history, text), judge_questions(affinity, photo)
+            turn_state(character, history, text), judge_questions(affinity, photo, character)
         )
         need = self.decide(_answer(answers))
         judged = None

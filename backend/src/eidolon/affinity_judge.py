@@ -81,6 +81,23 @@ QUESTIONS: dict[str, dict] = {
 """The three questions, by the keys their answers come back under."""
 
 
+def questions_for(character: Character) -> dict[str, dict]:
+    """`QUESTIONS` as asked about `character`: where she has a heart (`hearts`), the level is
+    weighed by what makes her happy and what hurts her, as she is, and the rest stay as they
+    are; one without a heart is asked the same as every other."""
+    heart = character.heart
+    if heart is None or not (heart.pleased or heart.hurt):
+        return QUESTIONS
+    told = [f"她是{character.name}，每个人在意的东西不一样。"]
+    if heart.pleased:
+        told.append("特别让她开心的：" + "；".join(heart.pleased) + "。")
+    if heart.hurt:
+        told.append("特别让她不舒服、受伤的：" + "；".join(heart.hurt) + "。")
+    told.append("这些是参考，按上面五档的标准判断；不要因为说中了其中一条就判成最高或最低。")
+    level = QUESTIONS[LEVEL] | {"instructions": QUESTIONS[LEVEL]["instructions"] + "".join(told)}
+    return QUESTIONS | {LEVEL: level}
+
+
 @dataclass(frozen=True)
 class AffinityAnswer:
     """The judge model's probability of each level, and of yes to each yes-or-no question."""
@@ -157,7 +174,7 @@ class ModelAffinityJudge:
         affinity: bool = True,
         photo: bool = False,
     ) -> tuple[Judged | None, bool]:
-        questions = (QUESTIONS if affinity else {}) | (PHOTO_QUESTIONS if photo else {})
+        questions = (questions_for(character) if affinity else {}) | (PHOTO_QUESTIONS if photo else {})
         answers = await self._judge_model.ask(turn_state(character, history, text), questions)
         judged, asked = None, False
         if affinity:

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { copy } from "@/i18n";
 import type { AffinityStatus } from "@/lib/affinity";
 import type { AmbienceKind } from "@/lib/ambience";
 import {
@@ -143,6 +144,7 @@ function opening(options: Options = {}) {
     },
     listMessages: async (conversationId) => (conversationId === "c1" ? (options.messages ?? []) : []),
     getAffinity: async () => options.affinity ?? null,
+    appeal: async () => ({ affinity: { tier: "trust", cooldown_until: null }, left: 2 }),
     getPhoto: async () => ({ status: "pending", reason: null }),
     onListChanged: () => listChanged++,
     startCall: (conversationId, preferences, handlers, asmr) => {
@@ -1579,6 +1581,44 @@ describe("LiveConversation: typing", () => {
     expect(gone).toBeNull();
     expect(live.snapshot()).toMatchObject({ affinity: null, affinityCue: null });
     vi.useRealTimers();
+  });
+
+  it("gives back what her reply took off once the user says they did not mean it so", async () => {
+    const down = { up: false, tier_changed: false, tier: "trust", cooldown: false, thawed: false } as const;
+    const asked: number[] = [];
+    const { live } = await conversation({
+      affinity: { tier: "trust", cooldown_until: null },
+      messages: [message(1, "user", "笨蛋"), { ...message(2, "character", "えっ"), affinity: down }],
+      ports: {
+        appeal: async (id) => {
+          asked.push(id);
+          return { affinity: { tier: "close", cooldown_until: null }, left: 2 };
+        },
+      },
+    });
+
+    const failed = await live.appeal("m1");
+    const done = await live.appeal("m2");
+
+    expect(failed).toBe(copy.conversation.affinity.appeal.failed);
+    expect(done).toBeNull();
+    expect(asked).toEqual([2]);
+    expect(live.snapshot().entries.at(-1)).toMatchObject({ key: "m2", appealed: true });
+    expect(live.snapshot().affinity).toEqual({ tier: "close", cooldown_until: null });
+  });
+
+  it("says why an appeal was refused", async () => {
+    const { live } = await conversation({
+      messages: [message(2, "character", "えっ")],
+      ports: {
+        appeal: async () => {
+          throw new ApiError("none_left", 409, { code: "none_left" });
+        },
+      },
+    });
+
+    expect(await live.appeal("m2")).toBe(copy.conversation.affinity.appeal.refused.none_left);
+    expect(live.snapshot().entries.at(-1)).not.toHaveProperty("appealed");
   });
 
   it.each([

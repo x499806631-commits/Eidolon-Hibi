@@ -264,6 +264,23 @@ export const zh = {
         /** 送礼让她解除了冷却。 */
         thawed: (name: string) => `${name}愿意和你说话了`,
       },
+      /** 「我不是这个意思」（GLOSSARY.md）：降了好感度的那颗胶囊旁边的小按钮，和点了以后。 */
+      appeal: {
+        button: "我不是这个意思",
+        pending: "正在说明",
+        /** 说明过了：胶囊后面跟的一句。 */
+        done: (name: string) => `已经和${name}解释过了`,
+        failed: "没能说明，请稍后再试",
+        refused: {
+          closed: "好感度现在没有开放",
+          no_change: "这一句没有让她不高兴，或者是在电话里说的",
+          not_latest: "只能说明她最新的这条回复",
+          appealed: "这一句已经解释过了",
+          ended: "这段对话已经结束了",
+          cooling: "她现在不想说话，等她消气以后再说吧",
+          none_left: "今天的说明机会用完了，明天再来吧",
+        },
+      },
     },
     /** 页首的「换衣装」和它打开的面板（spec「衣装与换衣装」）。 */
     outfits: {

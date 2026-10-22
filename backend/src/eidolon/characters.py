@@ -53,10 +53,13 @@ import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from eidolon.delivery_cues import voiced, without_cues
 from eidolon.readings import Reading, load_readings, readings_path, used_in
+
+if TYPE_CHECKING:  # her heart is read beside the configuration, once she is (`hearts`)
+    from eidolon.hearts import Heart
 
 log = logging.getLogger(__name__)
 
@@ -158,6 +161,9 @@ class Character:
     """Her character tag as Danbooru writes it, e.g. `sakuragi mano`, for her photos."""
     photo_appearance: str | None = None
     """Her looks as tags, e.g. `brown hair, medium hair, brown eyes`, for her photos."""
+    heart: "Heart | None" = None
+    """What makes her happy and hurts her, and how she shows each tier of affinity
+    (GLOSSARY.md「她的心」); None goes by the generic wording."""
 
     @property
     def photographed(self) -> bool:

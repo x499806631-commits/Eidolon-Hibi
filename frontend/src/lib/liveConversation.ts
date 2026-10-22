@@ -6,6 +6,7 @@
 
 import type { AffinityChange, AffinityStatus } from "@/lib/affinity";
 import type { AmbienceKind } from "@/lib/ambience";
+import { appealFailure, messageIdOf, type Appealed } from "@/lib/appeals";
 import {
   ApiError,
   type CallEvent,
@@ -282,6 +283,8 @@ export type Ports = {
   getPhoto: (id: string) => Promise<PhotoStatus>;
   /** Her affinity with the user now; null while affinity is off. */
   getAffinity: (characterId: string) => Promise<AffinityStatus | null>;
+  /** Says the user did not mean what her reply `messageId` was to (GLOSSARY.md「我不是这个意思」). */
+  appeal: (messageId: number) => Promise<Appealed>;
   preferences: {
     load: () => CallPreferences;
     save: (change: Partial<CallPreferences>) => CallPreferences;
@@ -587,6 +590,22 @@ export class LiveConversation {
     const layer = this.state.layer;
     if (isLive(this.state.call) && layer?.collapsed) {
       this.update({ layer: { ...layer, collapsed: false }, newPhoto: false });
+    }
+  }
+
+  /** The user did not mean what lowered her affinity in her reply `key` (GLOSSARY.md「我不是这个意思」):
+   * what it took off is given back, and she is told as she replies next. Resolves to why not, or null. */
+  async appeal(key: string): Promise<string | null> {
+    const entry = this.state.log.entries.find((e) => e.key === key);
+    const messageId = entry ? messageIdOf(entry) : null;
+    if (messageId === null) return appealFailure(null);
+    try {
+      const { affinity } = await this.ports.appeal(messageId);
+      this.update({ log: conversationLog(this.state.log, { type: "appealed", key }) });
+      this.showAffinity(affinity);
+      return null;
+    } catch (error) {
+      return appealFailure(error);
     }
   }
 

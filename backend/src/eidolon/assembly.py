@@ -34,6 +34,7 @@ from eidolon.activity import ActivityLog, metered_retrieval
 from eidolon.admission import Admissions
 from eidolon.affinity import Affinities
 from eidolon.announcements import Announcements
+from eidolon.appeals import Appeals
 from eidolon.backup import Backups
 from eidolon.call import Calls, Speech, SpeechServices
 from eidolon.characters import Character, load_characters
@@ -74,6 +75,7 @@ from eidolon.store import Store
 from eidolon.titles import Titles
 from eidolon.usage import UsageLimiter
 from eidolon.special_days import SpecialDays, load_special_days, special_days_path
+from eidolon.hearts import hearts_path, load_hearts, with_hearts
 from eidolon.world import World, load_world, world_path
 
 log = logging.getLogger(__name__)
@@ -129,6 +131,8 @@ class Backend:
     """Has characters reach out to users once their time comes."""
     letters: Letters
     """Has characters write users letters once their time comes."""
+    appeals: Appeals
+    """Gives back what turns the user did not mean so took off affinity."""
     world: World | None = None
     """The world setting; None without its data file."""
     special_days: SpecialDays | None = None
@@ -180,8 +184,11 @@ def build(
     """The backend `settings` describe, with any of the outside services passed in
     used instead of made. Raises RuntimeError, having opened nothing, if the character
     configuration (her liked gifts and all), the world setting, the gift catalog or the
-    calendar is broken, or a character is none of its idols."""
+    calendar or a heart (`hearts`) is broken, or a character is none of its idols."""
     characters = load_characters(settings.characters_path)
+    characters = with_hearts(
+        characters, load_hearts(hearts_path(settings.characters_path), characters.values())
+    )
     gift_catalog = load_gift_catalog(gifts_path(settings.characters_path))
     check_liked_gifts(characters, gift_catalog)
     world = load_world(path := world_path(settings.characters_path))
@@ -399,6 +406,7 @@ def build(
         ),
         reach_outs=reach_outs,
         letters=letters,
+        appeals=Appeals(store, affinities, clock),
         world=world,
         special_days=special_days,
         _closers=closers,

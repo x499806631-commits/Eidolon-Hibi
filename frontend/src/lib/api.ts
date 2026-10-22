@@ -138,6 +138,8 @@ export type Message = {
   affinity: AffinityChange | null;
   /** The photo she sent with her reply (GLOSSARY.md「照片」); none on a reply without one. */
   photo?: Photo;
+  /** On her reply: the user said they did not mean what lowered her affinity (GLOSSARY.md「我不是这个意思」). */
+  appealed?: boolean;
 };
 
 /** How a photo she sent is coming along: being generated, sent, or not sent after all, and why not. */

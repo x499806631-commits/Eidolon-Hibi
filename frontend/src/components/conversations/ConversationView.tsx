@@ -37,6 +37,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { copy } from "@/i18n";
 import { cueText, untilText } from "@/lib/affinity";
+import { messageIdOf } from "@/lib/appeals";
 import type { Character } from "@/lib/api";
 import type { Entry } from "@/lib/conversationLog";
 import type { Failure } from "@/lib/failure";
@@ -402,6 +403,7 @@ export function ConversationView({
             character={character}
             affinityOn={affinity !== null}
             timeZone={timeZone}
+            onAppeal={live && !cooling && !ended ? (key) => live.appeal(key) : undefined}
           />
         )}
       </div>
@@ -542,6 +544,8 @@ function HeaderTip({ label, children }: { label: string; children: ReactElement 
  * 消息从顶部开始排；气泡之间 4px，换人时多 8px。好感度可用时，改变了好感度的回复和送礼记录后面是一行变化胶囊。
  * 这一小时的照片用完时，她推掉的那条回复后面是一行同样的胶囊，几点以后可以再要按制作人的时区（`timeZone`）写。
  * 对话事件占一整行分隔线。
+ * 她最新的那条回复让好感度降了时，变化胶囊下面是「我不是这个意思」（GLOSSARY.md）：点了退回这一回合扣的，
+ * 她下一句话时会知道；冷却中、对话结束了、看历史对话时没有（`onAppeal` 不给）。说明过的那颗胶囊后面跟一句「已经解释过了」。
  */
 function Messages({
   entries,
@@ -549,14 +553,27 @@ function Messages({
   character,
   affinityOn,
   timeZone,
+  onAppeal,
 }: {
   entries: Entry[];
   hearing: string;
   character: Character;
   affinityOn: boolean;
   timeZone: string;
+  /** 说明她的回复（按记录里的 key）不是那个意思；没成就给出原因。 */
+  onAppeal?: (key: string) => Promise<string | null>;
 }) {
   const lines = linesOf(entries, new Date(), affinityOn);
+  const appealed = new Set(entries.flatMap((e) => (e.kind === "character" && e.appealed ? [`cue-${e.key}`] : [])));
+  const last = entries.at(-1);
+  const appealable =
+    onAppeal &&
+    last?.kind === "character" &&
+    !last.appealed &&
+    last.affinity?.up === false &&
+    messageIdOf(last) !== null
+      ? last.key
+      : null;
   return (
     <MessageScrollerProvider autoScroll defaultScrollPosition="end">
       <MessageScroller>
@@ -570,12 +587,16 @@ function Messages({
                   </span>
                 </MessageScrollerItem>
               ) : line.kind === "cue" ? (
-                <MessageScrollerItem key={line.key} className="mt-2 flex justify-center">
+                <MessageScrollerItem key={line.key} className="mt-2 flex flex-col items-center gap-1">
                   {/* 好感度的变化胶囊：一个升降小箭头加一句话 */}
                   <Capsule>
                     <CueArrowIcon up={line.change.up} className="size-3" />
                     {cueText(line.change, character.name)}
+                    {appealed.has(line.key) && <span>· {t.affinity.appeal.done(character.name)}</span>}
                   </Capsule>
+                  {appealable && onAppeal && line.key === `cue-${appealable}` && (
+                    <Appeal onAppeal={() => onAppeal(appealable)} />
+                  )}
                 </MessageScrollerItem>
               ) : line.kind === "photos-used-up" ? (
                 <MessageScrollerItem key={line.key} className="mt-2 flex justify-center">
@@ -706,6 +727,29 @@ function failureText(failure: Failure): string {
   return [failure.message, failure.toOwnKeys && t.ownLLMExempts, failure.countsTowardLimit === false && t.notCounted]
     .filter(Boolean)
     .join(" ");
+}
+
+/** 变化胶囊下面的「我不是这个意思」：说明中禁用，没成就在下面写原因。 */
+function Appeal({ onAppeal }: { onAppeal: () => Promise<string | null> }) {
+  const [pending, setPending] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const appeal = async () => {
+    setPending(true);
+    setFailure(await onAppeal());
+    setPending(false);
+  };
+  return (
+    <>
+      <Button variant="ghost" size="xs" disabled={pending} onClick={appeal}>
+        {pending ? t.affinity.appeal.pending : t.affinity.appeal.button}
+      </Button>
+      {failure && (
+        <p role="status" className="text-meta text-muted-foreground">
+          {failure}
+        </p>
+      )}
+    </>
+  );
 }
 
 /** 对话记录里居中的一颗胶囊（好感度的变化、照片用完）：样子和日期条一样，一个小图标加一句话，不用她的颜色。 */
