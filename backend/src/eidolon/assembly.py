@@ -57,6 +57,8 @@ from eidolon.own_keys import LLMService, OwnImageService, OwnKeys, ProviderLLMSe
 from eidolon.photos import Photos
 from eidolon.proxy import ProxyRoutes
 from eidolon.diary import Diary
+from eidolon.schedule_writer import ScheduleWriter
+from eidolon.schedules import Schedules
 from eidolon.letters import Letters
 from eidolon.reach_outs import ReachOuts
 from eidolon.readings import load_readings, readings_path
@@ -140,6 +142,10 @@ class Backend:
     """Gives back what turns the user did not mean so took off affinity."""
     diary: Diary
     """Has characters keep a diary of the days that mattered."""
+    schedules: Schedules
+    """Her schedule for each day (GLOSSARY.md「行程」)."""
+    schedule_writer: ScheduleWriter
+    """Has her schedule for each day written, ahead of the turns."""
     world: World | None = None
     """The world setting; None without its data file."""
     special_days: SpecialDays | None = None
@@ -159,6 +165,7 @@ class Backend:
     _reaching_out: asyncio.Task[None] | None = field(default=None, repr=False)
     _writing: asyncio.Task[None] | None = field(default=None, repr=False)
     _keeping_diaries: asyncio.Task[None] | None = field(default=None, repr=False)
+    _planning: asyncio.Task[None] | None = field(default=None, repr=False)
 
     async def start(self) -> None:
         """What is done as the server starts, on its event loop: try the overrides of the
@@ -171,12 +178,13 @@ class Backend:
         self._reaching_out = asyncio.create_task(self.reach_outs.keep_reaching_out())
         self._writing = asyncio.create_task(self.letters.keep_writing())
         self._keeping_diaries = asyncio.create_task(self.diary.keep_writing())
+        self._planning = asyncio.create_task(self.schedule_writer.keep_writing())
 
     async def aclose(self) -> None:
         """Close what `build` opened, last opened first."""
         for task in (
             self._keeping_fresh, self._probing, self._reaching_out, self._writing,
-            self._keeping_diaries,
+            self._keeping_diaries, self._planning,
         ):
             if task is not None:
                 task.cancel()
@@ -399,11 +407,13 @@ def build(
     )
     if weather is not None:
         closers.append(weather.aclose)
+    schedules = Schedules(settings.database_path, clock)
+    closers.append(schedules.close)
     engine = ConversationEngine(
         store, characters, gift_catalog, memories, titles, clock, retrieval,
         lambda: config.history_turns, world, affinities, config.affinity_judge(), photos,
         special_days, weather, promises, config.promise_judge(), web, config.search_judge(),
-        experiences,
+        experiences, schedules=schedules,
     )
     own_keys = OwnKeys(
         own_llm_service, config, activity, speech, exempting=lambda: config.exempting_keys,
@@ -439,6 +449,10 @@ def build(
         clock, settings.diary, special_days,
     )
     closers.append(diary.close)
+    schedule_writer = ScheduleWriter(
+        schedules, store, engine, characters, config, activity, clock,
+        random or secure_random, settings.schedules,
+    )
     engine.on_recorded(diary.turn_recorded)
     affinities.on_scene_done(diary.scene_played)
     gifts.on_given(diary.gift_given)
@@ -480,6 +494,8 @@ def build(
         letters=letters,
         appeals=Appeals(store, affinities, clock),
         diary=diary,
+        schedules=schedules,
+        schedule_writer=schedule_writer,
         world=world,
         special_days=special_days,
         weather=weather,

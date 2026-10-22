@@ -45,6 +45,7 @@ USER_DATA = [
     ("promises", "user_id = ?"),
     ("diary_moments", "user_id = ?"),
     ("affinity_scenes", "user_id = ?"),
+    ("schedules", "user_id = ?"),
     ("diary_entries", "user_id = ?"),
     ("diary_tries", "user_id = ?"),
     ("data_package_imports", "user_id = ?"),

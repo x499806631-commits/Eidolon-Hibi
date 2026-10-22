@@ -18,6 +18,7 @@ shadcn 纪律检查通过，前后端全部测试通过。
 | 日语里不混中文 | 默认 | `reply_format.py` |
 | 她的心（每位偶像自己的好感度档案） | 有 `characters/hearts/{id}.toml` 就有 | `hearts.py`、`characters/hearts/`、`affinity.py`、`affinity_judge.py` |
 | 偶像日记 | `.env` 里 `EIDOLON_DIARY=1` | `diary.py`、`diary_api.py`、`components/diary/`、`lib/diary.ts` |
+| 行程 | `.env` 里 `EIDOLON_SCHEDULES=1` | `schedules.py`、`schedule_writer.py`、`schedules_api.py` |
 | 重要的一幕 | 默认（要好感度） | `affinity.py`（`scene_prompt`、`affinity_scenes`）、`characters/hearts/` 的 `[scenes]` |
 | 「我不是这个意思」 | 好感度下降的胶囊下面 | `appeals.py`、`appeals_api.py`、`lib/appeals.ts` |
 | 天气 | `.env` 里填坐标 | `weather.py` |
@@ -73,6 +74,12 @@ shadcn 纪律检查通过，前后端全部测试通过。
 成年偶像在「亲近」「亲密」两档可以有恋爱的心动，按制作人的性别分开写（女制作人是百合）；性方面的要求仍然拒绝。
 **未满 18 岁的偶像永远不会是恋爱**：档案里写了恋爱也会被拒绝加载，亲近只是信赖和依赖。
 
+### 行程
+
+最近聊过的偶像，每天早上会有一份新写的「大概的安排」：三到六段，留着空白，每天抽一两个小变数（临时加练、下雨改到室内……），
+所以不会被摸透。世界设定里那天有她的 live 就一定排进去。聊天时她知道「现在大概在干嘛」，被问到时自然地说；写日记时也知道那天原本的安排。
+界面上暂时看不到行程；开发登录下可以用 `POST /api/schedules/write-now` 让她立刻排一份，`GET /api/characters/{id}/schedule` 看。
+
 ### 重要的一幕
 
 好感度第一次走到「亲近」「亲密」门口时，先停在门口，开始她的「重要的一幕」：她会（搭话里）约你好好聊聊，
@@ -117,6 +124,7 @@ shadcn 纪律检查通过，前后端全部测试通过。
 EIDOLON_REACH_OUTS=1      # 搭话（节日和生日早上的那句要用到）
 EIDOLON_LETTERS=1         # 来信
 EIDOLON_DIARY=1           # 偶像日记
+EIDOLON_SCHEDULES=1       # 行程
 FISH_AUDIO_MODEL=drama-3  # ASMR 推荐
 # EIDOLON_WEATHER_LAT=    # 天气：你所在位置的纬度和经度，两个一起填（北纬、东经为正）
 # EIDOLON_WEATHER_LON=
