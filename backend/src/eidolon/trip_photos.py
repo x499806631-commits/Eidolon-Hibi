@@ -75,6 +75,7 @@ TRIES = 3
 RETRY_AFTER = timedelta(hours=1)
 NOT_NOW = frozenset({"cold", "distant"})
 """The tiers she sends none in."""
+_WITH_YOU = re.compile(r"^\s*you\s*:\s*yes\b", re.IGNORECASE | re.MULTILINE)
 DATE_NOW_TRIES = 3
 """How many times `date_now` asks her again where she writes no photo tag."""
 _GROUP = re.compile(r"^\s*group\s*:\s*yes\b", re.IGNORECASE | re.MULTILINE)
@@ -305,9 +306,12 @@ class TripPhotos:
         await self._send(conversation, None, self._clock(), place, trip_with, all_together)
         return True
 
-    async def date_now(self, user_id: str, character_id: str, what: str) -> bool:
+    async def date_now(
+        self, user_id: str, character_id: str, what: str, with_you: bool = True
+    ) -> bool:
         """Have her tell the user of a day out with them (`what`) now, with a photo, as after
-        a date (GLOSSARY.md「邀约」): for trying it out under the development sign-in.
+        a date (GLOSSARY.md「邀约」), the producer in it, `with_you`, whatever she writes:
+        for trying it out under the development sign-in.
         False if they have no conversation, or image generation is off."""
         conversation = self._current(user_id, character_id)
         if conversation is None or not self.available():
@@ -322,7 +326,7 @@ class TripPhotos:
             try:
                 with recording.current():
                     said, tag = await self._engine.after_date(
-                        conversation, lease.keys.chat_llm, what, True
+                        conversation, lease.keys.chat_llm, what, True, with_you
                     )
             except EmptyReply:
                 recording.finish("failed")
@@ -336,6 +340,8 @@ class TripPhotos:
                 lease.release()
             break
         assert tag is not None
+        if with_you and not _WITH_YOU.search(tag):
+            tag = re.sub(r"(?im)^\s*you\s*:.*$\n?", "", tag).rstrip("\n") + "\nyou: yes"
         await self._sent_with_photo(conversation, said, tag, [], recording, producer_there=True)
         return True
 

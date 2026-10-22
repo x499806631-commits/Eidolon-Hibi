@@ -200,12 +200,13 @@ ProducerLook = Literal["male", "female"]
 PRODUCER_LOOKS: dict[ProducerLook, str] = {
     "male": "1.3::p-head producer::, faceless, black suit, white shirt, red necktie",
     "female": (
-        "1.5::p-head producer::, faceless, 1.2::genderswap (mtf)::, black skirt suit, "
-        "pencil skirt, white shirt, red necktie"
+        "1.5::p-head producer::, faceless, 1.2::genderswap (mtf)::, navy blue dress, "
+        "long dress, long sleeves, white collar, red bow"
     ),
 }
 """The producer's own character prompt, before what they do: never a face, the P for a
-head, its weight above the genderswap's so that a woman producer keeps it. The deployer
+head, its weight above the genderswap's so that a woman producer keeps it; a woman in a
+dress, not a suit, to be told from a man at a glance. The deployer
 may write their own in `EIDOLON_PRODUCER_LOOK_MALE` / `EIDOLON_PRODUCER_LOOK_FEMALE`
 (written in as it is, weights and all)."""
 

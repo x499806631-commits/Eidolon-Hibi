@@ -24,6 +24,8 @@ class SendNow(BaseModel):
 class DateNow(BaseModel):
     character_id: str
     what: str = "去看电影"
+    you: bool = True
+    """Have the producer in the photo, whatever she writes."""
 
 
 def add_trip_photo_routes(app: FastAPI, backend: Backend) -> None:
@@ -51,7 +53,9 @@ def add_trip_photo_routes(app: FastAPI, backend: Backend) -> None:
         if body.character_id not in backend.characters:
             raise HTTPException(404, f"没有这位偶像：{body.character_id}")
         try:
-            sent = await backend.trip_photos.date_now(user_id, body.character_id, body.what[:30])
+            sent = await backend.trip_photos.date_now(
+                user_id, body.character_id, body.what[:30], body.you
+            )
         except EmptyReply as e:
             raise HTTPException(502, f"试了几次，对话模型都没写照片标签：{e}") from None
         if not sent:

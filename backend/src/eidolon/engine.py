@@ -550,6 +550,9 @@ OUTFIT_FREE = "1–4 个英文 tag，你穿的衣服"
 WITH_YOU = """you: 制作人今天也在。想和他一起留个纪念、把他也拍进去，就写 yes，再加 1–3 个英文 tag 写他在照片里做什么（例如 yes, standing next to you, peace sign）；只拍你们就写 no。他的样子不用写
 """
 """What she is told of having the producer in the photo, where they were there with her."""
+WITH_YOU_THIS_TIME = """you: 制作人今天也在，这次把他也拍进去：写 yes，再加 1–3 个英文 tag 写他在照片里做什么（例如 yes, standing next to you, peace sign）。他的样子不用写
+"""
+"""What she is told where the producer is to be in the photo this time."""
 ALONE = "照片里只有你一个人。"
 
 
@@ -1744,17 +1747,20 @@ class ConversationEngine:
         return said
 
     async def after_date(
-        self, conversation: Conversation, llm: ChatLLM, what: str, with_photo: bool
+        self, conversation: Conversation, llm: ChatLLM, what: str, with_photo: bool,
+        with_you: bool = False,
     ) -> tuple[list[Segment], str | None]:
         """What she says first, back from `what` with the producer today (GLOSSARY.md
-        「邀约」): how it was, and, `with_photo`, a photo taken there and its tag. Raises
-        EmptyReply if she says nothing, or writes no photo tag where she is to."""
+        「邀约」): how it was, and, `with_photo`, a photo taken there and its tag, the
+        producer in it if she likes, or, `with_you`, this time. Raises EmptyReply if she
+        says nothing, or writes no photo tag where she is to."""
         talk = "今天过得怎么样、印象最深的一刻、想对他说的话。"
         situation = DATE_AFTER_SITUATION.format(what=what)
         rules = (
             photo_rules(
                 "约会之后", situation + "你想发一张今天拍的照片给他，再聊聊今天。", talk,
-                you=WITH_YOU, nobody="照片里只有你，或者你和制作人，没有别的人。",
+                you=WITH_YOU_THIS_TIME if with_you else WITH_YOU,
+                nobody="照片里只有你，或者你和制作人，没有别的人。",
             )
             if with_photo else f"# 约会之后\n{situation}你想聊聊今天。\n- 用 <ja><zh> 写一到三段：{talk}\n- 不发照片，也不说要给他打电话。"
         )

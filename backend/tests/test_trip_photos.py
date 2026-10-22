@@ -278,7 +278,7 @@ def test_the_producer_in_a_photo_is_the_p_headed_producer_in_a_suit_or_a_skirt_s
     )
     assert hers.positive.startswith("1girl, 1other, ")
     p_head, genderswap = hers.characters[1].index("1.5::p-head"), hers.characters[1].index("1.2::genderswap")
-    assert p_head < genderswap and "black skirt suit" in hers.characters[1]
+    assert p_head < genderswap and "navy blue dress" in hers.characters[1]
     assert his.size == GROUP_SIZE
     assert read_tag("shot: other\nyou: yes").you == ("standing",)
 
@@ -348,3 +348,20 @@ async def test_trying_a_day_out_she_never_writes_a_photo_tag_for_says_so(
 
 
 BARE = ["<ja>楽しかった</ja><zh>好开心</zh>"]
+
+
+async def test_trying_a_day_out_has_the_producer_in_it_even_where_she_writes_no(
+    make_client: ClientFactory, settings: Settings
+):
+    image = FakeImageService()
+    written = TAG.format(group="you: no\n")
+    sends = [f"<photo>{written}</photo><ja>楽しかった</ja><zh>好开心</zh>"]
+    client, llm, _ = await talked(make_client, settings, sends, image=image)
+
+    await client.post("/api/trip-photos/date-now", json={"character_id": "mano"})
+
+    from eidolon.engine import WITH_YOU_THIS_TIME
+
+    assert any(WITH_YOU_THIS_TIME.strip() in m.content for m in llm.prompts[-1])
+    [request] = image.requests
+    assert "p-head producer" in json.dumps(request["body"])
