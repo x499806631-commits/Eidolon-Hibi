@@ -152,6 +152,25 @@ async def test_with_her_unit_on_the_trip_it_may_be_of_them_all(
     assert (parameters["width"], parameters["height"]) == GROUP_SIZE
 
 
+async def test_sent_now_with_others_named_it_may_be_of_them_all(
+    make_client: ClientFactory, settings: Settings
+):
+    image = FakeImageService()
+    client, llm, _ = await talked(make_client, settings, SENDS_ALL, image=image)
+
+    sent = await client.post("/api/trip-photos/send-now", json={
+        "character_id": "mano", "place": "京都", "with": ["kogane"],
+    })
+    nobody = await client.post("/api/trip-photos/send-now", json={
+        "character_id": "mano", "with": ["no-such"],
+    })
+
+    assert sent.status_code == 201, sent.text
+    assert "和你一起来的有月岡恋鐘" in str(llm.prompts[-1])
+    assert image.requests[0]["body"]["input"].startswith("2girls")
+    assert nobody.status_code == 404
+
+
 async def test_none_with_image_generation_or_trip_photos_switched_off(
     make_client: ClientFactory, settings: Settings
 ):

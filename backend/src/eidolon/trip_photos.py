@@ -290,14 +290,16 @@ class TripPhotos:
             except Exception:
                 log.exception("sending a trip photo in conversation %s failed", conversation.id)
 
-    async def send_now(self, user_id: str, character_id: str, place: str = "京都") -> bool:
-        """Have her send the user a photo from a trip to `place` now, whatever her schedule
-        says: for trying it out under the development sign-in. False if they have no
-        conversation, or image generation is off."""
+    async def send_now(
+        self, user_id: str, character_id: str, place: str = "京都", trip_with: tuple[str, ...] = ()
+    ) -> bool:
+        """Have her send the user a photo from a trip to `place` now, with `trip_with` there
+        too, whatever her schedule says: for trying it out under the development sign-in.
+        False if they have no conversation, or image generation is off."""
         conversation = self._current(user_id, character_id)
         if conversation is None or not self.available():
             return False
-        await self._send(conversation, None, self._clock(), place)
+        await self._send(conversation, None, self._clock(), place, trip_with)
         return True
 
     def _plan(self, now: datetime) -> list[tuple[Conversation, date]]:
@@ -340,7 +342,8 @@ class TripPhotos:
         return due
 
     async def _send(
-        self, conversation: Conversation, day: date | None, now: datetime, place: str | None = None
+        self, conversation: Conversation, day: date | None, now: datetime, place: str | None = None,
+        trip_with: tuple[str, ...] = (),
     ) -> None:
         user_id, character_id = conversation.user_id, conversation.character_id
         status = self._affinities.status(user_id, character_id)
@@ -348,7 +351,6 @@ class TripPhotos:
             return
         if self._store.is_taking_turn(conversation.id) or self._in_call(conversation.id):
             return
-        trip_with: tuple[str, ...] = ()
         if day is not None:
             schedule = self._schedules.of(user_id, character_id, day)
             if schedule is None or schedule.trip is None:
