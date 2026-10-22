@@ -59,6 +59,8 @@ from eidolon.producer import (
     is_day_of_the_year,
 )
 from eidolon.promises import MAX_TEXT, NewPromise, Promise, Promises
+from eidolon.diary import Diary, carry as carry_diary
+from eidolon.diary import Entry as DiaryEntry
 from eidolon.experiences import Experience, Experiences, NewExperience
 from eidolon.producer import effective_timezone
 from eidolon.reply_format import Segment
@@ -77,10 +79,11 @@ from eidolon.store import (
     write_profile,
 )
 
-FORMAT = 4
+FORMAT = 5
 """The newest format this version reads, and the one it exports. Changing the format adds
 one to it, and keeps reading the older ones: 2 added her reach-outs (`reach_outs`), 3 the
-promises still standing (`promises`), 4 her own doings (`experiences`)."""
+promises still standing (`promises`), 4 her own doings (`experiences`), 5 her diary
+(`diary`)."""
 
 REACH_OUTS_SINCE = 2
 """The format whose conversations first held her reach-outs: before it, none may."""
@@ -537,6 +540,35 @@ class PackagedExperience(_Strict):
             return None
 
 
+class PackagedDiaryEntry(_Strict):
+    """One day of her diary (GLOSSARY.md「日记」), whole: the page she did not mean the producer
+    to see among it, since a package is the user's own to keep; and whether they opened it."""
+
+    character_id: str
+    day: str
+    """The day she wrote of, as `YYYY-MM-DD`."""
+    segments: Annotated[list[PackagedSegment], Field(min_length=1, max_length=20)]
+    secret: Annotated[list[PackagedSegment], Field(max_length=20)] = []
+    read: bool = False
+
+    @classmethod
+    def of(cls, entry: DiaryEntry) -> "PackagedDiaryEntry":
+        return cls(
+            character_id=entry.character_id,
+            day=entry.day.isoformat(),
+            segments=PackagedSegment.all_of(list(entry.segments)),
+            secret=PackagedSegment.all_of(list(entry.secret)),
+            read=entry.read_at is not None,
+        )
+
+    def the_day(self) -> date | None:
+        """The day, read back; None where it cannot be read, so that it is left."""
+        try:
+            return date.fromisoformat(self.day)
+        except ValueError:
+            return None
+
+
 class PackageData(_Strict):
     """`data.json`: a key for each category the package holds, none for the others."""
 
@@ -547,6 +579,8 @@ class PackageData(_Strict):
     """The promises (GLOSSARY.md「约定」) still standing: they travel with the memories."""
     experiences: list[PackagedExperience] | None = None
     """Her own doings (GLOSSARY.md「她们的经历」): they travel with the memories too."""
+    diary: list[PackagedDiaryEntry] | None = None
+    """Her diary (GLOSSARY.md「日记」): it travels with the memories too."""
 
     @model_validator(mode="after")
     def _memories_told_in_conversations(self) -> "PackageData":
@@ -617,6 +651,8 @@ class Imported:
     """The promises still standing when the package was read, and still to come."""
     experiences: int = 0
     """Her own doings still un-forgotten when the package was read."""
+    diary: int = 0
+    """The days of her diary she had no entry of here."""
     profile: bool = False
     skipped: list[Skipped] = field(default_factory=list)
 
@@ -653,6 +689,7 @@ class DataPackages:
         clock: Callable[[], datetime],
         promises: Promises | None = None,
         experiences: Experiences | None = None,
+        diary: Diary | None = None,
     ) -> None:
         self._database_path = database_path
         self._store = store
@@ -662,6 +699,7 @@ class DataPackages:
         self._clock = clock
         self._promises = promises
         self._experiences = experiences
+        self._diary = diary
         self._working: set[str] = set()
         self._working_lock = threading.Lock()
         db = connect(database_path)
@@ -739,6 +777,11 @@ class DataPackages:
                     PackagedExperience.of(e)
                     for e in self._experiences.all_of(user_id)
                     if (left := e.left(when)) is None or left > timedelta(0)
+                ]
+            # 日记也跟记忆一起走：整本，包括她夹起来的那一页（数据包是用户自己的）
+            if self._diary is not None:
+                data.diary = [
+                    PackagedDiaryEntry.of(e) for e in self._diary.all_of(user_id)
                 ]
         now = self._clock()
         manifest = Manifest(
@@ -826,6 +869,8 @@ class DataPackages:
                     imported.promises = self._add_promises(user_id, data.promises, now)
                 if "memories" in categories and data.experiences and self._experiences is not None:
                     imported.experiences = self._add_experiences(user_id, data.experiences, now)
+                if "memories" in categories and data.diary and self._diary is not None:
+                    imported.diary = self._add_diary(db, user_id, data.diary, now)
                 db.execute(
                     "DELETE FROM data_package_imports WHERE user_id = ? AND at < ?",
                     (user_id, _today_began(now)),
@@ -909,6 +954,28 @@ class DataPackages:
                 user_id, entry.character_id, entry.new(), now, used_at, entry.pinned
             )
             added += 1
+        return added
+
+    def _add_diary(
+        self,
+        db: sqlite3.Connection,
+        user_id: str,
+        packaged: list[PackagedDiaryEntry],
+        now: datetime,
+    ) -> int:
+        """Keep the days of her diary the package carried, through `db`: those of an idol not
+        here, those whose day cannot be read, and those of a day she has an entry of here
+        already, are left. How many came."""
+        added = 0
+        for entry in packaged:
+            day = entry.the_day()
+            if day is None or entry.character_id not in self._characters:
+                continue
+            added += carry_diary(
+                db, user_id, entry.character_id, day,
+                [s.kept() for s in entry.segments], [s.kept() for s in entry.secret],
+                entry.read, now,
+            )
         return added
 
     def _name(self, character_id: str) -> str | None:

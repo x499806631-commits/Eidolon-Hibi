@@ -171,7 +171,7 @@ async def test_no_one_elses_conversations_memories_or_photos_are_in_a_users_pack
     assert [e.filename for e in entries] == ["manifest.json", "data.json"]
     assert manifest["counts"] == {"conversations": 0, "photos": 0, "memories": 0}
     assert data == {
-        "conversations": [], "memories": [], "promises": [], "experiences": [],
+        "conversations": [], "memories": [], "promises": [], "experiences": [], "diary": [],
     }
 
 

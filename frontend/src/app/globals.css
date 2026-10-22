@@ -27,6 +27,38 @@
       transform: translateY(-25%);
     }
   }
+  /* 日记翻页：往后翻时新的一页从右边像书页一样转进来，往前翻时从左边；减少动态效果时只淡入。 */
+  --animate-page-next: page-next 0.45s ease-out 1;
+  --animate-page-previous: page-previous 0.45s ease-out 1;
+  --animate-page-fade: page-fade 0.25s ease-out 1;
+  @keyframes page-next {
+    from {
+      transform: rotateY(-75deg);
+      opacity: 0.3;
+    }
+    to {
+      transform: rotateY(0);
+      opacity: 1;
+    }
+  }
+  @keyframes page-previous {
+    from {
+      transform: rotateY(75deg);
+      opacity: 0.3;
+    }
+    to {
+      transform: rotateY(0);
+      opacity: 1;
+    }
+  }
+  @keyframes page-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
   --font-heading: var(--font-sans);
   /* 中文正文的 Noto Sans SC（根布局用 next/font 载入成 --font-zh）。不用 shadcn init 换上的 Geist。 */
   --font-sans: var(--font-zh), "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;

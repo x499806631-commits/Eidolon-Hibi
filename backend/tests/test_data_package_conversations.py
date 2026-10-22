@@ -310,7 +310,7 @@ async def test_conversations_with_someone_not_here_are_skipped_and_the_user_told
 
     assert res.status_code == 200, res.text
     assert res.json() == {
-        "conversations": 1, "photos": 0, "memories": 2, "promises": 0, "experiences": 0,
+        "conversations": 1, "photos": 0, "memories": 2, "promises": 0, "experiences": 0, "diary": 0,
         "profile": False,
         "skipped": [
             {"character_name": "七草はづき", "conversations": 2},

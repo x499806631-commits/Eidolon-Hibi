@@ -25,6 +25,7 @@ shown never leaves the server.
 import asyncio
 import json
 import logging
+import sqlite3
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -35,7 +36,7 @@ from zoneinfo import ZoneInfo
 
 from eidolon import anniversaries
 from eidolon.activity import ActivityLog
-from eidolon.affinity import Affinities, Change, Status
+from eidolon.affinity import Affinities, Change, Status, Tier
 from eidolon.characters import Character
 from eidolon.clock import Clock
 from eidolon.database import connect
@@ -67,7 +68,7 @@ SECRET_MARK = "※"
 """What a paragraph she did not mean the producer to see opens with, in both languages."""
 
 MomentKind = Literal[
-    "closer", "gift", "promise_kept", "promise_broken", "anniversary",
+    "closer", "scene", "gift", "promise_kept", "promise_broken", "anniversary",
     "her_birthday", "producer_birthday", "chat",
 ]
 
@@ -267,11 +268,17 @@ class Diary:
         with self._lock:
             before = self._db.execute(
                 "SELECT 1 FROM diary_moments WHERE user_id = ? AND character_id = ?"
-                " AND kind = 'closer' AND what = ?",
-                (user_id, character_id, what),
+                " AND ((kind = 'closer' AND what = ?) OR (kind = 'scene' AND what = ?))",
+                (user_id, character_id, what, _scene_what(change.tier)),
             ).fetchone()
         if before is None:
             self.note(user_id, character_id, "closer", what, at)
+
+    def scene_played(self, user_id: str, character_id: str, tier: Tier, at: datetime) -> None:
+        """Her scene at the door of `tier` was played through `at` (GLOSSARY.md「重要的一幕」):
+        the moment of the day, which her affinity reaching `tier` with it needs no other."""
+        if tier in _TIER_NAMES:
+            self.note(user_id, character_id, "scene", _scene_what(tier), at)
 
     def gift_given(
         self, user_id: str, character_id: str, gift_name: str, liked: bool,
@@ -366,6 +373,16 @@ class Diary:
                     "SELECT * FROM diary_entries WHERE id = ?", (entry_id,)
                 ).fetchone()
         return self._shown(user_id, _entry(row))
+
+    def all_of(self, user_id: str) -> list[Entry]:
+        """Every character's entries, whole, the page she did not mean them to see among them:
+        for a data package, which is the user's own to keep."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM diary_entries WHERE user_id = ? ORDER BY character_id, day",
+                (user_id,),
+            ).fetchall()
+        return [_entry(row) for row in rows]
 
     def close(self) -> None:
         with self._lock:
@@ -484,6 +501,33 @@ class Diary:
         entry = await asyncio.to_thread(self._keep, user_id, character_id, day, said, now)
         recording.finish("success")
         return entry
+
+
+def carry(
+    db: sqlite3.Connection,
+    user_id: str,
+    character_id: str,
+    day: date,
+    segments: Sequence[Segment],
+    secret: Sequence[Segment],
+    read: bool,
+    now: datetime,
+) -> bool:
+    """Keep an entry a data package carried, through `db`, the import's own connection: one
+    for a day she has an entry of already is left as it is. Whether it was kept."""
+    return db.execute(
+        "INSERT OR IGNORE INTO diary_entries"
+        " (user_id, character_id, day, segments, secret, created_at, read_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            user_id, character_id, day.isoformat(), _stored(segments), _stored(secret),
+            now.isoformat(), now.isoformat() if read else None,
+        ),
+    ).rowcount > 0
+
+
+def _scene_what(tier: Tier) -> str:
+    return f"终于对制作人说出了一直藏在心里的话，两个人的关系变成了「{_TIER_NAMES.get(tier, tier)}」"
 
 
 def _stored(segments: Sequence[Segment]) -> str:

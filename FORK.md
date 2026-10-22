@@ -18,6 +18,7 @@ shadcn 纪律检查通过，前后端全部测试通过。
 | 日语里不混中文 | 默认 | `reply_format.py` |
 | 她的心（每位偶像自己的好感度档案） | 有 `characters/hearts/{id}.toml` 就有 | `hearts.py`、`characters/hearts/`、`affinity.py`、`affinity_judge.py` |
 | 偶像日记 | `.env` 里 `EIDOLON_DIARY=1` | `diary.py`、`diary_api.py`、`components/diary/`、`lib/diary.ts` |
+| 重要的一幕 | 默认（要好感度） | `affinity.py`（`scene_prompt`、`affinity_scenes`）、`characters/hearts/` 的 `[scenes]` |
 | 「我不是这个意思」 | 好感度下降的胶囊下面 | `appeals.py`、`appeals_api.py`、`lib/appeals.ts` |
 | 天气 | `.env` 里填坐标 | `weather.py` |
 | 番茄钟「一起专心」 | 对话页「更多」菜单 | `components/conversations/FocusSetup.tsx`、`FocusTimerBar.tsx`、`lib/focusTimer.ts` |
@@ -71,6 +72,13 @@ shadcn 纪律检查通过，前后端全部测试通过。
 
 成年偶像在「亲近」「亲密」两档可以有恋爱的心动，按制作人的性别分开写（女制作人是百合）；性方面的要求仍然拒绝。
 **未满 18 岁的偶像永远不会是恋爱**：档案里写了恋爱也会被拒绝加载，亲近只是信赖和依赖。
+
+### 重要的一幕
+
+好感度第一次走到「亲近」「亲密」门口时，先停在门口，开始她的「重要的一幕」：她会（搭话里）约你好好聊聊，
+接下来 6 个回合是这一幕——第一轮她把藏在心里的话说出口，最后一轮好好收尾，然后才升档，那天的日记一定会写它。
+没有失败，离门口远了就先等着。成年偶像在「亲密」门口可以告白（女制作人是百合），未成年偶像是信赖的谈话；
+每位偶像怎么开口写在 `characters/hearts/` 的 `[scenes]` 里。
 
 ### 「我不是这个意思」
 

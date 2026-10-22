@@ -1,6 +1,7 @@
 """Her heart (GLOSSARY.md「她的心」): what makes each idol happy and what hurts her, which the
 judge model weighs her affinity by, and how she shows each tier of it in her own way; for an
 adult idol, the romance of the closer tiers too, told apart for a male and a female producer.
+And how she plays her scene at close's door and intimate's (GLOSSARY.md「重要的一幕」).
 
 Each is a file of its own in the `hearts` directory beside the character configuration, named
 by her identifier (`mano.toml`). Like the calendar it is configuration, not data. An idol
@@ -44,6 +45,8 @@ class Heart:
     hurt: tuple[str, ...] = ()
     tiers: Mapping[Tier, str] = field(default_factory=dict)
     romance: Mapping[str, str] = field(default_factory=dict)
+    scenes: Mapping[str, str] = field(default_factory=dict)
+    """How she plays her scene at the door of `close` and of `intimate` (GLOSSARY.md「重要的一幕」)."""
 
     @property
     def adult(self) -> bool:
@@ -103,7 +106,16 @@ def _parse(file: Path, data: dict) -> Heart:
         raise HeartsError(
             f"{file}：[romance] 只能写 {'、'.join(sorted(_ROMANCE_KEYS))}，不认识 {'、'.join(sorted(unknown))}"
         )
-    return Heart(age, pleased, hurt, {k: v.strip() for k, v in tiers.items()}, {k: v.strip() for k, v in romance.items()})
+    scenes = data.get("scenes", {})
+    if not isinstance(scenes, dict) or not all(isinstance(v, str) and v.strip() for v in scenes.values()):
+        raise HeartsError(f"{file}：[scenes] 里每一项都要是一段文字")
+    unknown = set(scenes) - set(get_args(RomanceTier))
+    if unknown:
+        raise HeartsError(f"{file}：[scenes] 只能写 close、intimate，不认识 {'、'.join(sorted(unknown))}")
+    return Heart(
+        age, pleased, hurt, {k: v.strip() for k, v in tiers.items()},
+        {k: v.strip() for k, v in romance.items()}, {k: v.strip() for k, v in scenes.items()},
+    )
 
 
 def _texts(file: Path, data: dict, key: str) -> tuple[str, ...]:

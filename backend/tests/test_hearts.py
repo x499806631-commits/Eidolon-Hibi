@@ -136,3 +136,18 @@ async def test_a_turn_with_her_in_a_close_tier_tells_her_heart(
 
     section = about_now(llm)
     assert "会小声说喜欢和你聊天。" in section and "不是恋爱" in section
+
+
+def test_the_repositorys_hearts_say_how_each_plays_her_scenes():
+    characters = load_characters(REPO_CHARACTERS, require_sheets=False)
+    hearts = load_hearts(hearts_path(REPO_CHARACTERS), characters.values())
+
+    for heart in hearts.values():
+        assert set(heart.scenes) == {"close", "intimate"}
+
+
+def test_a_scene_for_no_door_is_refused(characters: CharacterConfig):
+    characters.write("hearts/mano.toml", 'age = 16\n[scenes]\ntrust = "x"\n')
+
+    with pytest.raises(HeartsError, match="scenes"):
+        load_hearts(hearts_path(characters.path), load_characters(characters.path).values())

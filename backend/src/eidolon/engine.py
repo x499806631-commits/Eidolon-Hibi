@@ -110,15 +110,18 @@ from eidolon.activity import detached
 from eidolon.affinity import (
     EXPLAINED,
     FED_UP_TURNS,
+    SCENE_INVITATION,
     Affinities,
     Change,
     EndsFor,
     Judged,
     Parting,
+    Scene,
     Status,
     affinity_prompt,
     ends,
     hurt,
+    scene_prompt,
     warns,
 )
 from eidolon.affinity_judge import AffinityJudge
@@ -991,6 +994,7 @@ class ConversationEngine:
             if affinity is not None
             else []
         )
+        scene = self._scene(conversation) if judging else None
         world_prompt = (
             self._world.prompt(character.name, local_date(now, timezone)) if self._world else None
         )
@@ -1026,6 +1030,7 @@ class ConversationEngine:
                         character, conversation.user_id, now, timezone, promises_due.lines
                     ),
                 ),
+                *([scene_prompt(scene, character.heart, profile.gender == "female")] if scene else []),
                 *([EXPLAINED] if _appealed(messages) else []),
                 *([about_photo] if about_photo else []),
                 *([asmr_rules(voiced_by)] if in_call is not None and in_call.asmr else []),
@@ -1174,6 +1179,7 @@ class ConversationEngine:
             conversation, timezone, last_turn_query(messages)
         )
         promises_due = self._promises_due(character, conversation.user_id, now, timezone)
+        scene = self._scene(conversation)
         prompt = self._prompt(
             character, world_prompt, producer_prompt(profile),
             chat_history(messages, self._history_turns()), told,
@@ -1189,6 +1195,7 @@ class ConversationEngine:
                         character, conversation.user_id, now, timezone, promises_due.lines
                     ),
                 ),
+                *([SCENE_INVITATION] if scene is not None and scene.turns == 0 else []),
             ],
             [*([memories] if memories else []), REACH_OUT_RULES],
             WANTS_TO_REACH_OUT, None,
@@ -1366,6 +1373,13 @@ class ConversationEngine:
         if self._affinities is None:
             return None
         return self._affinities.status(conversation.user_id, conversation.character_id)
+
+    def _scene(self, conversation: Conversation) -> Scene | None:
+        """Her scene at a door the turn is of (GLOSSARY.md「重要的一幕」); None where affinity
+        is off or there is none."""
+        if self._affinities is None:
+            return None
+        return self._affinities.scene(conversation.user_id, conversation.character_id)
 
     def _cools(self, conversation: Conversation, judged: Judged | None) -> bool:
         """Whether the turn, as `judged`, would begin a cooldown; never if not judged."""

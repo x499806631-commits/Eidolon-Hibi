@@ -50,6 +50,18 @@ export function monthDay(entry: DiaryEntry): { month: number; day: number } {
   return { month, day };
 }
 
+/** 翻页：同一位偶像的前一天和后一天（都是写过日记的日子），没有就是 null。 */
+export function neighbours(
+  entries: DiaryEntry[],
+  entry: DiaryEntry,
+): { previous: DiaryEntry | null; next: DiaryEntry | null } {
+  const hers = entries
+    .filter((e) => e.character_id === entry.character_id)
+    .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.id - b.id));
+  const at = hers.findIndex((e) => e.id === entry.id);
+  return { previous: hers[at - 1] ?? null, next: at < 0 ? null : (hers[at + 1] ?? null) };
+}
+
 /** 能看又没读过的才算未读：合上的那篇不算。 */
 export function isUnread(entry: DiaryEntry): boolean {
   return !entry.read && entry.shown !== "closed";

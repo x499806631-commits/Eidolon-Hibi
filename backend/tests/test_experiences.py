@@ -264,7 +264,7 @@ async def test_a_package_carries_her_doings_that_are_still_kept(
 
     _, manifest, data = unzipped(await export(client, "memories"))
 
-    assert manifest["format"] == data_package.FORMAT == 4
+    assert manifest["format"] == data_package.FORMAT >= 4
     assert [e["text"] for e in data["experiences"]] == ["真乃去看过那个花道展"]
     # 字段就是文档里写的那些
     assert set(data["experiences"][0]) == {

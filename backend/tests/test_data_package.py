@@ -40,7 +40,7 @@ PROFILE = {
 }
 EMPTY_PROFILE = {"form_of_address": None, "gender": None, "timezone": None, "birthday": None}
 NOTHING_ELSE = {
-    "conversations": 0, "photos": 0, "memories": 0, "promises": 0, "experiences": 0,
+    "conversations": 0, "photos": 0, "memories": 0, "promises": 0, "experiences": 0, "diary": 0,
     "skipped": [],
 }
 

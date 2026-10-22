@@ -109,8 +109,10 @@ THAWED = {"up": True, "tier_changed": False, "tier": "cold", "cooldown": False, 
     [
         (TEA, "tea", happier("trust")),  # 59 + 3
         (COCOA, "cocoa", happier("trust")),  # 59 + 5
-        (CAKE, "cake", closer("close")),  # 59 + 3 + 3, as she likes it
-        (PLUSH, "plush", closer("close")),  # 59 + 7
+        # 59 + 3 + 3, as she likes it, and 59 + 7: held at close's door, her scene there not
+        # played yet (GLOSSARY.md「重要的一幕」, test_scenes)
+        (CAKE, "cake", happier("trust")),
+        (PLUSH, "plush", happier("trust")),
     ],
 )
 async def test_a_gift_raises_her_affinity_by_its_rarity_and_more_if_she_likes_it(

@@ -38,6 +38,11 @@ chance a day, and now and then a reset card instead (GLOSSARY.md「抽奖」「�
 brings every character below trust back to the normal value, out of any cooldown, none of
 them the wiser. How much and how likely are here with the rest.
 
+Close's door and intimate's are not gone through at once (GLOSSARY.md「重要的一幕」): the
+first time it would, affinity is held just below (`DOOR_GAP`) and her scene there begins; the
+turns at the door after are of it (`Affinities.scene`, `scene_prompt`), and the last of
+`SCENE_TURNS` opens the door for good. There is no failing it: away from the door it waits.
+
 The judge model can be wrong: the user may say they did not mean it so (GLOSSARY.md
 「我不是这个意思」, `appeals`), a few times a day, and what that turn took off is given back
 (`Affinities.give_back`), and she is told of it as she replies next (`EXPLAINED`).
@@ -48,7 +53,7 @@ Deleting the user deletes it (`database.USER_DATA`); deleting memories does not 
 """
 
 import threading
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -134,6 +139,23 @@ COOLDOWN_GIFT_STEP = 3.0
 """How much a gift raises it at most while she is in a cooldown, whatever its rarity and
 whether she likes it: four bring her out of one begun at 0, sooner than recovery would."""
 
+SCENE_TIERS: tuple[Tier, ...] = ("close", "intimate")
+"""The tiers whose door opens only once her scene there is played through (GLOSSARY.md
+「重要的一幕」), each once for good."""
+
+SCENE_TURNS = 6
+"""How many turns at the door a scene takes; the last of them opens it."""
+
+SCENE_SLACK = 5.0
+"""How far below a door she is still at it: turns further off are not of the scene, which waits
+for them to come back."""
+
+DOOR_GAP = 0.01
+"""How far below a closed door affinity is held."""
+
+SCENE_LIFT = 1.0
+"""How far past the door a scene played through brings her, at least."""
+
 DRAWS_PER_DAY = 1
 """How many draw chances (GLOSSARY.md「抽奖」) the user is given each day (`day_of`), as it
 begins."""
@@ -175,7 +197,23 @@ CREATE TABLE IF NOT EXISTS affinities (
     gained_on TEXT,
     PRIMARY KEY (user_id, character_id)
 );
+-- Her scene at the door of a tier (GLOSSARY.md「重要的一幕」): begun as her affinity first came
+-- to it, `turns` of it taken so far, `done_at` once it was played through and the door opened.
+CREATE TABLE IF NOT EXISTS affinity_scenes (
+    user_id TEXT NOT NULL REFERENCES users(id),
+    character_id TEXT NOT NULL,
+    tier TEXT NOT NULL,
+    turns INTEGER NOT NULL DEFAULT 0,
+    begun_at TEXT NOT NULL,
+    done_at TEXT,
+    PRIMARY KEY (user_id, character_id, tier)
+);
 """
+
+
+def _start(tier: Tier) -> float:
+    """The value `tier` begins at: its door."""
+    return dict(TIERS)[tier]
 
 
 def tier_of(value: float) -> Tier:
@@ -350,6 +388,67 @@ class Judged:
         return _FEELINGS[self.level]
 
 
+_SCENE_WHAT: dict[str, str] = {
+    "close": "你想让制作人知道，制作人已经是你可以说真心话、可以依靠的人了",
+    "intimate": "你想告诉制作人，制作人对你来说是特别重要、可以完全信赖的人",
+    "intimate_romance": "你对制作人的喜欢已经藏不住了，你想把这份心意告诉制作人",
+}
+"""What her scene at each door is about: at intimate's, for an adult idol whose heart has
+romance there, her love; else trust."""
+
+_SCENE_STEPS = (
+    "这一轮由你开口：把心里那件事说出来。可以先绕个弯、紧张一下，但这一幕里要真的说出口。",
+    "接着这件事聊下去，认真回应制作人刚才说的话。",
+    "这是这一幕的最后一轮：把这件事好好收个尾，让制作人感觉到你们之间从此有些不一样了。",
+)
+
+_SCENE_OWN_WAY = (
+    "照你自己的性格来：可以害羞、嘴硬、绕弯子，但不要一直拖着不说；"
+    "这一幕不用提好感度、档位这些词，也不要说成在演戏。"
+)
+
+SCENE_INVITATION = (
+    "你心里有件重要的事想当面对制作人说，这次先别说出口：照你的性格约制作人好好聊一聊，"
+    "比如问制作人有没有时间。"
+)
+"""What she is told as she reaches out with her scene at a door begun, not yet played."""
+
+
+def scene_prompt(scene: "Scene", heart: "Heart | None", female_producer: bool) -> str:
+    """What she is told of her scene at a door, for the turn that is its `scene.turns + 1`th
+    (GLOSSARY.md「重要的一幕」): what it is about, how she opens it as her heart says, which
+    turn of it this is and what to do in it. At intimate's door an adult idol may tell her love
+    as her heart's romance says, to a producer who is a woman (`female_producer`) or not; for
+    an idol under age, or without a heart to say her age, it is trust, never
+    romance; for an adult at close's, it is as her tier says."""
+    romance = (
+        heart.romance_in(scene.tier, female_producer)
+        if heart is not None and scene.tier == "intimate" else None
+    )
+    what = _SCENE_WHAT["intimate_romance" if romance else scene.tier]
+    turn = scene.turns + 1
+    step = (
+        _SCENE_STEPS[0] if turn == 1
+        else _SCENE_STEPS[2] if turn >= SCENE_TURNS
+        else _SCENE_STEPS[1]
+    )
+    lines = [
+        "# 重要的一幕",
+        f"你和制作人的关系走到了一个重要的地方：{what}。这一幕只会发生一次，"
+        f"现在是第 {turn} 轮（大约 {SCENE_TURNS} 轮）。",
+        step,
+    ]
+    opening = heart.scenes.get(scene.tier) if heart is not None else None
+    if opening:
+        lines.append(f"这一幕里的你：{opening}")
+    if romance:
+        lines.append(romance + _ROMANCE_ALLOWED)
+    elif heart is None or not heart.adult:
+        lines.append(_NOT_ROMANCE)
+    lines.append(_SCENE_OWN_WAY)
+    return "\n".join(lines)
+
+
 def affinity_prompt(
     tier: Tier,
     judged: Judged | None,
@@ -458,6 +557,15 @@ EXPLAINED = (
 """Told her as she replies next after the user appealed her last reply."""
 
 
+@dataclass(frozen=True)
+class Scene:
+    """Her scene at the door of `tier` (GLOSSARY.md「重要的一幕」), `turns` of it taken: the
+    next turn is its `turns + 1`th of `SCENE_TURNS`."""
+
+    tier: Tier
+    turns: int
+
+
 class Cooling(Exception):
     """She is in a cooldown with the user: what was asked of her affinity waits until it ends."""
 
@@ -473,6 +581,7 @@ class Affinities:
         self._clock = clock
         self._is_on = is_on
         self._cooling: list[Callable[[str, str, datetime], None]] = []
+        self._scenes_done: list[Callable[[str, str, Tier, datetime], None]] = []
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
 
@@ -498,6 +607,21 @@ class Affinities:
         """Have `listener` told the user, the character and when it ends as each cooldown
         begins, there and then, as the turn that begins it is recorded."""
         self._cooling.append(listener)
+
+    def on_scene_done(self, listener: Callable[[str, str, Tier, datetime], None]) -> None:
+        """Have `listener` told the user, the character, the tier and when, as her scene at a
+        door is played through and it opens (GLOSSARY.md「重要的一幕」)."""
+        self._scenes_done.append(listener)
+
+    def scene(self, user_id: str, character_id: str) -> Scene | None:
+        """Her scene the next turn is of, if any: begun, not played through, she not in a
+        cooldown, and affinity at its door (`SCENE_SLACK`). None while affinity is off."""
+        if not self._is_on():
+            return None
+        with self._lock:
+            now = self._clock()
+            affinity = self._row(user_id, character_id, now)[0]
+            return self._at_door(affinity, self._scene_rows(user_id, character_id))
 
     def cools(self, user_id: str, character_id: str, judged: Judged) -> bool:
         """Whether the turn `judged` would begin a cooldown, recorded now: foretold as the
@@ -527,6 +651,15 @@ class Affinities:
             if step > 0:
                 step = min(step, max(GAINS_PER_DAY - gained_today, 0.0))
             after = before.stepped(step)
+            scenes = self._scene_rows(user_id, character_id)
+            playing = self._at_door(before, scenes)
+            opened: Tier | None = None
+            if playing is not None:
+                if playing.turns + 1 >= SCENE_TURNS:
+                    opened = playing.tier
+                    lifted = _start(playing.tier) + SCENE_LIFT
+                    after = Affinity(max(after.value, lifted), after.at, after.cooling)
+            after, door = self._held(before, after, scenes, opened)
             value = after.value
             change = None
             if value != before.value:
@@ -547,10 +680,23 @@ class Affinities:
                         gained_today + max(value - before.value, 0.0), today,
                     ),
                 )
+                if playing is not None:
+                    self._db.execute(
+                        "UPDATE affinity_scenes SET turns = turns + 1, done_at = ?"
+                        " WHERE user_id = ? AND character_id = ? AND tier = ?",
+                        (
+                            now.isoformat() if opened else None,
+                            user_id, character_id, playing.tier,
+                        ),
+                    )
+                self._begin_scene(user_id, character_id, door, now)
         until = after.cooldown_until
         if change is not None and change.cooldown and until is not None:
             for listener in self._cooling:
                 listener(user_id, character_id, until)
+        if opened is not None:
+            for opens in self._scenes_done:
+                opens(user_id, character_id, opened, now)
         return recorded, Status(after.tier, after.cooldown_until)
 
     def give_back(
@@ -568,6 +714,7 @@ class Affinities:
             if before.cooling:
                 raise Cooling()
             after = before.stepped(max(step, 0.0))
+            after, door = self._held(before, after, self._scene_rows(user_id, character_id))
             recorded = record()
             with self._db:
                 self._db.execute(
@@ -576,6 +723,7 @@ class Affinities:
                     " value = excluded.value, updated_at = excluded.updated_at",
                     (user_id, character_id, after.value, now.isoformat()),
                 )
+                self._begin_scene(user_id, character_id, door, now)
         return recorded, Status(after.tier, after.cooldown_until)
 
     def receive_gift(
@@ -597,6 +745,7 @@ class Affinities:
             before = self._row(user_id, character_id, now)[0]
             after = before.stepped(_gift_step(rarity, liked, before.cooling))
             after = Affinity(after.value, now, after.cooling and after.value < THAW)
+            after, door = self._held(before, after, self._scene_rows(user_id, character_id))
             thawed = before.cooling and not after.cooling
             change = None
             if thawed or (not after.cooling and after.value != before.value):
@@ -610,6 +759,7 @@ class Affinities:
                     " cooling = excluded.cooling",
                     (user_id, character_id, after.value, now.isoformat(), int(after.cooling)),
                 )
+                self._begin_scene(user_id, character_id, door, now)
         return recorded, Status(after.tier, after.cooldown_until)
 
     def reset(self, user_id: str, character_ids: Iterable[str]) -> list[str]:
@@ -635,6 +785,61 @@ class Affinities:
     def close(self) -> None:
         with self._lock:
             self._db.close()
+
+    def _scene_rows(self, user_id: str, character_id: str) -> dict[Tier, tuple[int, bool]]:
+        """Her scenes begun with the user: turns taken, and whether played through, by tier.
+        Called holding the lock."""
+        rows = self._db.execute(
+            "SELECT tier, turns, done_at FROM affinity_scenes WHERE user_id = ? AND character_id = ?",
+            (user_id, character_id),
+        ).fetchall()
+        return {tier: (turns, done_at is not None) for tier, turns, done_at in rows}
+
+    def _at_door(
+        self, affinity: Affinity, scenes: Mapping[Tier, tuple[int, bool]]
+    ) -> Scene | None:
+        """Her scene a turn at `affinity` is of: one begun and not played through whose door
+        affinity is at, she not in a cooldown."""
+        if affinity.cooling:
+            return None
+        for tier in SCENE_TIERS:
+            begun = scenes.get(tier)
+            start = _start(tier)
+            if begun is None or begun[1]:
+                continue
+            if start - SCENE_SLACK <= affinity.value < start:
+                return Scene(tier, begun[0])
+        return None
+
+    def _held(
+        self,
+        before: Affinity,
+        after: Affinity,
+        scenes: Mapping[Tier, tuple[int, bool]],
+        opened: Tier | None = None,
+    ) -> tuple[Affinity, Tier | None]:
+        """`after`, held below the first door it would go through whose scene is not played
+        through (`opened` is, as of now), and that door; as it is, and None, if it goes
+        through none. A door already behind `before` holds nothing."""
+        for tier in SCENE_TIERS:
+            start = _start(tier)
+            done = tier == opened or scenes.get(tier, (0, False))[1]
+            if not done and before.value < start <= after.value:
+                return Affinity(start - DOOR_GAP, after.at, after.cooling), tier
+        return after, None
+
+    def _begin_scene(
+        self, user_id: str, character_id: str, door: Tier | None, now: datetime
+    ) -> None:
+        """Her scene at `door` is begun, if it is a door and it is not begun yet. Called
+        holding the lock, in a transaction."""
+        if door is None:
+            return
+        self._db.execute(
+            "INSERT OR IGNORE INTO affinity_scenes (user_id, character_id, tier, begun_at)"
+            " VALUES (?, ?, ?, ?)",
+            (user_id, character_id, door, now.isoformat()),
+        )
 
     def _read(self, user_id: str, character_id: str) -> Affinity:
         """As it is now, having recovered since it was kept."""

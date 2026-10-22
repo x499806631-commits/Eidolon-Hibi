@@ -440,6 +440,7 @@ def build(
     )
     closers.append(diary.close)
     engine.on_recorded(diary.turn_recorded)
+    affinities.on_scene_done(diary.scene_played)
     gifts.on_given(diary.gift_given)
     memories.on_moment(diary.moment)
     promises.on_kept(diary.promise_kept)
@@ -473,7 +474,7 @@ def build(
         service_status=service_status,
         data_packages=DataPackages(
             settings.database_path, store, memories, characters, gift_catalog, clock, promises,
-            experiences,
+            experiences, diary,
         ),
         reach_outs=reach_outs,
         letters=letters,

@@ -1830,6 +1830,9 @@ export const zh = {
     /** 给看了那一页时，那一页上面的小标题。 */
     secretTitle: "她没打算给你看的一页",
     back: "回到日记",
+    /** 日记纸两边的翻页键，读屏读的是哪一天。 */
+    previous: (date: string) => `上一页，${date}`,
+    next: (date: string) => `下一页，${date}`,
     goChat: "去找她",
     showTranslation: "显示翻译",
     hideTranslation: "只看原文",

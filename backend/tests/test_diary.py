@@ -25,6 +25,7 @@ from eidolon.reply_format import Segment
 from tests.conftest import ClientFactory
 from tests.fakes import FAKE_JUDGE, FakeClock, FakeLLM, FakeServiceClients, context_of, level
 from tests.test_affinity import keep
+from tests.test_data_package import export, import_package, unzipped
 from tests.test_delete_account import user_id
 from tests.test_reach_outs import backend_of
 from tests.test_text_turn import send_turn, start_conversation
@@ -298,7 +299,7 @@ def test_the_page_she_did_not_mean_them_to_see_is_kept_apart():
     assert secret == [Segment("内緒", "秘密")]
 
 
-async def test_a_turn_that_brings_her_close_for_the_first_time_is_a_moment(
+async def test_a_turn_that_brings_her_close_for_the_first_time_is_a_moment_her_scene_played(
     make_client: ClientFactory, settings: Settings
 ):
     clients = FakeServiceClients()
@@ -308,7 +309,32 @@ async def test_a_turn_that_brings_her_close_for_the_first_time_is_a_moment(
     client = make_client(FakeLLM(REPLY), clients=clients, clock=clock, settings=settings)
     conversation = await start_conversation(client)
     keep(settings.database_path, "producer", 64, clock.now)
+    with sqlite3.connect(settings.database_path) as db:  # played already: the door is open
+        db.execute(
+            "INSERT INTO affinity_scenes (user_id, character_id, tier, turns, begun_at, done_at)"
+            " VALUES (?, 'mano', 'close', 6, ?, ?)",
+            (user_id(settings.database_path, "producer"), clock.now.isoformat(),
+             clock.now.isoformat()),
+        )
 
     await send_turn(client, conversation, "你今天唱得真好")
 
     assert moments(settings.database_path) == [("closer", "和制作人的关系第一次变成了「亲近」")]
+
+
+async def test_her_diary_travels_whole_with_the_memories_in_a_data_package(
+    make_client: ClientFactory, settings: Settings
+):
+    me, _, _ = await written_now(make_client, settings, affinity=False)
+    other = make_client(FakeLLM(), "other", settings=replace(settings, diary=True))
+
+    _, _, data = unzipped(await export(me, "memories"))
+    imported = (await import_package(other, await export(me, "memories"), "memories")).json()
+    again = (await import_package(other, await export(me, "memories"), "memories")).json()
+
+    (packaged,) = data["diary"]
+    assert set(packaged) == {"character_id", "day", "segments", "secret", "read"}
+    assert packaged["secret"] == [{"ja": "ずっと一緒にいたいな。", "zh": "想一直在一起啊。"}]
+    assert (imported["diary"], again["diary"]) == (1, 0)
+    (entry,) = (await other.get("/api/diary")).json()
+    assert (entry["character_id"], entry["read"], len(entry["segments"])) == ("mano", True, 2)
