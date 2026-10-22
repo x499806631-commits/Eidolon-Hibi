@@ -1,10 +1,9 @@
 """Her bath (GLOSSARY.md「洗澡」): a night she goes to bed, her bath before it is drawn with her
 schedule, in the tub unless her heart says she showers. A message in it she reads as she comes
-out, after which she is out; the line under her name says she is in the bath for an adult idol,
-only that she is away from her phone for any other. A call in it: an adult who soaks answers
-first from the tub, the browser told so for the sound of the bathroom; any other does not
-answer, which is kept in the conversation, and she comes back to the producer once the bath is
-over. Her habits are told her in every turn. The producer's time zone is UTC (`Etc/GMT`)."""
+out, after which she is out; the line under her name says she is in the bath. A call in it:
+an adult who soaks answers first from the tub, the browser told so for the sound of the
+bathroom; any other does not answer, which is kept in the conversation, and she comes back to
+the producer once the bath is over. Her habits are told her in every turn. The producer's time zone is UTC (`Etc/GMT`)."""
 
 import sqlite3
 from dataclasses import replace
@@ -159,7 +158,7 @@ async def test_a_message_in_her_bath_she_reads_coming_out_and_after_it_she_is_ou
     await send_turn(client, conversation, "刚刚在忙吗")
     second = context_of(llm.prompts[-1])
 
-    assert before == {"away": True}  # an idol not known to be an adult: only away
+    assert before == {"bath": True}
     assert "洗完出来才看到" in first
     assert "洗完出来才看到" not in second
     assert await now(client) == {"free": True}

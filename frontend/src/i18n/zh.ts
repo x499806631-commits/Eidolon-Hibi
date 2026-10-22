@@ -208,9 +208,8 @@ export const zh = {
       asleep: "在睡觉 💤",
       woken: "被你吵醒了",
       bedtime: "准备睡了",
-      /** 在洗澡（GLOSSARY.md「洗澡」）：成年的偶像写「在洗澡」，别的只写不在手机旁。 */
+      /** 在洗澡（GLOSSARY.md「洗澡」）。 */
       bath: "在洗澡 🛁",
-      away: "暂时不在手机旁",
       /** 读屏读的：「她现在大概在：舞蹈课 · 事务所」。 */
       label: (doing: string) => `她现在大概在：${doing}`,
     },

@@ -19,8 +19,7 @@ describe("她现在大概在干嘛", () => {
     );
   });
 
-  it("在洗澡：成年的偶像写在洗澡，别的只写暂时不在手机旁", () => {
+  it("在洗澡写在洗澡", () => {
     expect(scheduleText({ bath: true })).toBe("在洗澡 🛁");
-    expect(scheduleText({ away: true })).toBe("暂时不在手机旁");
   });
 });
