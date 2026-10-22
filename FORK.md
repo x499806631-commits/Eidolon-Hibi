@@ -16,6 +16,14 @@ shadcn 纪律检查通过，前后端全部测试通过。
 | 环境音和「🎲 自动」 | 通话底栏的环境音键 | `ambience.py`、`lib/ambience.ts`、`components/conversations/AmbienceKey.tsx`、`public/ambience/` |
 | 偶像来信 | `.env` 里 `EIDOLON_LETTERS=1` | `letters.py`、`letters_api.py`、`components/letters/`、`lib/letters.ts` |
 | 日语里不混中文 | 默认 | `reply_format.py` |
+| 她的心（每位偶像自己的好感度档案） | 有 `characters/hearts/{id}.toml` 就有 | `hearts.py`、`characters/hearts/`、`affinity.py`、`affinity_judge.py` |
+| 「我不是这个意思」 | 好感度下降的胶囊下面 | `appeals.py`、`appeals_api.py`、`lib/appeals.ts` |
+| 天气 | `.env` 里填坐标 | `weather.py` |
+| 番茄钟「一起专心」 | 对话页「更多」菜单 | `components/conversations/FocusSetup.tsx`、`FocusTimerBar.tsx`、`lib/focusTimer.ts` |
+| 纪念日 | 默认 | `anniversaries.py` |
+| 约定 | 默认（要记忆） | `promises.py`、`promise_judge.py`、`promises_api.py` |
+| 联网 | 对话页「更多」菜单，按角色开关 | `web_search.py`、`search_judge.py`、`lib/webToggle.ts` |
+| 她们的经历 | 设置 →「她们的经历」 | `experiences.py`、`experiences_api.py`、`components/ExperiencesSettings.tsx` |
 
 ### 日历和节日
 
@@ -54,6 +62,36 @@ shadcn 纪律检查通过，前后端全部测试通过。
 写信用部署者的聊天模型，和搭话一样不计入用户的限额，每封有一条运行记录（`letter`）。
 开发登录下可以用 `POST /api/letters/write-now` 立刻写一封来试。
 
+### 她的心
+
+每位偶像一份好感度档案，放在 `characters/hearts/{角色 id}.toml`：什么特别让她开心、什么会让她受伤
+（判断模型评判好感度时参考，但不会因为说中一条就判成最高或最低），以及每一档好感度她是什么样子。
+已经写了大崎甘奈、大崎甜花、铃木羽那、黛冬优子四位，资料参考萌娘百科（CC BY-NC-SA 4.0）。
+
+成年偶像在「亲近」「亲密」两档可以有恋爱的心动，按制作人的性别分开写（女制作人是百合）；性方面的要求仍然拒绝。
+**未满 18 岁的偶像永远不会是恋爱**：档案里写了恋爱也会被拒绝加载，亲近只是信赖和依赖。
+
+### 「我不是这个意思」
+
+判断模型也会看错。她最新的那条回复让好感度降了时，变化胶囊下面有一个「我不是这个意思」：
+点了以后这一回合扣的分退回来，也不再算进她结束对话、挂电话的账里；你下一句话时，她会知道你说刚才是开玩笑或她误会了。
+每条回复一次，每天 3 次（所有偶像一起算）；冷却中、对话结束了、电话里说的话都不能用。
+
+### 天气、番茄钟、纪念日、约定、联网、她们的经历
+
+这一批是朋友（用 DeepSeek）做的，克劳德审阅并修正过（约定不会被失败的回合白白用掉、提示词里不把制作人写成「他」、
+网页内容标明不是指令）。
+
+- **天气**：她知道制作人那边现在的天气（Open-Meteo，免费不要密钥），合适的时候提一句；自动环境音也会参考。
+- **番茄钟「一起专心」**：自己定专心多久，休息固定 5 分钟，页首下方一条计时条，只在前端。
+- **纪念日**：和每位偶像认识满 100 天、满整年的那天，她会自己想起来。
+- **约定**：你答应她某一天做的事会被记下，那天她会问起；没做到，之后几天她会抱怨。送了约定里的礼物、
+  她问起时你说已经做到了、或者在日历里点「已经做到了」都算兑现。
+- **联网**：打开后，她遇到自己感兴趣的、不知道的事会上网查一下（DeepSeek 的搜索接口）；你让她去查她就查。
+  通话里不联网。
+- **她们的经历**：她在聊天里说过自己做过的事会按角色记下来，相关的话题会让她想起；30 天没被想起就忘掉，
+  可以在设置里永久保留或删掉。
+
 ## 打开方式
 
 `.env` 里按需加：
@@ -62,9 +100,12 @@ shadcn 纪律检查通过，前后端全部测试通过。
 EIDOLON_REACH_OUTS=1      # 搭话（节日和生日早上的那句要用到）
 EIDOLON_LETTERS=1         # 来信
 FISH_AUDIO_MODEL=drama-3  # ASMR 推荐
+# EIDOLON_WEATHER_LAT=    # 天气：你所在位置的纬度和经度，两个一起填（北纬、东经为正）
+# EIDOLON_WEATHER_LON=
+# EIDOLON_SEARCH_KEY=     # 联网：聊天模型不是 DeepSeek 时，填一把 DeepSeek 的钥匙
 ```
 
-「🎲 自动」环境音需要配置判断模型（`JUDGE_PROVIDER`）。
+「🎲 自动」环境音、好感度（她的心、我不是这个意思）、约定和联网的判断都需要配置判断模型（`JUDGE_PROVIDER`）。
 
 ## 其他改动
 
