@@ -50,7 +50,7 @@ from eidolon.affinity import BELOW_TRUST, Affinities
 from eidolon.characters import Character
 from eidolon.clock import Clock
 from eidolon.database import connect
-from eidolon.engine import ALONE, TRIP_PHOTO_OTHERS, ConversationEngine, photo_rules
+from eidolon.engine import TRIP_PHOTO_OTHERS, WITH_YOU, ConversationEngine, photo_rules
 from eidolon.features import AllOn, Switches
 from eidolon.gift_catalog import Category, Gift, Rarity
 from eidolon.gifts import Gifts
@@ -862,9 +862,10 @@ class Favors:
         if with_photo:
             rules = photo_rules(
                 "聚会的合照", situation + "你想发一张今天的合照给制作人，再聊聊今天。", talk,
-                others=TRIP_PHOTO_OTHERS if in_photo else "",
+                others=TRIP_PHOTO_OTHERS if in_photo else "", you=WITH_YOU,
                 nobody=(
-                    "照片里只有你和今天来的她们，没有别的人。" if in_photo else ALONE
+                    "照片里只有你、今天来的她们和制作人，没有别的人。" if in_photo
+                    else "照片里只有你，或者你和制作人，没有别的人。"
                 ),
             )
         else:
@@ -882,7 +883,9 @@ class Favors:
         if tag is None:
             self._store.add_photo_reach_out(conversation.id, said, None)
         else:
-            await self._trip_photos.send_with_photo(conversation, said, tag, in_photo)
+            await self._trip_photos.send_with_photo(
+                conversation, said, tag, in_photo, producer_there=True
+            )
         return True
 
     # Kept.

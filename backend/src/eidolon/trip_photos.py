@@ -35,7 +35,7 @@ import sqlite3
 import threading
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -49,7 +49,7 @@ from eidolon.engine import ConversationEngine
 from eidolon.features import AllOn, Switches
 from eidolon.image_generation import TIME_LIMIT, ImageFailed
 from eidolon.live_config import LiveConfig
-from eidolon.photo_prompt import group_prompt, image_prompt, read_tag, worn
+from eidolon.photo_prompt import ProducerLook, group_prompt, read_tag, worn
 from eidolon.producer import effective_timezone
 from eidolon.randomness import Random
 from eidolon.schedules import Schedules
@@ -303,6 +303,29 @@ class TripPhotos:
         await self._send(conversation, None, self._clock(), place, trip_with, all_together)
         return True
 
+    async def date_now(self, user_id: str, character_id: str, what: str) -> bool:
+        """Have her tell the user of a day out with them (`what`) now, with a photo, as after
+        a date (GLOSSARY.md「邀约」): for trying it out under the development sign-in.
+        False if they have no conversation, or image generation is off."""
+        conversation = self._current(user_id, character_id)
+        if conversation is None or not self.available():
+            return False
+        recording = self._activity.begin("trip_photo", user_id, character_id, own_llm=False, exempt=False)
+        lease = self._config.lease()
+        try:
+            with recording.current():
+                said, tag = await self._engine.after_date(
+                    conversation, lease.keys.chat_llm, what, True
+                )
+        except Exception:
+            recording.finish("failed")
+            raise
+        finally:
+            lease.release()
+        assert tag is not None
+        await self._sent_with_photo(conversation, said, tag, [], recording, producer_there=True)
+        return True
+
     def _plan(self, now: datetime) -> list[tuple[Conversation, date]]:
         """Draw a time for each day's trip not drawn for yet; those whose time has come."""
         due: list[tuple[Conversation, date]] = []
@@ -388,23 +411,29 @@ class TripPhotos:
         await self._sent_with_photo(conversation, said, tag, others, recording)
 
     async def send_with_photo(
-        self, conversation: Conversation, said: list, tag: str, others: list[Character]
+        self, conversation: Conversation, said: list, tag: str, others: list[Character],
+        producer_there: bool = False,
     ) -> None:
         """Keep what she said with the photo `tag` says and draw it, of her and of `others` if
-        her tag says so (a party's, GLOSSARY.md「拜托」)."""
+        her tag says so (a party's, GLOSSARY.md「拜托」), and of the producer if
+        `producer_there` and her tag says so."""
         recording = self._activity.begin(
             "trip_photo", conversation.user_id, conversation.character_id, own_llm=False,
             exempt=False,
         )
-        await self._sent_with_photo(conversation, said, tag, others, recording)
+        await self._sent_with_photo(
+            conversation, said, tag, others, recording, producer_there=producer_there
+        )
 
     async def _sent_with_photo(
         self, conversation: Conversation, said: list, tag: str, others: list[Character],
         recording, outfit_tags: str | None = None, background: bool = False,
+        producer_there: bool = False,
     ) -> None:
         """Keep what she said with the photo `tag` says, being generated, and draw it, of her
-        and of `others` if her tag says so, in `outfit_tags` if any; in the background if
-        `background`, the recording finished as it is."""
+        and of `others` if her tag says so, in `outfit_tags` if any, and of the producer, as
+        their profile has them (a woman or not), if `producer_there` and her tag says so;
+        in the background if `background`, the recording finished as it is."""
         character = self._characters[conversation.character_id]
         photo_id = uuid.uuid4().hex
         reach_out = self._store.add_photo_reach_out(conversation.id, said, NewPhoto(photo_id, tag))
@@ -418,11 +447,13 @@ class TripPhotos:
         read = read_tag(tag)
         if outfit_tags:
             read = worn(read, outfit_tags)
-        together = others if _GROUP.search(tag) else []
-        prompt = (
-            group_prompt([character, *together], read, settings.style) if together
-            else image_prompt(character, read, settings.style)
+        if not producer_there:
+            read = replace(read, you=None)
+        look: ProducerLook = (
+            "female" if self._store.get_profile(conversation.user_id).gender == "female" else "male"
         )
+        together = others if _GROUP.search(tag) else []
+        prompt = group_prompt([character, *together], read, settings.style, look)
         drawing = self._draw(photo_id, generator, prompt, read.stripped, recording)
         if background:
             task = asyncio.create_task(drawing)
@@ -550,7 +581,7 @@ class TripPhotos:
             self._store.add_photo_reach_out(conversation.id, said, None)
             recording.finish("success")
             return
-        await self._sent_with_photo(conversation, said, tag, [], recording)
+        await self._sent_with_photo(conversation, said, tag, [], recording, producer_there=True)
 
     def _current(self, user_id: str, character_id: str) -> Conversation | None:
         return next(

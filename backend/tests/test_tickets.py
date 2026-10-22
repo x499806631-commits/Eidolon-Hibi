@@ -12,7 +12,9 @@ import httpx
 import pytest
 
 from eidolon.config import Settings
-from eidolon.engine import WANTS_TO_ANSWER_DATE, WANTS_TO_SEND_ASKED_PHOTO, WANTS_TO_TALK_AFTER_DATE
+from eidolon.engine import (
+    WANTS_TO_ANSWER_DATE, WANTS_TO_SEND_ASKED_PHOTO, WANTS_TO_TALK_AFTER_DATE, WITH_YOU,
+)
 from eidolon.outfit_tags import OutfitTags, VisionSettings, cleaned
 from eidolon.schedules import DATE_TWIST
 from tests.conftest import ClientFactory
@@ -222,6 +224,37 @@ async def test_a_date_ticket_she_answers_has_in_her_schedule_and_tells_of_after_
     assert llm.prompts[3][-1].content.endswith(WANTS_TO_TALK_AFTER_DATE)
     assert [r["segments"][0]["zh"] for r in told] == ["想去！", "好开心！"]
     assert "photo" not in told[0] and told[1]["photo"]["status"] == "ready"
+
+
+async def test_on_a_date_she_may_have_the_producer_in_her_photo_as_their_profile_has_them(
+    make_client: ClientFactory, settings: Settings
+):
+    clock = FakeClock(NOON)
+    image = FakeImageService()
+    tag = TAG + "\nyou: yes, holding hands"
+    after = [f"<photo>{tag}</photo><ja>楽しかった！</ja><zh>好开心！</zh>"]
+    client, llm, _ = await talked(
+        make_client, ["<ja>行きたい！</ja><zh>想去！</zh>"], [PLAN], after,
+        numbers=(0, 1, 0, 1), clock=clock, image=image,
+    )
+    await client.put("/api/profile", json={"gender": "female"})
+    give(client, settings, "date")
+    tomorrow = date(2026, 10, 23)
+
+    await client.post("/api/tickets/date", json={
+        "character_id": "mano", "what": "去看电影", "day": tomorrow.isoformat(),
+    })
+    clock.now = datetime.combine(tomorrow, time(6), UTC)
+    backend = backend_of(client)
+    await backend.schedule_writer.run_due()
+    clock.now = datetime.combine(tomorrow, time(17, 31), UTC)
+    await backend.trip_photos.run_due()
+
+    assert any(WITH_YOU.strip() in m.content for m in llm.prompts[3])
+    [request] = image.requests
+    sent = json.dumps(request["body"], ensure_ascii=False)
+    assert "p-head producer" in sent and "genderswap (mtf)" in sent and "holding hands" in sent
+    assert "2girls" in sent
 
 
 async def test_a_date_today_or_too_far_is_refused_and_the_ticket_kept(

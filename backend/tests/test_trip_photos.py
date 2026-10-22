@@ -4,6 +4,7 @@ unit on it, it may be of them all, each with a character prompt of her own. Her 
 members go on a trip with her now and then, and their days have them on it. Off with the
 user's switch, with image generation's, or with her schedule's."""
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, time
 
@@ -258,3 +259,53 @@ def test_each_of_the_others_wears_and_does_what_she_wrote_for_her():
     assert prompt.characters[1] == "girl, kazano hiori, black hair, navy coat, holding camera"
     assert prompt.characters[2] == "girl, hachimiya meguru, blonde hair, yellow hoodie, waving"
     assert unnamed.characters[1] == "girl, kazano hiori, black hair, scarf, smile"
+
+
+def test_the_producer_in_a_photo_is_the_p_headed_producer_in_a_suit_or_a_skirt_suit():
+    mano = Character("mano", "櫻木真乃", "", "v", "", None, "#ffbad6",
+                     photo_tag="sakuragi mano", photo_appearance="brown hair")
+    tag = read_tag("shot: selfie\nplace: cinema\noutfit: coat\naction: smile\nyou: yes, peace sign")
+    no = read_tag("shot: selfie\nyou: no")
+
+    his = group_prompt([mano], tag)
+    hers = group_prompt([mano], tag, producer="female")
+
+    assert no.you is None and read_tag("shot: other").you is None
+    assert his.positive.startswith("1girl, 1boy, ") and "exactly 1 girl and 1 boy" in his.positive
+    assert his.characters[1] == "boy, p-head producer, black suit, white shirt, red necktie, peace sign"
+    assert hers.positive.startswith("2girls, ")
+    assert hers.characters[1].startswith("girl, p-head producer, 1.5::genderswap (mtf)::, black skirt suit")
+    assert his.size == GROUP_SIZE
+    assert read_tag("shot: other\nyou: yes").you == ("standing",)
+
+
+async def test_a_trip_photo_never_has_the_producer_in_it_whatever_she_writes(
+    make_client: ClientFactory, settings: Settings
+):
+    image = FakeImageService()
+    written = TAG.format(group="you: yes, waving\n")
+    sends = [f"<photo>{written}</photo><ja>見て</ja><zh>你看</zh>"]
+    client, llm, _ = await talked(make_client, settings, sends, image=image)
+
+    await client.post("/api/trip-photos/send-now", json={"character_id": "mano"})
+
+    assert "you: " not in str(llm.prompts[-1])
+    [request] = image.requests
+    assert "p-head" not in json.dumps(request["body"])
+    assert request["body"]["input"].startswith("1girl, solo, sakuragi mano")
+
+
+async def test_a_day_out_can_be_told_of_at_once_to_try_it_with_the_producer_in_the_photo(
+    make_client: ClientFactory, settings: Settings
+):
+    image = FakeImageService()
+    written = TAG.format(group="you: yes, standing next to her\n")
+    sends = [f"<photo>{written}</photo><ja>楽しかった</ja><zh>好开心</zh>"]
+    client, _, _ = await talked(make_client, settings, sends, image=image)
+
+    told = await client.post("/api/trip-photos/date-now", json={"character_id": "mano"})
+
+    assert told.status_code == 201, told.text
+    [request] = image.requests
+    body = json.dumps(request["body"])
+    assert "p-head producer" in body and "1boy" in body and "genderswap" not in body

@@ -125,6 +125,9 @@ class PhotoTag:
     each: tuple[tuple[str, tuple[str, ...]], ...] = ()
     """In a group photo, what each of the others wears and does, by her id, as she wrote it
     (`others: hiori: navy coat / meguru: waving`), cleaned."""
+    you: tuple[str, ...] | None = None
+    """What the producer does in it, cleaned, where she has them in it too (`you: yes,
+    peace sign`); None where she has not, or was never to."""
 
 
 @dataclass(frozen=True)
@@ -169,20 +172,50 @@ def read_tag(text: str) -> PhotoTag:
         elif part.strip():
             shared.append(part)
     others = _field(",".join(shared), "others", set(_FIXED), stripped, default=())
+    you = _you(fields.get("you", ""), stripped)
     scene = _sentence(fields.get("scene", ""), stripped)
     words = writing(fields.get("words", ""), fields.get("words_on", ""), stripped)
     return PhotoTag(
-        shot, framing, place, outfit, action, others, scene, words, tuple(stripped), tuple(each)
+        shot, framing, place, outfit, action, others, scene, words, tuple(stripped), tuple(each),
+        you,
     )
+
+
+def _you(value: str, stripped: list[Crossing]) -> tuple[str, ...] | None:
+    """What `you: …` says the producer does in the photo, after its `yes`; None if it says
+    `no`, or nothing."""
+    first, _, rest = value.strip().partition(",")
+    if _cleaned(first) != "yes":
+        return None
+    return _field(rest, "you", set(_FIXED), stripped, default=PRODUCER_DOING)
 
 
 _ONE_OF_THEM = re.compile(r"^\s*([A-Za-z][A-Za-z_-]*)\s*[:：]\s*(.*)$")
 """One of the others in a group photo, by her id, and what she wears and does."""
 
 
-def image_prompt(character: Character, tag: PhotoTag, style: str = "") -> ImagePrompt:
+ProducerLook = Literal["male", "female"]
+"""How the producer is drawn: the P-headed producer, in a suit or, a woman, a skirt suit."""
+PRODUCER_LOOKS: dict[ProducerLook, tuple[str, ...]] = {
+    "male": ("boy", "p-head producer", "black suit", "white shirt", "red necktie"),
+    "female": (
+        "girl", "p-head producer", "1.5::genderswap (mtf)::", "black skirt suit",
+        "pencil skirt", "white shirt", "red necktie",
+    ),
+}
+"""The producer's own character prompt, before what they do: never a face, the P for a head."""
+PRODUCER_DOING = ("standing",)
+"""What the producer does in a photo where she wrote nothing of it."""
+
+
+def image_prompt(
+    character: Character, tag: PhotoTag, style: str = "", producer: ProducerLook = "male"
+) -> ImagePrompt:
     """The prompts a photo of `character` (who has her photo tags) is generated from, as
-    `tag` says it is taken, in the art style `style`."""
+    `tag` says it is taken, in the art style `style`; with the producer, looking as
+    `producer` says, where `tag` has them in it (`group_prompt`)."""
+    if tag.you is not None:
+        return group_prompt([character], tag, style, producer)
     assert character.photo_tag is not None and character.photo_appearance is not None
     action = tag.action
     if tag.shot == "other" and not any(g in t for t in action for g in _GAZES):
@@ -206,7 +239,8 @@ WRITTEN_KEPT_OUT = ("outlined text", "sticker")
 
 
 def group_prompt(
-    characters: Sequence[Character], tag: PhotoTag, style: str = ""
+    characters: Sequence[Character], tag: PhotoTag, style: str = "",
+    producer: ProducerLook = "male",
 ) -> ImagePrompt:
     """The prompts a photo of `characters` together (the first the one who sends it, all with
     their photo tags, `MAX_IN_GROUP` at most) is generated from, as `tag` says it is taken,
@@ -215,9 +249,13 @@ def group_prompt(
     sentence and the words), and each a
     character prompt of her own (V5's), `girl` and who she is, her looks, then what she
     wears and does: hers from `tag`'s outfit and action, each other's from what it says of
-    her by her id (`each`), else from its `others`, or hers where it says nothing. With one, it is `image_prompt`'s."""
-    characters = list(characters)[:MAX_IN_GROUP]
-    if len(characters) == 1:
+    her by her id (`each`), else from its `others`, or hers where it says nothing. Where
+    `tag` has the producer in it too (`you`), they come last, as `PRODUCER_LOOKS` has them
+    for `producer`, doing what it says, one of the `MAX_IN_GROUP`. With one and no
+    producer, it is `image_prompt`'s."""
+    with_you = tag.you is not None
+    characters = list(characters)[: MAX_IN_GROUP - with_you]
+    if len(characters) == 1 and not with_you:
         return image_prompt(characters[0], tag, style)
     for c in characters:
         assert c.photo_tag is not None and c.photo_appearance is not None
@@ -225,10 +263,17 @@ def group_prompt(
     if tag.shot == "other" and not any(g in t for t in action for g in _GAZES):
         action = (*action, LOOKING_AT_VIEWER)
     n = len(characters)
+    everyone = n + with_you
+    girls = n + (with_you and producer == "female")
+    girls_said = f"{girls}girl" + ("s" if girls > 1 else "")
+    boy = with_you and producer == "male"
+    counts = (girls_said, *(("1boy",) if boy else ()))
+    exactly = f"exactly {girls} girl{'s' if girls > 1 else ''}" + (" and 1 boy" if boy else "")
     base = (
-        f"{n}girls", WORK_TAG, *_styled(style), *_shot_tags(tag.shot), group_framing(tag.framing, n),
-        *(("side-by-side",) if n <= SIDE_BY_SIDE else ()), *tag.place,
-        f"exactly {n} girls in the whole picture",  # each one drawn once, by her own prompt
+        *counts, WORK_TAG, *_styled(style), *_shot_tags(tag.shot),
+        group_framing(tag.framing, everyone),
+        *(("side-by-side",) if everyone <= SIDE_BY_SIDE else ()), *tag.place,
+        f"{exactly} in the whole picture",  # each one drawn once, by their own prompt
         *_said(tag.scene, tag.writing), *_finish(style, tag.writing),
     )
     others = tag.others or (*tag.outfit, *tag.action)
@@ -239,6 +284,8 @@ def group_prompt(
         )))
         for i, c in enumerate(characters)
     ]
+    if tag.you is not None:
+        each.append(", ".join((*PRODUCER_LOOKS[producer], *tag.you)))
     return ImagePrompt(
         ", ".join(base), _negative(NEGATIVE_PROMPT, style, tag.writing), GROUP_SIZE,
         tuple(each),

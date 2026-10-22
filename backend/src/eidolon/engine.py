@@ -533,7 +533,7 @@ framing: portrait、upper body、cowboy shot、full body 选一个；自拍只�
 place: 2–4 个英文 tag，写这里是什么地方、室内还是室外、时段或天气、光线{place}
 outfit: {outfit}
 action: 2–4 个英文 tag，你的动作、表情
-{others}scene: 一句简短的英文，写画面怎么摆：谁在画面哪一边、看着哪里、手里拿着什么、背景里有什么
+{others}{you}scene: 一句简短的英文，写画面怎么摆：谁在画面哪一边、看着哪里、手里拿着什么、背景里有什么
 words: （可以不写）照片里真的会有的字，一个完整的词或短语，日语或英语都可以，越短越稳，最好四个字以内，例如招牌、站名
 words_on: 有 words 时写这段字在哪里，英文短语
 note: 一句中文，写这是一张什么样的照片，只给你自己回看
@@ -547,17 +547,21 @@ note: 一句中文，写这是一张什么样的照片，只给你自己回看
 (`title`, `situation`), and what to tell of it."""
 
 OUTFIT_FREE = "1–4 个英文 tag，你穿的衣服"
+WITH_YOU = """you: 制作人今天也在。想和他一起留个纪念、把他也拍进去，就写 yes，再加 1–3 个英文 tag 写他在照片里做什么（例如 yes, standing next to you, peace sign）；只拍你们就写 no。他的样子不用写
+"""
+"""What she is told of having the producer in the photo, where they were there with her."""
 ALONE = "照片里只有你一个人。"
 
 
 def photo_rules(
     title: str, situation: str, talk: str, *, place: str = "", outfit: str = OUTFIT_FREE,
-    others: str = "", nobody: str = ALONE,
+    others: str = "", nobody: str = ALONE, you: str = "",
 ) -> str:
-    """`PHOTO_RULES` for one kind of photo she sends."""
+    """`PHOTO_RULES` for one kind of photo she sends; with `you` (`WITH_YOU`), where the
+    producer was there and may be in it."""
     return PHOTO_RULES.format(
         title=title, situation=situation, place=place, outfit=outfit, others=others,
-        nobody=nobody, talk=talk,
+        you=you, nobody=nobody, talk=talk,
     )
 
 
@@ -1748,7 +1752,10 @@ class ConversationEngine:
         talk = "今天过得怎么样、印象最深的一刻、想对他说的话。"
         situation = DATE_AFTER_SITUATION.format(what=what)
         rules = (
-            photo_rules("约会之后", situation + "你想发一张今天拍的照片给他，再聊聊今天。", talk)
+            photo_rules(
+                "约会之后", situation + "你想发一张今天拍的照片给他，再聊聊今天。", talk,
+                you=WITH_YOU, nobody="照片里只有你，或者你和制作人，没有别的人。",
+            )
             if with_photo else f"# 约会之后\n{situation}你想聊聊今天。\n- 用 <ja><zh> 写一到三段：{talk}\n- 不发照片，也不说要给他打电话。"
         )
         said, tag = await self._reaching_out(conversation, llm, rules, WANTS_TO_TALK_AFTER_DATE)
