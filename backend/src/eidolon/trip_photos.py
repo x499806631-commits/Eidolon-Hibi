@@ -291,7 +291,8 @@ class TripPhotos:
                 log.exception("sending a trip photo in conversation %s failed", conversation.id)
 
     async def send_now(
-        self, user_id: str, character_id: str, place: str = "京都", trip_with: tuple[str, ...] = ()
+        self, user_id: str, character_id: str, place: str = "京都", trip_with: tuple[str, ...] = (),
+        all_together: bool = False,
     ) -> bool:
         """Have her send the user a photo from a trip to `place` now, with `trip_with` there
         too, whatever her schedule says: for trying it out under the development sign-in.
@@ -299,7 +300,7 @@ class TripPhotos:
         conversation = self._current(user_id, character_id)
         if conversation is None or not self.available():
             return False
-        await self._send(conversation, None, self._clock(), place, trip_with)
+        await self._send(conversation, None, self._clock(), place, trip_with, all_together)
         return True
 
     def _plan(self, now: datetime) -> list[tuple[Conversation, date]]:
@@ -343,7 +344,7 @@ class TripPhotos:
 
     async def _send(
         self, conversation: Conversation, day: date | None, now: datetime, place: str | None = None,
-        trip_with: tuple[str, ...] = (),
+        trip_with: tuple[str, ...] = (), all_together: bool = False,
     ) -> None:
         user_id, character_id = conversation.user_id, conversation.character_id
         status = self._affinities.status(user_id, character_id)
@@ -370,7 +371,8 @@ class TripPhotos:
         try:
             with recording.current():
                 said, tag = await self._engine.send_trip_photo(
-                    conversation, lease.keys.chat_llm, place, [c.name for c in others]
+                    conversation, lease.keys.chat_llm, place, [c.name for c in others],
+                    all_together and bool(others),
                 )
         except Exception as e:
             # Not logged with what was raised: a service's error may repeat what it was asked.

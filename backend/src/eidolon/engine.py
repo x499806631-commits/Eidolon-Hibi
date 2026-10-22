@@ -565,6 +565,7 @@ TRIP_PHOTO_SITUATION = "你今天在{where}出外景，现在是空下来的一�
 """What she is told of her trip, sending a photo from it (GLOSSARY.md「外景照片」)."""
 
 TRIP_PHOTO_TOGETHER = "和你一起来的有{names}，照片可以是你一个人的，也可以是和她们的合照。"
+TRIP_PHOTO_ALL_TOGETHER = "和你一起来的有{names}，这次拍一张和她们的合照（group 写 yes）。"
 
 TRIP_PHOTO_OTHERS = """group: 和她们的合照写 yes，只拍你自己写 no
 others: 合照时 1–4 个英文 tag，写她们穿什么、在做什么
@@ -1680,7 +1681,8 @@ class ConversationEngine:
         return said
 
     async def send_trip_photo(
-        self, conversation: Conversation, llm: ChatLLM, place: str, with_names: Sequence[str]
+        self, conversation: Conversation, llm: ChatLLM, place: str, with_names: Sequence[str],
+        all_together: bool = False,
     ) -> tuple[list[Segment], str]:
         """What she says first in `conversation` on a trip to `place` (GLOSSARY.md「外景照片」),
         with the others of her unit named in `with_names` if any, sending the producer a
@@ -1691,7 +1693,11 @@ class ConversationEngine:
             "外景的照片",
             TRIP_PHOTO_SITUATION.format(
                 where=place,
-                together=TRIP_PHOTO_TOGETHER.format(names="、".join(with_names)) if together else "",
+                together=(
+                    (TRIP_PHOTO_ALL_TOGETHER if all_together else TRIP_PHOTO_TOGETHER).format(
+                        names="、".join(with_names)
+                    ) if together else ""
+                ),
             ),
             "这是哪里、在干什么、有什么想跟他分享的。",
             place=f"，要看得出是{place}",

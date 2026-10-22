@@ -159,14 +159,14 @@ async def test_sent_now_with_others_named_it_may_be_of_them_all(
     client, llm, _ = await talked(make_client, settings, SENDS_ALL, image=image)
 
     sent = await client.post("/api/trip-photos/send-now", json={
-        "character_id": "mano", "place": "京都", "with": ["kogane"],
+        "character_id": "mano", "place": "京都", "with": ["kogane"], "group": True,
     })
     nobody = await client.post("/api/trip-photos/send-now", json={
         "character_id": "mano", "with": ["no-such"],
     })
 
     assert sent.status_code == 201, sent.text
-    assert "和你一起来的有月岡恋鐘" in str(llm.prompts[-1])
+    assert "和你一起来的有月岡恋鐘，这次拍一张和她们的合照" in str(llm.prompts[-1])
     assert image.requests[0]["body"]["input"].startswith("2girls")
     assert nobody.status_code == 404
 

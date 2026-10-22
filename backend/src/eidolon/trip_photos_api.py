@@ -1,7 +1,7 @@
 """Trying trip photos out (GLOSSARY.md「外景照片」): under the development sign-in only
 (`EIDOLON_DEV_LOGIN=1`), `POST /api/trip-photos/send-now` has her send one from a trip at once,
 whatever her schedule says, with others on the trip with her if named (`with`, by id; or
-`"unit"` for the rest of her unit), for her to send a photo of them all if she likes. The
+`"unit"` for the rest of her unit), for her to send a photo of them all if she likes, or this time (`group`). The
 photo itself is read as any photo is (`photos_api`)."""
 
 from fastapi import FastAPI, HTTPException
@@ -15,6 +15,8 @@ class SendNow(BaseModel):
     character_id: str
     place: str = "京都"
     with_: list[str] | str = Field(default_factory=list, alias="with")
+    group: bool = False
+    """Have her take one of them all this time."""
 
 
 def add_trip_photo_routes(app: FastAPI, backend: Backend) -> None:
@@ -32,7 +34,7 @@ def add_trip_photo_routes(app: FastAPI, backend: Backend) -> None:
         if unknown:
             raise HTTPException(404, f"没有这些偶像：{'、'.join(unknown)}")
         if not await backend.trip_photos.send_now(
-            user_id, body.character_id, body.place[:20], tuple(others[:3])
+            user_id, body.character_id, body.place[:20], tuple(others[:3]), body.group
         ):
             raise HTTPException(404, "还没有和她的对话，或者没有配生图")
         return {"ok": True}
