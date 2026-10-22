@@ -66,14 +66,14 @@ def test_its_picture_is_the_thing_alone_square_and_all_ages():
 
 def test_words_written_on_it_are_drawn_in_quotes_where_it_says_and_text_is_let_in():
     draft = read_keepsake(
-        "<keepsake>\nname: 生日卡\ntags: birthday card, cake\nwords: 「お誕生日、おめでとう」{1.5::x::}\n"
+        "<keepsake>\nname: 生日卡\ntags: birthday card, cake\nwords: 「おめでとう」{1.5::x::}\n"
         "words_on: the card, inside\n</keepsake><ja>はい</ja><zh>给</zh>"
     )
     prompt, _ = keepsake_prompt(draft.tags)
 
-    assert draft.tags == 'birthday card, cake, "お誕生日、おめでとう 1.5 x" @ the card inside'
+    assert draft.tags == 'birthday card, cake, "おめでとう 1.5 x" @ the card inside'
     assert prompt.positive.endswith(
-        'birthday card, cake, the text "お誕生日、おめでとう 1.5 x" is written on the card inside.,'
+        'birthday card, cake, the text "おめでとう 1.5 x" is written on the card inside,'
         " high complexity, rating:general, very aesthetic, masterpiece"
     )
     assert ", text," not in prompt.negative and "watermark" in prompt.negative

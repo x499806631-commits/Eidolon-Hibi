@@ -175,7 +175,8 @@ action: sitting, smile
         "nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality,"
         " jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone,"
         " screentone, multiple views, logo, too many watermarks, negative space, blank page,"
-        " @_@, mismatched pupils, glowing eyes, bad anatomy, nude, nipples, underwear, bra,"
+        " @_@, mismatched pupils, glowing eyes, bad anatomy, white patch on nose,"
+        " square highlight on face, large hands, thick fingers, signature, nude, nipples, underwear, bra,"
         " panties, bra strap, strap slip, see-through, pantyshot, cleavage"
     )
     [first, second] = image.requests
@@ -455,11 +456,11 @@ def test_her_sentence_and_the_words_in_it_go_after_the_tags_and_text_is_let_in()
         " with the window behind her\nwords: 「本日のおすすめ」::\nwords_on: the chalkboard behind her"
     )
 
-    assert tag.scene == "She holds a latte smiling with the window behind her."
+    assert tag.scene == "She holds a latte smiling with the window behind her"
     assert tag.writing == 'the text "本日のおすすめ" is written on the chalkboard behind her'
     assert image_prompt(MANO, tag).positive.endswith(
-        'the text "本日のおすすめ" is written on the chalkboard behind her.,'
-        " She holds a latte smiling with the window behind her., high complexity,"
+        'the text "本日のおすすめ" is written on the chalkboard behind her,'
+        " She holds a latte smiling with the window behind her, high complexity,"
         " rating:general, very aesthetic, masterpiece"
     )
 

@@ -108,7 +108,7 @@ async def test_on_a_trip_she_sends_one_photo_from_there_once_its_time_comes(
     [request] = image.requests
     body = request["body"]["input"]
     assert body.startswith("1girl, solo, sakuragi mano") and "kyoto" in body
-    assert 'the text "清水寺" is written on the stone pillar behind her.' in body
+    assert 'the text "清水寺" is written on the stone pillar behind her, She holds up' in body
     assert request["body"]["parameters"]["v4_prompt"]["caption"]["char_captions"] == []
 
 
@@ -142,6 +142,8 @@ async def test_with_her_unit_on_the_trip_it_may_be_of_them_all(
     base = request["body"]["input"]
     captions = parameters["v4_prompt"]["caption"]["char_captions"]
     assert base.startswith("2girls, idolmaster shiny colors, selfie")
+    assert "upper body, side-by-side, kyoto" in base and "exactly 2 girls in the whole picture" in base
+    assert "outlined text, sticker" in parameters["negative_prompt"]  # the words are drawn on
     assert [c["char_caption"] for c in captions] == [
         "girl, sakuragi mano, brown hair, medium hair, brown eyes, coat, scarf, peace sign, smile",
         "girl, tsukioka kogane, blonde hair, long hair, blue eyes, smile, waving",

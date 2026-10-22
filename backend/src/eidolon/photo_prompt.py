@@ -54,6 +54,9 @@ NEGATIVE_PROMPT = ", ".join((
     "jpeg artifacts", "very displeasing", "chromatic aberration", "dithering", "halftone",
     "screentone", "multiple views", "logo", "too many watermarks", "negative space",
     "blank page", "@_@", "mismatched pupils", "glowing eyes", "bad anatomy",
+    # What goes wrong with faces and hands in her photos, as drawing them has shown.
+    "white patch on nose", "square highlight on face", "large hands", "thick fingers",
+    "signature",
     # All ages (ADR-0023).
     "nude", "nipples", "underwear", "bra", "panties", "bra strap", "strap slip", "see-through",
     "pantyshot", "cleavage",
@@ -95,7 +98,7 @@ COMPLEXITY = "high complexity"
 
 SCENE_CHARS = 200
 """The most characters of her sentence on how the picture is laid out."""
-WORDS_CHARS = 20
+WORDS_CHARS = 12
 """The most characters of the words written in a picture."""
 _NOT_IN_WORDS = re.compile(r"[\"“”「」『』{}\[\]|#:`\\<>\n\r\t]")
 
@@ -171,13 +174,17 @@ def image_prompt(character: Character, tag: PhotoTag, style: str = "") -> ImageP
         character.photo_appearance, *_shot_tags(tag.shot), tag.framing, *tag.place,
         *tag.outfit, *action, *_said(tag.scene, tag.writing), *_finish(style, tag.writing),
     )
-    return ImagePrompt(", ".join(positive), _negative(NEGATIVE_PROMPT, style))
+    return ImagePrompt(", ".join(positive), _negative(NEGATIVE_PROMPT, style, tag.writing))
 
 
 GROUP_SIZE = (1216, 832)
 """A group photo's width and height: landscape, to have room for them all."""
 MAX_IN_GROUP = 5
 """The most in a group photo, her among them."""
+SIDE_BY_SIDE = 3
+"""The most in a group photo standing side by side, in their prompts' order, left to right."""
+WRITTEN_KEPT_OUT = ("outlined text", "sticker")
+"""What words written in a picture are kept from looking like: drawn on, not stuck on."""
 
 
 def group_prompt(
@@ -198,9 +205,12 @@ def group_prompt(
     action = tag.action
     if tag.shot == "other" and not any(g in t for t in action for g in _GAZES):
         action = (*action, LOOKING_AT_VIEWER)
+    n = len(characters)
     base = (
-        f"{len(characters)}girls", WORK_TAG, *_styled(style), *_shot_tags(tag.shot),
-        tag.framing, *tag.place, *_said(tag.scene, tag.writing), *_finish(style, tag.writing),
+        f"{n}girls", WORK_TAG, *_styled(style), *_shot_tags(tag.shot), tag.framing,
+        *(("side-by-side",) if n <= SIDE_BY_SIDE else ()), *tag.place,
+        f"exactly {n} girls in the whole picture",  # each one drawn once, by her own prompt
+        *_said(tag.scene, tag.writing), *_finish(style, tag.writing),
     )
     others = tag.others or (*tag.outfit, *tag.action)
     each = [
@@ -210,7 +220,8 @@ def group_prompt(
         for i, c in enumerate(characters)
     ]
     return ImagePrompt(
-        ", ".join(base), _negative(NEGATIVE_PROMPT, style), GROUP_SIZE, tuple(each)
+        ", ".join(base), _negative(NEGATIVE_PROMPT, style, tag.writing), GROUP_SIZE,
+        tuple(each),
     )
 
 
@@ -244,12 +255,12 @@ def _sentence(text: str, stripped: list[Crossing] | None) -> str:
         if stripped is not None:
             stripped.append(crossing)
         return ""
-    return text if text.endswith((".", "!", "?")) else f"{text}."
+    return text.rstrip(".!?。 ")  # a sentence among tags, ended by the comma after it
 
 
 def _said(scene: str, words: str) -> tuple[str, ...]:
     """Her sentence and the words written, as they come after the tags."""
-    return tuple(part for part in (words and f"{words}.", scene) if part)
+    return tuple(part for part in (words, scene) if part)
 
 
 def _finish(style: str, words: str) -> tuple[str, ...]:
@@ -304,7 +315,7 @@ def keepsake_prompt(tags: str, style: str = "") -> tuple[ImagePrompt, tuple[Cros
         *_said("", words), *_finish(style, words),
     )
     negative = KEEPSAKE_NEGATIVE if not words else KEEPSAKE_NEGATIVE.replace(", text,", ",")
-    negative = _negative(negative, style)
+    negative = _negative(negative, style, words)
     return ImagePrompt(", ".join(positive), negative, KEEPSAKE_SIZE), tuple(stripped)
 
 
@@ -356,10 +367,12 @@ def split_style(style: str) -> tuple[str, str, str]:
     return before.strip(" ,"), after.strip(" ,"), negative.strip(" ,")
 
 
-def _negative(negative: str, style: str) -> str:
-    """`negative`, with what the art style adds to it after."""
+def _negative(negative: str, style: str, words: str = "") -> str:
+    """`negative`, with `WRITTEN_KEPT_OUT` where words are written in the picture, then what
+    the art style adds to it."""
     _, _, added = split_style(style)
-    return f"{negative}, {added}" if added else negative
+    kept_out = (negative, *(WRITTEN_KEPT_OUT if words else ()), *((added,) if added else ()))
+    return ", ".join(kept_out)
 
 
 def _shot_tags(shot: Shot) -> tuple[str, ...]:
