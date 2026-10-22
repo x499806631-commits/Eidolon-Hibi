@@ -1,6 +1,8 @@
-# 这个 fork 加了什么
+# 幻灵日比（Eidolon Hibi）
 
-这是 [Sallyn0225/eidolon-sc](https://github.com/Sallyn0225/eidolon-sc) 的个人 fork，基于原仓库的 `d1f6bfd4`，
+作者：山茶日记
+
+这是 [Sallyn0225/eidolon-sc](https://github.com/Sallyn0225/eidolon-sc) 的玩法 fork，基于原仓库的 `d1f6bfd4`，
 改动都在 `my-features` 分支上。原作者计划把主仓库精简、功能拆成插件（[#168](https://github.com/Sallyn0225/eidolon-sc/issues/168)），
 这里的功能都尽量写成了独立的模块，等插件仓库开放后可以改成插件提交。
 
