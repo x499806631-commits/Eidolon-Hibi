@@ -323,3 +323,28 @@ async def test_a_day_out_can_be_told_of_at_once_to_try_it_with_the_producer_in_t
     [request] = image.requests
     body = json.dumps(request["body"])
     assert "p-head producer" in body and "genderswap" not in body
+
+
+async def test_trying_a_day_out_asks_her_again_where_she_writes_no_photo_tag(
+    make_client: ClientFactory, settings: Settings
+):
+    image = FakeImageService()
+    client, _, _ = await talked(make_client, settings, BARE, SENDS, image=image)
+
+    told = await client.post("/api/trip-photos/date-now", json={"character_id": "mano"})
+
+    assert told.status_code == 201, told.text
+    assert len(image.requests) == 1
+
+
+async def test_trying_a_day_out_she_never_writes_a_photo_tag_for_says_so(
+    make_client: ClientFactory, settings: Settings
+):
+    client, _, _ = await talked(make_client, settings, BARE, BARE, BARE)
+
+    refused = await client.post("/api/trip-photos/date-now", json={"character_id": "mano"})
+
+    assert refused.status_code == 502 and "照片标签" in refused.json()["detail"]
+
+
+BARE = ["<ja>楽しかった</ja><zh>好开心</zh>"]

@@ -45,7 +45,7 @@ from eidolon.affinity import Affinities
 from eidolon.characters import Character
 from eidolon.clock import Clock
 from eidolon.database import connect
-from eidolon.engine import ConversationEngine
+from eidolon.engine import ConversationEngine, EmptyReply
 from eidolon.features import AllOn, Switches
 from eidolon.image_generation import TIME_LIMIT, ImageFailed
 from eidolon.live_config import LiveConfig
@@ -75,6 +75,8 @@ TRIES = 3
 RETRY_AFTER = timedelta(hours=1)
 NOT_NOW = frozenset({"cold", "distant"})
 """The tiers she sends none in."""
+DATE_NOW_TRIES = 3
+"""How many times `date_now` asks her again where she writes no photo tag."""
 _GROUP = re.compile(r"^\s*group\s*:\s*yes\b", re.IGNORECASE | re.MULTILINE)
 
 _SCHEMA = """
@@ -310,18 +312,29 @@ class TripPhotos:
         conversation = self._current(user_id, character_id)
         if conversation is None or not self.available():
             return False
-        recording = self._activity.begin("trip_photo", user_id, character_id, own_llm=False, exempt=False)
-        lease = self._config.lease()
-        try:
-            with recording.current():
-                said, tag = await self._engine.after_date(
-                    conversation, lease.keys.chat_llm, what, True
-                )
-        except Exception:
-            recording.finish("failed")
-            raise
-        finally:
-            lease.release()
+        attempt = 0
+        while True:
+            attempt += 1
+            recording = self._activity.begin(
+                "trip_photo", user_id, character_id, own_llm=False, exempt=False
+            )
+            lease = self._config.lease()
+            try:
+                with recording.current():
+                    said, tag = await self._engine.after_date(
+                        conversation, lease.keys.chat_llm, what, True
+                    )
+            except EmptyReply:
+                recording.finish("failed")
+                if attempt >= DATE_NOW_TRIES:
+                    raise
+                continue
+            except Exception:
+                recording.finish("failed")
+                raise
+            finally:
+                lease.release()
+            break
         assert tag is not None
         await self._sent_with_photo(conversation, said, tag, [], recording, producer_there=True)
         return True

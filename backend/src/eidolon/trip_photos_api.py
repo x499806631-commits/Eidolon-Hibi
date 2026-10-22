@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from eidolon.assembly import Backend
+from eidolon.engine import EmptyReply
 from eidolon.sessions import UserId
 
 
@@ -49,6 +50,10 @@ def add_trip_photo_routes(app: FastAPI, backend: Backend) -> None:
     async def date_now(user_id: UserId, body: DateNow) -> dict:
         if body.character_id not in backend.characters:
             raise HTTPException(404, f"没有这位偶像：{body.character_id}")
-        if not await backend.trip_photos.date_now(user_id, body.character_id, body.what[:30]):
+        try:
+            sent = await backend.trip_photos.date_now(user_id, body.character_id, body.what[:30])
+        except EmptyReply as e:
+            raise HTTPException(502, f"试了几次，对话模型都没写照片标签：{e}") from None
+        if not sent:
             raise HTTPException(404, "还没有和她的对话，或者没有配生图")
         return {"ok": True}
