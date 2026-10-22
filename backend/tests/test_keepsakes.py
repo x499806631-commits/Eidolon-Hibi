@@ -64,17 +64,21 @@ def test_its_picture_is_the_thing_alone_square_and_all_ages():
     assert "no text" in prompt.positive and ", text," in prompt.negative
 
 
-def test_words_written_on_it_are_drawn_in_quotes_and_text_is_let_in():
+def test_words_written_on_it_are_drawn_in_quotes_where_it_says_and_text_is_let_in():
     draft = read_keepsake(
-        "<keepsake>\nname: 生日卡\ntags: birthday card, cake\nwords: \"Happy, Birthday!\" {1.5::x::}\n"
-        "</keepsake><ja>はい</ja><zh>给</zh>"
+        "<keepsake>\nname: 生日卡\ntags: birthday card, cake\nwords: 「お誕生日、おめでとう」{1.5::x::}\n"
+        "words_on: the card, inside\n</keepsake><ja>はい</ja><zh>给</zh>"
     )
     prompt, _ = keepsake_prompt(draft.tags)
 
-    assert draft.tags == 'birthday card, cake, "Happy Birthday! 1.5x"'
-    assert '"Happy Birthday! 1.5x", rating:general' in prompt.positive
-    assert "no text" not in prompt.positive and ", text," not in prompt.negative
-    assert "watermark" in prompt.negative
+    assert draft.tags == 'birthday card, cake, "お誕生日、おめでとう 1.5 x" @ the card inside'
+    assert prompt.positive.endswith(
+        'birthday card, cake, the text "お誕生日、おめでとう 1.5 x" is written on the card inside.,'
+        " high complexity, rating:general, very aesthetic, masterpiece"
+    )
+    assert ", text," not in prompt.negative and "watermark" in prompt.negative
+    plain, _ = keepsake_prompt("cake")
+    assert plain.positive.endswith("cake, high complexity, rating:general, very aesthetic, masterpiece, no text")
 
 
 async def talked(

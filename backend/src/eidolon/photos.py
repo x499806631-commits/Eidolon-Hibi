@@ -82,6 +82,7 @@ framing: upper body
 place: cafe, indoors, day, sunlight
 outfit: white shirt, cardigan
 action: peace sign, smile
+scene: She holds a cup of latte up near her face, with a rainy window behind her.
 note: 在咖啡店给他拍的自拍
 </photo>
 - shot：selfie（自拍）或 other（别人帮你拍）。
@@ -89,6 +90,9 @@ note: 在咖啡店给他拍的自拍
 - place：2–4 个英文 tag，写地点、室内还是室外、时段或天气、光线。
 - outfit：1–4 个英文 tag，写一套衣服，只写这个景别里看得见的。
 - action：2–4 个英文 tag，写一个动作、一两个表情；不看镜头时加一个视线。
+- scene：一句简短的英文，写画面怎么摆：你手里拿着什么、看着哪里、前景和背景各有什么。不写发色、瞳色、身材，不写别的人。
+- words：（可以不写）照片里真的会有的一小段字，日语或英语都可以，二十个字以内，例如招牌、蛋糕上的字、手写的卡片、白板。
+- words_on：有 words 时写这段字在哪里，英文短语，例如 the shop sign、the whiteboard behind her。
 - note：一句中文，写这是一张什么样的照片，只给你自己回看。
 - place、outfit、action 合计不超过 12 个 tag。照片里只有你一个人；不写发色、瞳色、发型、身材，也不写画风或画师。
 - 照着现在的时间和你们正在聊的事拍；他指定了地点或服装，在全年龄的范围内照办。

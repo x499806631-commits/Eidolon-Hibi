@@ -3,8 +3,11 @@ field, and the prompts the image service is sent for it.
 
 She writes how the photo is taken (`shot`: a selfie, or someone else taking it), how much of
 her it shows (`framing`), and three fields of English tags: where and when (`place`), what
-she wears (`outfit`), what she does and how she looks (`action`); and a note in Chinese for
-herself alone, never sent. What she writes is cleaned before it goes anywhere: the prompt
+she wears (`outfit`), what she does and how she looks (`action`); a short English sentence
+on how the picture is laid out (`scene`), which V5 reads better than tags for where things
+are; words that are written somewhere in the picture, Japanese or English (`words`), and
+where (`words_on`); and a note in Chinese for herself alone, never sent. The tags give the
+picture its bones, the sentence its layout, as NovelAI's guide has it. What she writes is cleaned before it goes anywhere: the prompt
 syntax NovelAI reads (emphasis, weights, alternation, comments, quotes, `Text:`) is
 stripped, the tags put in lower case with spaces for underscores, and those the model
 does not know as tags put as it does, by the local tag table (`photo_tags.json`, made by
@@ -19,8 +22,11 @@ crossing it. Neither the deployer nor any user changes the table.
 
 The positive prompt is fixed around them: who she is (her character tag and the work's
 tag), the deployment's art style, written in as the deployer wrote it (weights, artists
-and all; none if empty), her looks, the tags for how the photo is taken, `rating:general` and V5's standard
-quality tags, written out rather than left to the service's switch. The negative prompt is
+and all; none if empty), her looks, the tags for how the photo is taken, her sentence and the words in quotes (V5
+draws text in double quotes, in Japanese as well as English, put where a sentence says),
+`high complexity` (V5's tag for a detailed, finished picture, left out where the art style
+says a complexity of its own), `rating:general` and V5's standard quality tags, written out
+rather than left to the service's switch, `no text` among them only where no words are. The negative prompt is
 fixed altogether: `nsfw`, the Human Focus preset, and what no photo of hers shows
 (ADR-0023). Neither the deployer nor any user changes them.
 """
@@ -83,6 +89,16 @@ _TEXT = re.compile(r"\btext:", re.IGNORECASE)
 _SYNTAX = re.compile(r"[{}\[\]|#\"'“”‘’`]")
 
 
+COMPLEXITY = "high complexity"
+"""V5's tag for a detailed, finished picture, before the quality tags."""
+
+SCENE_CHARS = 200
+"""The most characters of her sentence on how the picture is laid out."""
+WORDS_CHARS = 20
+"""The most characters of the words written in a picture."""
+_NOT_IN_WORDS = re.compile(r"[\"“”「」『』{}\[\]|#:`\\<>\n\r\t]")
+
+
 @dataclass(frozen=True)
 class PhotoTag:
     """A photo tag as read: how the photo is taken and how much of her it shows, and her
@@ -93,6 +109,10 @@ class PhotoTag:
     place: tuple[str, ...]
     outfit: tuple[str, ...]
     action: tuple[str, ...]
+    scene: str = ""
+    """Her sentence on how it is laid out, cleaned; empty if none, or it crossed the line."""
+    writing: str = ""
+    """The words written in it and where, as the prompt has them (`writing`); empty if none."""
     stripped: tuple[Crossing, ...] = ()
     """Which part of the line each tag stripped crossed, one for each."""
 
@@ -126,7 +146,9 @@ def read_tag(text: str) -> PhotoTag:
     place, outfit, action = (
         _field(fields.get(name, ""), name, seen, stripped) for name in DEFAULTS
     )
-    return PhotoTag(shot, framing, place, outfit, action, tuple(stripped))
+    scene = _sentence(fields.get("scene", ""), stripped)
+    words = writing(fields.get("words", ""), fields.get("words_on", ""), stripped)
+    return PhotoTag(shot, framing, place, outfit, action, scene, words, tuple(stripped))
 
 
 def image_prompt(character: Character, tag: PhotoTag, style: str = "") -> ImagePrompt:
@@ -139,9 +161,55 @@ def image_prompt(character: Character, tag: PhotoTag, style: str = "") -> ImageP
     positive = (
         "1girl", "solo", character.photo_tag, WORK_TAG, *_styled(style),
         character.photo_appearance, *_shot_tags(tag.shot), tag.framing, *tag.place,
-        *tag.outfit, *action, *QUALITY_TAGS,
+        *tag.outfit, *action, *_said(tag.scene, tag.writing), *_finish(style, tag.writing),
     )
     return ImagePrompt(", ".join(positive), NEGATIVE_PROMPT)
+
+
+def writing(words: str, on: str, stripped: list[Crossing] | None = None) -> str:
+    """The words `words` written on `on` (where in the picture, in English), as a prompt has
+    them: `the text "…" is written on …`, the words in double quotes, which is how V5 is
+    asked to draw text, Japanese or English. The words are cut to `WORDS_CHARS`, without
+    quotes, brackets or prompt syntax; where they are, to a short phrase. Empty if there are
+    no words, or they or where cross the line (which part added to `stripped`)."""
+    words = " ".join(_NOT_IN_WORDS.sub(" ", words).split())[:WORDS_CHARS].strip()
+    if not words:
+        return ""
+    where = _sentence(on, stripped).rstrip(".")[:60].strip() or "it"
+    if (crossing := _TABLE.crossing(words.lower())) is not None:
+        if stripped is not None:
+            stripped.append(crossing)
+        return ""
+    return f'the text "{words}" is written on {where}'
+
+
+def _sentence(text: str, stripped: list[Crossing] | None) -> str:
+    """`text` as a plain sentence in a prompt: without NovelAI's prompt syntax or commas (which
+    would cut it into tags), spaces made single, cut to `SCENE_CHARS`; empty if it crosses
+    the line (which part added to `stripped`)."""
+    text = _WEIGHT.sub("", _TEXT.sub("", text))
+    text = re.sub(r"[{}\[\]|#\"“”`<>]", "", text).replace(",", " ").replace("，", " ")
+    text = " ".join(text.split())[:SCENE_CHARS].strip()
+    if not text:
+        return ""
+    if (crossing := _TABLE.crossing(text.lower())) is not None:
+        if stripped is not None:
+            stripped.append(crossing)
+        return ""
+    return text if text.endswith((".", "!", "?")) else f"{text}."
+
+
+def _said(scene: str, words: str) -> tuple[str, ...]:
+    """Her sentence and the words written, as they come after the tags."""
+    return tuple(part for part in (words and f"{words}.", scene) if part)
+
+
+def _finish(style: str, words: str) -> tuple[str, ...]:
+    """What a prompt ends with: `COMPLEXITY` unless the art style says one, then the quality
+    tags, `no text` among them only if no words are written in the picture."""
+    complexity = () if "complexity" in style.lower() else (COMPLEXITY,)
+    quality = tuple(t for t in QUALITY_TAGS if not (words and t == "no text"))
+    return (*complexity, *quality)
 
 
 KEEPSAKE_SIZE = (1024, 1024)
@@ -162,18 +230,17 @@ def keepsake_prompt(tags: str, style: str = "") -> tuple[ImagePrompt, tuple[Cros
     it (`tags`, comma-separated), cleaned and stripped as a photo's are, `KEEPSAKE_TAGS` at
     most; and which part of the line each stripped crossed.
 
-    It starts with `background dataset`, NovelAI's tag for a scene with no one in it. One
-    entry of `tags` in double quotes is the words written on the thing (`keepsake_words`):
-    kept in its quotes, which is how V5 is asked to draw text, after the tags, with `text`
-    no longer kept out of the picture."""
+    It starts with `background dataset`, NovelAI's tag for a scene with no one in it. The
+    words written on the thing, if any, are in `tags` as `keepsake_words` puts them, and go
+    into the prompt as a photo's do (`writing`), with `text` no longer kept out of it."""
     seen = {*_FIXED, *_KEEPSAKE_START}
     stripped: list[Crossing] = []
     kept: list[str] = []
     words = ""
+    if found := _KEEPSAKE_WORDS.search(tags):
+        words = writing(found.group(1), found.group(2) or "", stripped)
+        tags = tags[: found.start()] + tags[found.end() :]
     for raw in re.split(r"[,，、]", tags):
-        if quoted := _QUOTED.fullmatch(raw.strip()):
-            words = words or keepsake_words(quoted.group(1))
-            continue
         written = _cleaned(raw)
         tag = _TABLE.rewrites.get(written, written)
         if not tag or tag in seen:
@@ -183,26 +250,26 @@ def keepsake_prompt(tags: str, style: str = "") -> tuple[ImagePrompt, tuple[Cros
             stripped.append(crossing)
             continue
         kept.append(tag)
-    quality = QUALITY_TAGS if not words else tuple(t for t in QUALITY_TAGS if t != "no text")
     positive = (
         *_KEEPSAKE_START, *_styled(style), *(kept[:KEEPSAKE_TAGS] or ["gift box"]),
-        *((f'"{words}"',) if words else ()), *quality,
+        *_said("", words), *_finish(style, words),
     )
     negative = KEEPSAKE_NEGATIVE if not words else KEEPSAKE_NEGATIVE.replace(", text,", ",")
     return ImagePrompt(", ".join(positive), negative, KEEPSAKE_SIZE), tuple(stripped)
 
 
 _KEEPSAKE_START = ("background dataset", "no humans", "still life", "object focus")
-_QUOTED = re.compile(r'["“”「」](.*)["“”「」]')
-_WORDS_KEPT = re.compile(r"[^A-Za-z0-9 !?'.&+♥♡-]")
-KEEPSAKE_WORDS = 24
-"""The most characters of words a keepsake's picture shows written on it."""
+_KEEPSAKE_WORDS = re.compile(r'"([^"]*)"(?:\s*@\s*([^,，、]*))?')
 
 
-def keepsake_words(words: str) -> str:
-    """`words` as they may be written on a keepsake's picture: short English, no commas,
-    quotes or prompt syntax (V5 draws Latin letters best), `KEEPSAKE_WORDS` at most."""
-    return " ".join(_WORDS_KEPT.sub("", words).split())[:KEEPSAKE_WORDS].strip()
+def keepsake_words(words: str, on: str) -> str:
+    """The words written on a keepsake and where, as they are kept with its tags (`"…" @ …`),
+    for `keepsake_prompt` to read back; empty if there are no words."""
+    words = " ".join(_NOT_IN_WORDS.sub(" ", words).split())[:WORDS_CHARS].strip()
+    where = " ".join(re.sub(r'[,，、"@]', " ", on).split())[:60]
+    if not words:
+        return ""
+    return f'"{words}" @ {where}' if where else f'"{words}"'
 
 
 def check_prompt(style: str = "") -> ImagePrompt:
@@ -210,7 +277,7 @@ def check_prompt(style: str = "") -> ImagePrompt:
     art style `style`, otherwise as any photo is."""
     positive = (
         "1girl", "solo", *_styled(style), "upper body", "indoors", "smile", LOOKING_AT_VIEWER,
-        *QUALITY_TAGS,
+        *_finish(style, ""),
     )
     return ImagePrompt(", ".join(positive), NEGATIVE_PROMPT)
 

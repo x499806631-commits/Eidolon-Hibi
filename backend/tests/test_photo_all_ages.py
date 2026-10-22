@@ -22,7 +22,7 @@ from tests.test_photos import IMAGE, WORDS, asking, photo_events, settled
 from tests.test_text_turn import send_turn, start_conversation
 
 HEAD = "1girl, solo, sakuragi mano, idolmaster shiny colors, brown hair, medium hair, brown eyes"
-TAIL = "rating:general, very aesthetic, masterpiece, no text"
+TAIL = "high complexity, rating:general, very aesthetic, masterpiece, no text"
 
 CROSSING = """
 shot: other

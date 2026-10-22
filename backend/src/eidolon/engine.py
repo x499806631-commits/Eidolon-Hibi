@@ -594,7 +594,8 @@ name: 东西的名字，中文，十五个字以内，例如「手作的四叶�
 look: 这件东西的样子，中文一两句
 emoji: 一个最能代表它的 emoji
 tags: 4–6 个英文 tag，只写这件东西本身：是什么、样子、材质、颜色，可以加一个放置的地方（例如 on wooden table）；不写人
-words: （可以不写这一行）东西上写着的一句很短的英文，例如 Thank you、For Producer、Happy Birthday；卡片、包装、点心上真的会写字时才写
+words: （可以不写这一行）东西上写着的一小段字，日语或英语都可以，二十个字以内，例如 ありがとう、Happy Birthday；卡片、包装、点心上真的会写字时才写
+words_on: 有 words 时写这段字在哪里，英文短语，例如 the card、the ribbon、the chocolate plate
 </keepsake>
 - 照你的性格、喜好和你们最近聊过的事来挑，要是你真的会送、也送得起的东西：手作的小东西、日常小物、吃的、你喜欢的东西的周边……不送贵重的东西、钱和礼券。
 - {limits}
@@ -668,8 +669,8 @@ def read_keepsake(answer: str) -> KeepsakeDraft:
         raise EmptyReply("对话模型没有写出要送的东西")
     emoji = fields.get("emoji", "").strip()[:8] or "🎁"
     tags = fields.get("tags", "")[:300]
-    if words := keepsake_words(fields.get("words", "")):
-        tags = f'{tags}, "{words}"'  # kept with the tags; `keepsake_prompt` reads it back
+    if words := keepsake_words(fields.get("words", ""), fields.get("words_on", "")):
+        tags = f"{tags}, {words}"  # kept with the tags; `keepsake_prompt` reads it back
     return KeepsakeDraft(name, fields.get("look", "")[:200], emoji, tags, said)
 
 DIARY_RULES = """# 写日记

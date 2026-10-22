@@ -21,8 +21,10 @@ import pytest
 from PIL import Image
 
 from eidolon.config import ImageSettings, Settings
+from eidolon.characters import Character
+from eidolon.photo_prompt import image_prompt, read_tag
 from eidolon.photos import CAN_SEND, CANNOT_SEND, NOT_NOW
-from tests.conftest import ClientFactory
+from tests.conftest import MANO_PHOTO, ClientFactory
 from tests.fakes import (
     FAKE_JUDGE,
     FakeClock,
@@ -168,7 +170,7 @@ action: sitting, smile
         await settled(client, photo["id"])
 
     head = "1girl, solo, sakuragi mano, idolmaster shiny colors, brown hair, medium hair, brown eyes"
-    tail = "rating:general, very aesthetic, masterpiece, no text"
+    tail = "high complexity, rating:general, very aesthetic, masterpiece, no text"
     negative = (
         "nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality,"
         " jpeg artifacts, very displeasing, chromatic aberration, dithering, halftone,"
@@ -434,3 +436,32 @@ def test_the_deployers_image_generation_is_novelai_with_its_key(monkeypatch: pyt
     assert without is None
     assert official == ImageSettings("pst-key", "https://image.novelai.net", "nai-diffusion-5-curated")
     assert relayed == ImageSettings("pst-key", "https://relay.example", "nai-diffusion-4-5-full")
+
+
+MANO = Character(
+    "mano", "櫻木真乃", "", "voice", "", None, "#ffbad6",
+    photo_tag=MANO_PHOTO[0], photo_appearance=MANO_PHOTO[1],
+)
+
+
+def test_her_sentence_and_the_words_in_it_go_after_the_tags_and_text_is_let_in():
+    tag = read_tag(
+        "shot: other\nframing: upper body\nplace: cafe\nscene: She holds {a latte}, smiling,"
+        " with the window behind her\nwords: 「本日のおすすめ」::\nwords_on: the chalkboard behind her"
+    )
+
+    assert tag.scene == "She holds a latte smiling with the window behind her."
+    assert tag.writing == 'the text "本日のおすすめ" is written on the chalkboard behind her'
+    assert image_prompt(MANO, tag).positive.endswith(
+        'the text "本日のおすすめ" is written on the chalkboard behind her.,'
+        " She holds a latte smiling with the window behind her., high complexity,"
+        " rating:general, very aesthetic, masterpiece"
+    )
+
+
+def test_a_sentence_crossing_the_line_is_left_out_whole_and_counted():
+    tag = read_tag("shot: other\nscene: She is nude in the bath\nwords: hi\nwords_on: her lingerie")
+
+    assert (tag.scene, tag.writing) == ("", 'the text "hi" is written on it')
+    assert len(tag.stripped) == 2
+    assert "no text" in image_prompt(MANO, read_tag("shot: other")).positive
