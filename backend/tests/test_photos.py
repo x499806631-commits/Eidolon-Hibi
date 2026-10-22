@@ -465,3 +465,17 @@ def test_a_sentence_crossing_the_line_is_left_out_whole_and_counted():
     assert (tag.scene, tag.writing) == ("", 'the text "hi" is written on it')
     assert len(tag.stripped) == 2
     assert "no text" in image_prompt(MANO, read_tag("shot: other")).positive
+
+
+def test_an_art_style_can_go_around_the_prompt_and_add_to_what_is_kept_out():
+    style = "0.6::artist:a::, ultra complexity,\n{prompt}\n2::messy lines::, {negative} flat color, chibi,"
+    prompt = image_prompt(MANO, read_tag("shot: other"), style)
+
+    assert prompt.positive.startswith(
+        "1girl, solo, sakuragi mano, idolmaster shiny colors, 0.6::artist:a::, ultra complexity, brown hair"
+    )
+    assert prompt.positive.endswith("masterpiece, no text, 2::messy lines::")
+    assert "high complexity" not in prompt.positive
+    assert prompt.negative.startswith("nsfw, lowres") and prompt.negative.endswith("cleavage, flat color, chibi")
+    plain = image_prompt(MANO, read_tag("shot: other"), "0.7::artist:b::")
+    assert "shiny colors, 0.7::artist:b::, brown hair" in plain.positive and plain.negative.endswith("cleavage")

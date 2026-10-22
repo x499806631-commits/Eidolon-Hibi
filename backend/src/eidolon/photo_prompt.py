@@ -163,7 +163,7 @@ def image_prompt(character: Character, tag: PhotoTag, style: str = "") -> ImageP
         character.photo_appearance, *_shot_tags(tag.shot), tag.framing, *tag.place,
         *tag.outfit, *action, *_said(tag.scene, tag.writing), *_finish(style, tag.writing),
     )
-    return ImagePrompt(", ".join(positive), NEGATIVE_PROMPT)
+    return ImagePrompt(", ".join(positive), _negative(NEGATIVE_PROMPT, style))
 
 
 def writing(words: str, on: str, stripped: list[Crossing] | None = None) -> str:
@@ -207,9 +207,10 @@ def _said(scene: str, words: str) -> tuple[str, ...]:
 def _finish(style: str, words: str) -> tuple[str, ...]:
     """What a prompt ends with: `COMPLEXITY` unless the art style says one, then the quality
     tags, `no text` among them only if no words are written in the picture."""
-    complexity = () if "complexity" in style.lower() else (COMPLEXITY,)
+    before, after, _ = split_style(style)
+    complexity = () if "complexity" in f"{before} {after}".lower() else (COMPLEXITY,)
     quality = tuple(t for t in QUALITY_TAGS if not (words and t == "no text"))
-    return (*complexity, *quality)
+    return (*complexity, *quality, *((after,) if after else ()))
 
 
 KEEPSAKE_SIZE = (1024, 1024)
@@ -255,6 +256,7 @@ def keepsake_prompt(tags: str, style: str = "") -> tuple[ImagePrompt, tuple[Cros
         *_said("", words), *_finish(style, words),
     )
     negative = KEEPSAKE_NEGATIVE if not words else KEEPSAKE_NEGATIVE.replace(", text,", ",")
+    negative = _negative(negative, style)
     return ImagePrompt(", ".join(positive), negative, KEEPSAKE_SIZE), tuple(stripped)
 
 
@@ -279,12 +281,37 @@ def check_prompt(style: str = "") -> ImagePrompt:
         "1girl", "solo", *_styled(style), "upper body", "indoors", "smile", LOOKING_AT_VIEWER,
         *_finish(style, ""),
     )
-    return ImagePrompt(", ".join(positive), NEGATIVE_PROMPT)
+    return ImagePrompt(", ".join(positive), _negative(NEGATIVE_PROMPT, style))
 
 
 def _styled(style: str) -> tuple[str, ...]:
-    """The art style as it is written into a prompt: as it is, or not at all if empty."""
-    return (style.strip(),) if style.strip() else ()
+    """What of the art style goes where it is written into a prompt: all of it, or what is
+    before `{prompt}` (`split_style`); nothing if empty."""
+    before, _, _ = split_style(style)
+    return (before,) if before else ()
+
+
+PROMPT_MARK = "{prompt}"
+NEGATIVE_MARK = "{negative}"
+
+
+def split_style(style: str) -> tuple[str, str, str]:
+    """The art style as a template: what goes before the picture's own prompt, what after it,
+    and what is added to the negative prompt. Without marks it all goes before. `{prompt}`
+    marks where the picture's own prompt goes, what follows it going at the very end; what
+    follows `{negative}` is added to the negative prompt, after what is always kept out
+    (which it cannot take out). Each is written as it is, weights and all, but for the
+    commas and spaces at its ends and line breaks made spaces."""
+    style = " ".join(style.split())
+    positive, _, negative = style.partition(NEGATIVE_MARK)
+    before, _, after = positive.partition(PROMPT_MARK)
+    return before.strip(" ,"), after.strip(" ,"), negative.strip(" ,")
+
+
+def _negative(negative: str, style: str) -> str:
+    """`negative`, with what the art style adds to it after."""
+    _, _, added = split_style(style)
+    return f"{negative}, {added}" if added else negative
 
 
 def _shot_tags(shot: Shot) -> tuple[str, ...]:
