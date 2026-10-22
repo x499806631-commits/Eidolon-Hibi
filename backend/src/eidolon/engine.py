@@ -143,7 +143,7 @@ from eidolon.memory import Memories, last_turn_query
 from eidolon.own_keys import OwnKeyFailed
 from eidolon.photos import CANNOT_SEND, NOT_RECEIVED, Eligibility, Photos, photo_turn
 from eidolon.photo_prompt import keepsake_words
-from eidolon.producer import effective_timezone, local_date, now_prompt, producer_prompt
+from eidolon.producer import Ties, effective_timezone, local_date, now_prompt, producer_prompt
 from eidolon.reply_format import (
     format_instructions,
     PhotoTagged,
@@ -679,6 +679,8 @@ KEEPSAKE_OCCASIONS: dict[str, str] = {
     "promise": "制作人做到了答应你的事：{about}。你想送一件小东西谢谢制作人守约。",
     "souvenir": "你刚从{about}回来，给制作人带了当地的土特产或者纪念品。",
     "holiday": "今天是{about}。这份小礼物会随你的信一起送到。",
+    "bond": "你刚刚和制作人结拜了（{about}）。你想送一件信物，纪念这个约定。",
+    "party": "昨天大家给你办了一场{about}，是制作人拜托大家准备的。你想回一份礼谢谢制作人。",
 }
 """Why she gives a keepsake, by its occasion (`keepsakes.Occasion`); `about` says the rest."""
 
@@ -945,6 +947,7 @@ class ConversationEngine:
         self._schedules = schedules
         self._features = features
         self._ended_listeners: list[Callable[[str, EndsFor], None]] = []
+        self._ties_of: Callable[[str, str], Ties | None] | None = None
         self._recorded_listeners: list[Callable[[Conversation, Message, datetime, str], None]] = []
 
     def _on(self, user_id: str, feature: Feature) -> bool:
@@ -1297,6 +1300,14 @@ class ConversationEngine:
         worse."""
         self._recorded_listeners.append(listener)
 
+    def with_ties(self, ties: Callable[[str, str], Ties | None]) -> None:
+        """Have her prompt tell what the producer asked of her alone (GLOSSARY.md「拜托」),
+        `ties` saying it for a user and a character."""
+        self._ties_of = ties
+
+    def _ties(self, user_id: str, character_id: str) -> Ties | None:
+        return self._ties_of(user_id, character_id) if self._ties_of is not None else None
+
     def on_ended(self, listener: Callable[[str, EndsFor], None]) -> None:
         """Have `listener` told the conversation's id, and why, as she ends one, once it is
         recorded."""
@@ -1478,7 +1489,7 @@ class ConversationEngine:
                     log.warning("the search question could not be asked", exc_info=True)
             closing.append(web_rules(self._random(2) == 0, asked))
         prompt = self._prompt(
-            character, world_prompt, producer_prompt(profile),
+            character, world_prompt, producer_prompt(profile, self._ties(conversation.user_id, character.id)),
             chat_history(messages, turns), narrations(record, self._gift_catalog, timezone),
             [
                 now_prompt(
@@ -1700,6 +1711,19 @@ class ConversationEngine:
             raise EmptyReply("对话模型没有写照片标签")
         return said, tag
 
+    async def favor_reply(
+        self, conversation: Conversation, llm: ChatLLM, rules: str, wants: str,
+        with_photo: bool = False,
+    ) -> tuple[list[Segment], str | None]:
+        """What she says first in `conversation` about a favor the producer asked
+        (GLOSSARY.md「拜托」), as `rules` say, `wants` where the user's words would be; and,
+        `with_photo`, the photo tag she wrote. Raises EmptyReply if she says nothing, or
+        writes no photo tag where she is to."""
+        said, tag = await self._reaching_out(conversation, llm, rules, wants)
+        if with_photo and tag is None:
+            raise EmptyReply("对话模型没有写照片标签")
+        return said, tag
+
     async def _reaching_out(
         self, conversation: Conversation, llm: ChatLLM, rules: str, wants: str
     ) -> tuple[list[Segment], str | None]:
@@ -1731,7 +1755,7 @@ class ConversationEngine:
         promises_due = self._promises_due(character, conversation.user_id, now, timezone)
         scene = self._scene(conversation)
         prompt = self._prompt(
-            character, world_prompt, producer_prompt(profile),
+            character, world_prompt, producer_prompt(profile, self._ties(conversation.user_id, character.id)),
             chat_history(messages, self._history_turns()), told,
             [
                 now_prompt(
@@ -1806,7 +1830,7 @@ class ConversationEngine:
             conversation, timezone, last_turn_query(messages)
         )
         prompt = self._prompt(
-            character, world_prompt, producer_prompt(profile),
+            character, world_prompt, producer_prompt(profile, self._ties(conversation.user_id, character.id)),
             chat_history(messages, self._history_turns()), told,
             [
                 now_prompt(
@@ -1869,7 +1893,7 @@ class ConversationEngine:
         )
         adult = character.heart is not None and character.heart.adult
         prompt = self._prompt(
-            character, world_prompt, producer_prompt(profile),
+            character, world_prompt, producer_prompt(profile, self._ties(conversation.user_id, character.id)),
             chat_history(messages, self._history_turns()), told,
             [
                 now_prompt(
@@ -1919,7 +1943,7 @@ class ConversationEngine:
         told = narrations(record, self._gift_catalog, timezone)
         told[None] = _since_last_turn(record, self._gift_catalog, timezone)
         prompt = self._prompt(
-            character, world_prompt, producer_prompt(profile),
+            character, world_prompt, producer_prompt(profile, self._ties(conversation.user_id, character.id)),
             chat_history(messages, self._history_turns()), told,
             [
                 now_prompt(

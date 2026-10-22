@@ -61,9 +61,12 @@ from eidolon.store import Conversation, Letter, Store
 
 log = logging.getLogger(__name__)
 
-Occasion = Literal["scene", "anniversary", "birthday", "gift", "promise", "souvenir", "holiday"]
+Occasion = Literal[
+    "scene", "anniversary", "birthday", "gift", "promise", "souvenir", "holiday", "bond", "party"
+]
 """What a keepsake is for: her scene at a door, an anniversary, the producer's birthday, a gift
-she liked, a promise kept, a trip she came back from, a holiday's letter."""
+she liked, a promise kept, a trip she came back from, a holiday's letter, being sworn sisters
+with the producer, a party the producer had thrown for her (GLOSSARY.md「拜托」)."""
 
 TICK = timedelta(minutes=5)
 PER_TICK = 3
@@ -78,7 +81,7 @@ MORNING = time(9)
 GIFT_ODDS = 3
 PROMISE_ODDS = 4
 HOLIDAY_ODDS = 3
-ANYWAY: frozenset[Occasion] = frozenset({"scene", "birthday"})
+ANYWAY: frozenset[Occasion] = frozenset({"scene", "birthday", "bond", "party"})
 """What she gives whatever the day's number."""
 
 TIER_NAMES = {"close": "第一次走到了「亲近」", "intimate": "第一次走到了「亲密」"}
@@ -252,6 +255,14 @@ class Keepsakes:
             conversation.user_id, conversation.character_id, f"letter:{letter.id}", occasion,
             about, self._clock(), letter.id, letter.created_at,
         )
+
+    def favor_done(
+        self, user_id: str, character_id: str, key: str, occasion: Occasion, about: str,
+        due: datetime,
+    ) -> None:
+        """A favor of the producer's she gives a keepsake for (GLOSSARY.md「拜托」) is done:
+        give one at `due`, once for `key`."""
+        self._put_down(user_id, character_id, f"favor:{key}", occasion, about, due)
 
     def _put_down(
         self, user_id: str, character_id: str, key: str, occasion: Occasion, about: str,

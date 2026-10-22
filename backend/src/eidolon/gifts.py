@@ -462,6 +462,40 @@ class Gifts:
             )
         return gift_id
 
+    def take_gifts(self, user_id: str, gift_ids: Sequence[str]) -> None:
+        """Take the gifts from the user's backpack, one for each time named, to use up on a
+        favor (GLOSSARY.md「拜托」); all of them or none. Raises GiftsClosed if gifts are not
+        open, NoneLeft if the user has not all of them."""
+        self.notice()
+        if not self._is_open():
+            raise GiftsClosed()
+        wanted: dict[str, int] = {}
+        for gift_id in gift_ids:
+            wanted[gift_id] = wanted.get(gift_id, 0) + 1
+        with self._lock, self._db:
+            for gift_id, count in wanted.items():
+                row = self._db.execute(
+                    "SELECT count FROM gift_backpacks WHERE user_id = ? AND gift_id = ?",
+                    (user_id, gift_id),
+                ).fetchone()
+                if row is None or row[0] < count:
+                    raise NoneLeft()
+            for gift_id, count in wanted.items():
+                self._db.execute(
+                    "UPDATE gift_backpacks SET count = count - ? WHERE user_id = ? AND gift_id = ?",
+                    (count, user_id, gift_id),
+                )
+
+    def put_back_gifts(self, user_id: str, gift_ids: Sequence[str]) -> None:
+        """Give back gifts taken for a favor that did not come about."""
+        with self._lock, self._db:
+            for gift_id in gift_ids:
+                self._db.execute(
+                    "INSERT INTO gift_backpacks (user_id, gift_id, count) VALUES (?, ?, 1)"
+                    " ON CONFLICT (user_id, gift_id) DO UPDATE SET count = count + 1",
+                    (user_id, gift_id),
+                )
+
     def give(self, user_id: str, gift_id: str, character_id: str) -> Given:
         """Give the character one of the gift; its record goes where `Store.add_gift`
         places it. The one taken is put back

@@ -383,6 +383,17 @@ class TripPhotos:
             self._sent(user_id, character_id, day)
         await self._sent_with_photo(conversation, said, tag, others, recording)
 
+    async def send_with_photo(
+        self, conversation: Conversation, said: list, tag: str, others: list[Character]
+    ) -> None:
+        """Keep what she said with the photo `tag` says and draw it, of her and of `others` if
+        her tag says so (a party's, GLOSSARY.md「拜托」)."""
+        recording = self._activity.begin(
+            "trip_photo", conversation.user_id, conversation.character_id, own_llm=False,
+            exempt=False,
+        )
+        await self._sent_with_photo(conversation, said, tag, others, recording)
+
     async def _sent_with_photo(
         self, conversation: Conversation, said: list, tag: str, others: list[Character],
         recording, outfit_tags: str | None = None, background: bool = False,

@@ -26,7 +26,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 
 import httpx
 
@@ -63,6 +63,7 @@ from eidolon.keepsakes import Keepsakes
 from eidolon import tickets
 from eidolon.outfit_tags import OutfitTags
 from eidolon.trip_photos import Dates, TripPhotos
+from eidolon.favors import Favors
 from eidolon.schedule_writer import ScheduleWriter
 from eidolon.schedules import Schedules
 from eidolon.letters import Letters
@@ -155,6 +156,7 @@ class Backend:
     keepsakes: Keepsakes
     """The keepsakes she gives, and the cabinet (GLOSSARY.md「纪念品」)."""
     trip_photos: TripPhotos
+    favors: Favors
     """The photos she sends from her trips (GLOSSARY.md「外景照片」), and those asked for with
     tickets, and her days out with the producer (GLOSSARY.md「体验券」「邀约」)."""
     outfit_tags: OutfitTags
@@ -183,6 +185,7 @@ class Backend:
     _planning: asyncio.Task[None] | None = field(default=None, repr=False)
     _giving: asyncio.Task[None] | None = field(default=None, repr=False)
     _sending: asyncio.Task[None] | None = field(default=None, repr=False)
+    _favoring: asyncio.Task[None] | None = field(default=None, repr=False)
 
     async def start(self) -> None:
         """What is done as the server starts, on its event loop: try the overrides of the
@@ -198,12 +201,13 @@ class Backend:
         self._planning = asyncio.create_task(self.schedule_writer.keep_writing())
         self._giving = asyncio.create_task(self.keepsakes.keep_giving())
         self._sending = asyncio.create_task(self.trip_photos.keep_sending())
+        self._favoring = asyncio.create_task(self.favors.keep_running())
 
     async def aclose(self) -> None:
         """Close what `build` opened, last opened first."""
         for task in (
             self._keeping_fresh, self._probing, self._reaching_out, self._writing,
-            self._keeping_diaries, self._planning, self._giving, self._sending,
+            self._keeping_diaries, self._planning, self._giving, self._sending, self._favoring,
         ):
             if task is not None:
                 task.cancel()
@@ -473,9 +477,11 @@ def build(
     closers.append(diary.close)
     dates = Dates(settings.database_path)
     closers.append(dates.close)
+    favor_twists: list[Callable[[str, str, date], list[str]]] = []
     schedule_writer = ScheduleWriter(
         schedules, store, engine, characters, config, activity, clock,
         random or secure_random, settings.schedules, features, dates.on,
+        lambda *on: [t for twists in favor_twists for t in twists(*on)],
     )
     keepsakes = Keepsakes(
         settings.database_path, store, engine, characters, config, activity, clock,
@@ -489,6 +495,14 @@ def build(
         features, dates,
     )
     closers.append(trip_photos.close)
+    favors = Favors(
+        settings.database_path, store, engine, characters, gift_catalog, config, activity, clock,
+        random or secure_random, affinities, gifts, keepsakes, trip_photos, special_days,
+        diary.moment, calls.in_call, features,
+    )
+    closers.append(favors.close)
+    favor_twists.append(favors.twists_on)
+    engine.with_ties(favors.ties)
     outfit_tags = OutfitTags(settings.database_path, settings.vision, settings.stand_assets_url)
     closers.append(outfit_tags.close)
     affinities.on_scene_done(keepsakes.scene_played)
@@ -550,6 +564,7 @@ def build(
         features=features,
         keepsakes=keepsakes,
         trip_photos=trip_photos,
+        favors=favors,
         outfit_tags=outfit_tags,
         schedule_writer=schedule_writer,
         world=world,

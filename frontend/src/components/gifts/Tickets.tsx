@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import {
   DateTicketIcon,
   DiaryKeyIcon,
+  FavorTicketIcon,
   LetterTicketIcon,
   LikedGiftTicketIcon,
   PhotoTicketIcon,
@@ -20,6 +21,7 @@ export const TICKET_ICONS: Record<TicketKind, typeof DateTicketIcon> = {
   diary_key: DiaryKeyIcon,
   photo: PhotoTicketIcon,
   date: DateTicketIcon,
+  favor: FavorTicketIcon,
 };
 
 /** 一种券的方块：和礼物插画同样的 `bg-muted` 圆角正方形，中间是这种券的图标。 */

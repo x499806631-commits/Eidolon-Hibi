@@ -4,10 +4,10 @@
 import { api, json } from "@/lib/api";
 import type { DiaryEntry } from "@/lib/diary";
 
-/** 指定礼物、来信、日记钥匙、拍照、邀约。 */
-export type TicketKind = "liked_gift" | "letter" | "diary_key" | "photo" | "date";
+/** 指定礼物、来信、日记钥匙、拍照、邀约、拜托（拜托券在拜托的框里用，见 `lib/favors`）。 */
+export type TicketKind = "liked_gift" | "letter" | "diary_key" | "photo" | "date" | "favor";
 
-export const TICKET_KINDS: readonly TicketKind[] = ["liked_gift", "letter", "diary_key", "photo", "date"];
+export const TICKET_KINDS: readonly TicketKind[] = ["liked_gift", "letter", "diary_key", "photo", "date", "favor"];
 
 /** 持有的一种券和张数。 */
 export type HeldTicket = { kind: TicketKind; count: number };

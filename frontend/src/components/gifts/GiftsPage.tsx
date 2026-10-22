@@ -14,6 +14,7 @@ import { GivenToast, type GivenNotice } from "@/components/gifts/GivenToast";
 import { GivePanel, type Giving } from "@/components/gifts/GivePanel";
 import { MyGifts } from "@/components/gifts/MyGifts";
 import { ResetCards } from "@/components/gifts/ResetCards";
+import { FavorDialog } from "@/components/gifts/FavorDialog";
 import { TicketDialog } from "@/components/gifts/TicketDialog";
 import { Tickets } from "@/components/gifts/Tickets";
 import { Button } from "@/components/ui/button";
@@ -235,8 +236,20 @@ export function GiftsPage({ pick }: { pick: GiftsFor | null }) {
         onClose={() => setDrawing(null)}
       />
       <TicketDialog
-        kind={using}
+        kind={using === "favor" ? null : using}
         characters={arranged}
+        catalog={giftsById}
+        isWide={isWide}
+        timeZone={timeZone}
+        onClose={() => setUsing(null)}
+        onDone={() => getGiftState().then(setState, (e) => setFailure(toFailure(e)))}
+        onGo={go}
+      />
+      <FavorDialog
+        isOpen={using === "favor"}
+        characters={arranged}
+        statuses={statuses}
+        backpack={state?.backpack ?? []}
         catalog={giftsById}
         isWide={isWide}
         timeZone={timeZone}

@@ -6,7 +6,7 @@ import { api, expectNoContent, json, type Segment } from "@/lib/api";
 import { UnreadLetters } from "@/lib/letters";
 
 /** 她为什么送：重要的一幕、纪念日、制作人的生日、回礼、约定做到了、出外景的土特产、节日的信。 */
-export type KeepsakeOccasion = "scene" | "anniversary" | "birthday" | "gift" | "promise" | "souvenir" | "holiday";
+export type KeepsakeOccasion = "scene" | "anniversary" | "birthday" | "gift" | "promise" | "souvenir" | "holiday" | "bond" | "party";
 
 export type Keepsake = {
   id: number;

@@ -134,7 +134,7 @@ export { Camera as PhotoIcon, CameraOff as PhotosUsedUpIcon, ImageOff as PhotoFa
 // 导航栏底部（电脑）的 GitHub 仓库链接；品牌标志 Lucide 不收，是 The Library Icon Rule 的例外。
 export { GitHubIcon } from "./GitHubIcon";
 
-// 体验券（GLOSSARY.md「体验券」）：券本身，和每种券的图标：指定礼物、来信、日记钥匙、拍照、邀约。
+// 体验券（GLOSSARY.md「体验券」）：券本身，和每种券的图标：指定礼物、来信、日记钥匙、拍照、邀约、拜托。
 export {
   Ticket as TicketIcon,
   HeartHandshake as LikedGiftTicketIcon,
@@ -142,4 +142,5 @@ export {
   KeyRound as DiaryKeyIcon,
   Camera as PhotoTicketIcon,
   CalendarHeart as DateTicketIcon,
+  HandHelping as FavorTicketIcon,
 } from "lucide-react";

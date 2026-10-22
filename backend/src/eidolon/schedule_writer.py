@@ -82,10 +82,13 @@ class ScheduleWriter:
         enabled: bool,
         features: Switches = AllOn(),
         date_on: Callable[[str, str, date], str | None] = lambda *_: None,
+        favors_on: Callable[[str, str, date], list[str]] = lambda *_: [],
     ) -> None:
         """`date_on` says what she is to do with the producer on a day, if anything
-        (GLOSSARY.md「邀约」)."""
+        (GLOSSARY.md「邀约」); `favors_on`, what the producer's favors have her do that day
+        (GLOSSARY.md「拜托」), as twists of their own."""
         self._date_on = date_on
+        self._favors_on = favors_on
         self._features = features
         self._schedules = schedules
         self._store = store
@@ -169,6 +172,7 @@ class ScheduleWriter:
         twists = self._twists()
         if (what := self._date_on(user_id, character_id, day)) is not None:
             twists.append(DATE_TWIST.format(what=what))
+        twists.extend(self._favors_on(user_id, character_id, day))
         names = {c.id: c.name for c in self._characters.values()}
         trip_with: tuple[str, ...] = ()
         joining = self._schedules.joining(user_id, character_id, day)

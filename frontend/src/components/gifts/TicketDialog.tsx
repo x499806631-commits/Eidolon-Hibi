@@ -255,7 +255,8 @@ function chatOf(her: Character) {
   return { label: t.goChat, href: `/conversation/${encodeURIComponent(her.id)}` };
 }
 
-function days(timeZone: string) {
+/** 明天起一周内每天一项：几天后和「明天（10月23日）」这样的写法。 */
+export function days(timeZone: string) {
   const now = new Date();
   return Array.from({ length: MAX_DAYS_AHEAD }, (_, i) => {
     const ahead = i + 1;
@@ -264,7 +265,7 @@ function days(timeZone: string) {
   });
 }
 
-function Labeled({ label, children }: { label: string; children: React.ReactNode }) {
+export function Labeled({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-2">
       <span className="text-meta text-muted-foreground">{label}</span>
@@ -274,14 +275,16 @@ function Labeled({ label, children }: { label: string; children: React.ReactNode
 }
 
 /** 选一位偶像：小头像加名字的下拉框。 */
-function IdolSelect({
+export function IdolSelect({
   characters,
   value,
   onChange,
+  label = t.who,
 }: {
   characters: Character[];
   value: string;
   onChange: (id: string) => void;
+  label?: string;
 }) {
   const items = characters.map((c) => ({ value: c.id, label: c.name }));
   const show = (id: string) => {
@@ -295,7 +298,7 @@ function IdolSelect({
   };
   return (
     <Select items={items} value={value} onValueChange={(next) => typeof next === "string" && onChange(next)}>
-      <SelectTrigger aria-label={t.who} className="h-10 w-full">
+      <SelectTrigger aria-label={label} className="h-10 w-full">
         <SelectValue>{(current: string) => show(current)}</SelectValue>
       </SelectTrigger>
       <SelectContent>

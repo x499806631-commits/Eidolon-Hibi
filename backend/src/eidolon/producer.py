@@ -58,6 +58,30 @@ def is_birthday(birthday: Birthday, today: date) -> bool:
     )
 
 
+Elder = Literal["her", "producer"]
+"""Who is the elder of the two sworn as sisters (or siblings): she, or the producer."""
+
+
+@dataclass(frozen=True)
+class Ties:
+    """What the producer asked of one character alone (GLOSSARY.md「拜托」), kept from then
+    on: how she calls them, in place of the profile's (`address`), and whether they are sworn
+    sisters, and who is the elder (`bond`); and, for a few days after another made peace
+    between them (GLOSSARY.md「托人和好」), who did (`made_up_by`, her name)."""
+
+    address: str | None = None
+    bond: Elder | None = None
+    made_up_by: str | None = None
+
+
+def bond_words(bond: Elder, gender: "Gender | None") -> tuple[str, str]:
+    """What the two sworn are, and what the producer is to her: (义姐妹, 姐姐) and the like."""
+    female = gender == "female"
+    if bond == "producer":
+        return ("义姐妹" if female else "义兄妹"), ("姐姐" if female else "哥哥")
+    return ("义姐妹" if female else "义兄妹"), ("妹妹" if female else "弟弟")
+
+
 @dataclass(frozen=True)
 class ProducerProfile:
     form_of_address: str | None = None
@@ -94,10 +118,16 @@ def local_date(now: datetime, timezone: str) -> date:
     return now.astimezone(ZoneInfo(timezone)).date()
 
 
-def producer_prompt(profile: ProducerProfile) -> str:
-    """The prompt section about the user: who they are, the same from turn to turn."""
+def producer_prompt(profile: ProducerProfile, ties: Ties | None = None) -> str:
+    """The prompt section about the user: who they are, the same from turn to turn; with
+    what they asked of her alone (`ties`), the way she calls them and their bond."""
     lines = ["# 制作人", "和你对话的是你的制作人，也就是 283 事务所的制作人。"]
-    if profile.form_of_address:
+    if ties is not None and ties.address:
+        lines.append(
+            f"制作人拜托过你，以后叫对方「{ties.address}」，这是只属于你们俩的叫法。"
+            "对方仍然是你的制作人；照你自己的性格和习惯，平时就这样称呼。"
+        )
+    elif profile.form_of_address:
         lines.append(
             f"制作人希望你称呼对方为「{profile.form_of_address}」。这只是叫法，"
             "对方仍然是你的制作人；请按你自己的性格和习惯，在合适的时候这样称呼。"
@@ -109,6 +139,19 @@ def producer_prompt(profile: ProducerProfile) -> str:
         )
     else:
         lines.append("制作人是男性，和原作一致。")
+    if ties is not None and ties.bond:
+        pair, producer_is = bond_words(ties.bond, profile.gender)
+        you_are = "妹妹" if ties.bond == "producer" else "姐姐"
+        lines.append(
+            f"你和制作人结拜成了{pair}，制作人是你的{producer_is}，你是{you_are}。"
+            "这是你们俩郑重许下的约定，你一直记得、很珍惜；工作上对方仍然是你的制作人，"
+            "私下相处时照你的性格，自然地带着这份亲近，偶尔以这个身份说话。"
+        )
+    if ties is not None and ties.made_up_by:
+        lines.append(
+            f"前几天你和制作人闹得不太愉快，后来{ties.made_up_by}替制作人来找你说情，你们已经和好了。"
+            "你原谅了制作人，也想过自己有不对的地方；照你的性格，别扭也好坦率也好，别再翻旧账。"
+        )
     if profile.birthday:
         lines.append(
             f"制作人的生日是{profile.birthday.month}月{profile.birthday.day}日，"
