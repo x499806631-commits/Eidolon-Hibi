@@ -5,7 +5,10 @@ went wrong, 404 for no such character or diary page. What each kind does is `tic
 The photo ticket names an outfit from her outfit list (`outfit_id`, with the card's name and
 whether it is her everyday clothes or its stage costume), or one described (`described`), or
 neither, for her to choose; an outfit from the list is drawn with its tags where the
-deployment can read them (`outfit_tags`), else she is told the card's name."""
+deployment can read them (`outfit_tags`), else she is told the card's name.
+
+Under the development sign-in only (`EIDOLON_DEV_LOGIN=1`), `POST /api/tickets/dev-grant`
+gives the user tickets and gifts at once, to try them out without drawing for them."""
 
 from collections.abc import Awaitable, Callable
 from datetime import date
@@ -48,8 +51,30 @@ class DiaryPage(BaseModel):
     entry_id: int
 
 
+class Grant(BaseModel):
+    """Under the development sign-in: tickets by kind and gifts by identifier, how many."""
+
+    tickets: dict[TicketKind, int] = Field(default_factory=dict)
+    gifts: dict[str, int] = Field(default_factory=dict)
+
+
 def add_ticket_routes(app: FastAPI, backend: Backend) -> None:
     gifts, trip_photos = backend.gifts, backend.trip_photos
+
+    if backend.settings.dev_login:
+
+        @app.post("/api/tickets/dev-grant")
+        async def dev_grant(user_id: UserId, body: Grant) -> dict:
+            """Give the user tickets and gifts at once, to try them out: their state now."""
+            unknown = [g for g in body.gifts if g not in backend.gift_catalog]
+            if unknown:
+                raise HTTPException(404, f"没有这些礼物：{'、'.join(unknown)}")
+            for kind, count in body.tickets.items():
+                for _ in range(max(0, min(count, 20))):
+                    gifts.put_back_ticket(user_id, kind)
+            for gift_id, count in body.gifts.items():
+                gifts.put_back_gifts(user_id, [gift_id] * max(0, min(count, 20)))
+            return gifts.state(user_id).shown()
 
     @app.exception_handler(NoTickets)
     @app.exception_handler(NoConversation)

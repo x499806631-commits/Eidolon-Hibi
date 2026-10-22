@@ -239,3 +239,19 @@ async def test_a_date_today_or_too_far_is_refused_and_the_ticket_kept(
 
     assert today.status_code == far.status_code == 409
     assert (await state(client))["tickets"] == [{"kind": "date", "count": 1}]
+
+
+async def test_under_the_development_sign_in_tickets_and_gifts_are_given_at_once(
+    make_client: ClientFactory, settings: Settings
+):
+    client, _, _ = await talked(make_client)
+
+    given = await client.post("/api/tickets/dev-grant", json={
+        "tickets": {"favor": 2, "photo": 1}, "gifts": {"cake": 2, "coffee": 1},
+    })
+    unknown = await client.post("/api/tickets/dev-grant", json={"gifts": {"no-such": 1}})
+
+    assert given.status_code == 200, given.text
+    assert {t["kind"]: t["count"] for t in given.json()["tickets"]} == {"favor": 2, "photo": 1}
+    assert {g["gift_id"]: g["count"] for g in given.json()["backpack"]} == {"cake": 2, "coffee": 1}
+    assert unknown.status_code == 404
