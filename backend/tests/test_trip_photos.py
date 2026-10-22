@@ -271,12 +271,26 @@ def test_the_producer_in_a_photo_is_the_p_headed_producer_in_a_suit_or_a_skirt_s
     hers = group_prompt([mano], tag, producer="female")
 
     assert no.you is None and read_tag("shot: other").you is None
-    assert his.positive.startswith("1girl, 1boy, ") and "exactly 1 girl and 1 boy" in his.positive
-    assert his.characters[1] == "boy, p-head producer, black suit, white shirt, red necktie, peace sign"
-    assert hers.positive.startswith("2girls, ")
-    assert hers.characters[1].startswith("girl, p-head producer, 1.5::genderswap (mtf)::, black skirt suit")
+    assert his.positive.startswith("1girl, 1other, ")
+    assert "exactly 1 girl and the p-head producer" in his.positive
+    assert his.characters[1] == (
+        "1.3::p-head producer::, faceless, black suit, white shirt, red necktie, peace sign"
+    )
+    assert hers.positive.startswith("1girl, 1other, ")
+    p_head, genderswap = hers.characters[1].index("1.5::p-head"), hers.characters[1].index("1.2::genderswap")
+    assert p_head < genderswap and "black skirt suit" in hers.characters[1]
     assert his.size == GROUP_SIZE
     assert read_tag("shot: other\nyou: yes").you == ("standing",)
+
+
+def test_the_deployer_may_write_the_producers_look_their_own_way(monkeypatch: pytest.MonkeyPatch):
+    mano = Character("mano", "櫻木真乃", "", "v", "", None, "#ffbad6",
+                     photo_tag="sakuragi mano", photo_appearance="brown hair")
+    monkeypatch.setenv("EIDOLON_PRODUCER_LOOK_FEMALE", " 2::p-head producer::,  skirt suit , ")
+
+    hers = group_prompt([mano], read_tag("shot: selfie\nyou: yes, waving"), producer="female")
+
+    assert hers.characters[1] == "2::p-head producer::, skirt suit, waving"
 
 
 async def test_a_trip_photo_never_has_the_producer_in_it_whatever_she_writes(
@@ -308,4 +322,4 @@ async def test_a_day_out_can_be_told_of_at_once_to_try_it_with_the_producer_in_t
     assert told.status_code == 201, told.text
     [request] = image.requests
     body = json.dumps(request["body"])
-    assert "p-head producer" in body and "1boy" in body and "genderswap" not in body
+    assert "p-head producer" in body and "genderswap" not in body

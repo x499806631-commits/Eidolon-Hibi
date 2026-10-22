@@ -33,6 +33,7 @@ fixed altogether: `nsfw`, the Human Focus preset, and what no photo of hers show
 
 import json
 import logging
+import os
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -196,14 +197,26 @@ _ONE_OF_THEM = re.compile(r"^\s*([A-Za-z][A-Za-z_-]*)\s*[:：]\s*(.*)$")
 
 ProducerLook = Literal["male", "female"]
 """How the producer is drawn: the P-headed producer, in a suit or, a woman, a skirt suit."""
-PRODUCER_LOOKS: dict[ProducerLook, tuple[str, ...]] = {
-    "male": ("boy", "p-head producer", "black suit", "white shirt", "red necktie"),
+PRODUCER_LOOKS: dict[ProducerLook, str] = {
+    "male": "1.3::p-head producer::, faceless, black suit, white shirt, red necktie",
     "female": (
-        "girl", "p-head producer", "1.5::genderswap (mtf)::", "black skirt suit",
-        "pencil skirt", "white shirt", "red necktie",
+        "1.5::p-head producer::, faceless, 1.2::genderswap (mtf)::, black skirt suit, "
+        "pencil skirt, white shirt, red necktie"
     ),
 }
-"""The producer's own character prompt, before what they do: never a face, the P for a head."""
+"""The producer's own character prompt, before what they do: never a face, the P for a
+head, its weight above the genderswap's so that a woman producer keeps it. The deployer
+may write their own in `EIDOLON_PRODUCER_LOOK_MALE` / `EIDOLON_PRODUCER_LOOK_FEMALE`
+(written in as it is, weights and all)."""
+
+
+def producer_look(look: ProducerLook) -> str:
+    """The producer's character prompt for `look`: the deployer's own if set, else
+    `PRODUCER_LOOKS`'s."""
+    own = os.environ.get(f"EIDOLON_PRODUCER_LOOK_{look.upper()}", "")
+    return " ".join(own.split()).strip(" ,") or PRODUCER_LOOKS[look]
+
+
 PRODUCER_DOING = ("standing",)
 """What the producer does in a photo where she wrote nothing of it."""
 
@@ -264,11 +277,11 @@ def group_prompt(
         action = (*action, LOOKING_AT_VIEWER)
     n = len(characters)
     everyone = n + with_you
-    girls = n + (with_you and producer == "female")
-    girls_said = f"{girls}girl" + ("s" if girls > 1 else "")
-    boy = with_you and producer == "male"
-    counts = (girls_said, *(("1boy",) if boy else ()))
-    exactly = f"exactly {girls} girl{'s' if girls > 1 else ''}" + (" and 1 boy" if boy else "")
+    girls = f"{n}girl" + ("s" if n > 1 else "")
+    counts = (girls, *(("1other",) if with_you else ()))
+    exactly = f"exactly {n} girl{'s' if n > 1 else ''}" + (
+        " and the p-head producer" if with_you else ""
+    )
     base = (
         *counts, WORK_TAG, *_styled(style), *_shot_tags(tag.shot),
         group_framing(tag.framing, everyone),
@@ -285,7 +298,7 @@ def group_prompt(
         for i, c in enumerate(characters)
     ]
     if tag.you is not None:
-        each.append(", ".join((*PRODUCER_LOOKS[producer], *tag.you)))
+        each.append(", ".join((producer_look(producer), *tag.you)))
     return ImagePrompt(
         ", ".join(base), _negative(NEGATIVE_PROMPT, style, tag.writing), GROUP_SIZE,
         tuple(each),

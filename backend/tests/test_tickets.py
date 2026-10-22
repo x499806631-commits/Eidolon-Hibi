@@ -254,7 +254,7 @@ async def test_on_a_date_she_may_have_the_producer_in_her_photo_as_their_profile
     [request] = image.requests
     sent = json.dumps(request["body"], ensure_ascii=False)
     assert "p-head producer" in sent and "genderswap (mtf)" in sent and "holding hands" in sent
-    assert "2girls" in sent
+    assert "1girl, 1other" in sent
 
 
 async def test_a_date_today_or_too_far_is_refused_and_the_ticket_kept(
