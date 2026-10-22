@@ -2,13 +2,26 @@
 
 import { useEffect, useState } from "react";
 
+import { FailureNotice } from "@/components/app/FailureNotice";
 import { MarkedAvatar } from "@/components/app/MarkedAvatar";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { copy } from "@/i18n";
 import type { Character } from "@/lib/api";
-import { getKeepsake, givenOn, keepsakeImageUrl, type Keepsake } from "@/lib/keepsakes";
+import { toFailure, type Failure } from "@/lib/failure";
+import { getKeepsake, givenOn, keepsakeImageUrl, redrawKeepsake, removeKeepsake, type Keepsake } from "@/lib/keepsakes";
 import { cn } from "@/lib/utils";
 import { herVars } from "@/theme/herVars";
 import { Ja } from "@/theme/Ja";
@@ -70,17 +83,32 @@ export function KeepsakeDetail({
   isWide,
   onClose,
   onChat,
+  canDraw = false,
+  onChanged,
+  onRemoved,
 }: {
   keepsake: Keepsake | null;
   her?: Character;
   isWide: boolean;
   onClose: () => void;
   onChat?: (her: Character) => void;
+  /** 有生图时可以「重画这张图」（柜子里才给）。 */
+  canDraw?: boolean;
+  onChanged?: (keepsake: Keepsake) => void;
+  /** 给了才有「拿出柜子」。 */
+  onRemoved?: (id: number) => void;
 }) {
   const open = keepsake !== null;
   const onOpenChange = (isOpen: boolean) => !isOpen && onClose();
   const body = keepsake && (
-    <KeepsakeBody keepsake={keepsake} her={her} onChat={onChat} />
+    <KeepsakeBody
+      keepsake={keepsake}
+      her={her}
+      onChat={onChat}
+      canDraw={canDraw}
+      onChanged={onChanged}
+      onRemoved={onRemoved}
+    />
   );
   const title = keepsake?.name ?? "";
   const description = keepsake && her ? t.from(her.name) : "";
@@ -114,12 +142,36 @@ function KeepsakeBody({
   keepsake,
   her,
   onChat,
+  canDraw,
+  onChanged,
+  onRemoved,
 }: {
   keepsake: Keepsake;
   her?: Character;
   onChat?: (her: Character) => void;
+  canDraw: boolean;
+  onChanged?: (keepsake: Keepsake) => void;
+  onRemoved?: (id: number) => void;
 }) {
   const { year, month, day } = givenOn(keepsake);
+  const [isRedrawing, setRedrawing] = useState(false);
+  const [isConfirming, setConfirming] = useState(false);
+  const [failure, setFailure] = useState<Failure | null>(null);
+  const redraw = () => {
+    setRedrawing(true);
+    setFailure(null);
+    redrawKeepsake(keepsake.id).then(
+      (k) => onChanged?.(k),
+      (e) => setFailure(toFailure(e)),
+    ).finally(() => setRedrawing(false));
+  };
+  const remove = () => {
+    removeKeepsake(keepsake.id).then(
+      () => onRemoved?.(keepsake.id),
+      (e) => setFailure(toFailure(e)),
+    );
+  };
+  const tools = (canDraw && onChanged) || onRemoved;
   return (
     <div className="flex flex-col gap-4">
       <div className="mx-auto w-full max-w-72">
@@ -132,13 +184,41 @@ function KeepsakeBody({
       </div>
       {keepsake.look && <p className="text-body">{keepsake.look}</p>}
       <Said keepsake={keepsake} />
-      {her && onChat && (
-        <div className="flex justify-end">
-          <Button variant="outline" size="sm" onClick={() => onChat(her)}>
-            {t.goChat}
-          </Button>
+      {failure && <FailureNotice failure={failure} />}
+      {(tools || (her && onChat)) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {canDraw && onChanged && (
+            <Button variant="outline" size="sm" disabled={isRedrawing} onClick={redraw}>
+              {isRedrawing && <Spinner data-icon="inline-start" />}
+              {isRedrawing ? t.redrawing : t.redraw}
+            </Button>
+          )}
+          {onRemoved && (
+            <Button variant="ghost" size="sm" disabled={isRedrawing} onClick={() => setConfirming(true)}>
+              {t.remove}
+            </Button>
+          )}
+          {her && onChat && (
+            <Button variant="outline" size="sm" className="ml-auto" onClick={() => onChat(her)}>
+              {t.goChat}
+            </Button>
+          )}
         </div>
       )}
+      <AlertDialog open={isConfirming} onOpenChange={setConfirming}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t.removeConfirm.title(keepsake.name)}</AlertDialogTitle>
+            <AlertDialogDescription>{t.removeConfirm.description}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t.removeConfirm.cancel}</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={remove}>
+              {t.removeConfirm.confirm}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

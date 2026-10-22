@@ -1917,6 +1917,15 @@ export const zh = {
     fillHint: "用部署者的生图服务把还没有图的纪念品画出来，每张都会用掉一些额度。",
     cannotDraw: (count: number) => `${count} 件还没有图，配好生图服务以后可以在这里一键补上。`,
     goChat: "去找她",
+    redraw: "重画这张图",
+    redrawing: "正在重画",
+    remove: "拿出柜子",
+    removeConfirm: {
+      title: (name: string) => `把「${name}」拿出纪念品柜？`,
+      description: "柜子里和对话里的这张礼物卡都会去掉，拿掉以后找不回来。",
+      cancel: "留着",
+      confirm: "拿出柜子",
+    },
     /** 信里附赠的礼物上方一行。 */
     attached: "随信附上的礼物",
   },

@@ -26,6 +26,8 @@ export type Keepsake = {
   letter_id: number | null;
   given_at: string;
   seen: boolean;
+  /** 图重画过几次：每次一个新地址，浏览器不会拿旧图。 */
+  drawn: number;
 };
 
 export type Cabinet = {
@@ -56,7 +58,18 @@ export async function fillImages(): Promise<Cabinet & { started: boolean }> {
 
 /** 它的图；有图（`has_image`）时才有。 */
 export function keepsakeImageUrl(keepsake: Keepsake): string {
-  return `/api/keepsakes/${keepsake.id}/image`;
+  const base = `/api/keepsakes/${keepsake.id}/image`;
+  return keepsake.drawn ? `${base}?v=${keepsake.drawn}` : base;
+}
+
+/** 把这件的图重画一张（按现在的写法），给回重画后的它。 */
+export async function redrawKeepsake(id: number): Promise<Keepsake> {
+  return json(await api(`/api/keepsakes/${id}/redraw`, { method: "POST" }));
+}
+
+/** 从柜子里拿掉，对话里那张礼物卡也一起去掉。 */
+export async function removeKeepsake(id: number): Promise<void> {
+  await expectNoContent(await api(`/api/keepsakes/${id}`, { method: "DELETE" }));
 }
 
 async function getUnseen(): Promise<number> {

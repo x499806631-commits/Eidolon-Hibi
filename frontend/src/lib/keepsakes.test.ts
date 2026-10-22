@@ -16,6 +16,7 @@ function keepsake(id: number, characterId: string, at = "2026-10-20T10:00:00Z"):
     letter_id: null,
     given_at: at,
     seen: false,
+    drawn: 0,
   };
 }
 

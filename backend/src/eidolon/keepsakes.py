@@ -32,6 +32,7 @@ carry them.
 
 import asyncio
 import json
+import re
 import logging
 import sqlite3
 import threading
@@ -47,11 +48,11 @@ from eidolon.activity import ActivityLog, image_origin, timed
 from eidolon.characters import Character
 from eidolon.clock import Clock
 from eidolon.database import connect
-from eidolon.engine import ConversationEngine, KeepsakeDraft
+from eidolon.engine import ConversationEngine, KeepsakeDraft, describe_keepsake
 from eidolon.features import AllOn, Switches
 from eidolon.image_generation import TIME_LIMIT, ImageFailed
 from eidolon.live_config import LiveConfig
-from eidolon.photo_prompt import keepsake_prompt
+from eidolon.photo_prompt import SCENE_MARK, keepsake_prompt
 from eidolon.producer import effective_timezone, is_birthday
 from eidolon.promises import Promise
 from eidolon.randomness import Random
@@ -83,6 +84,9 @@ PROMISE_ODDS = 4
 HOLIDAY_ODDS = 3
 ANYWAY: frozenset[Occasion] = frozenset({"scene", "birthday", "bond", "party"})
 """What she gives whatever the day's number."""
+
+_WORDS_KEPT = re.compile(r'"[^"]*"(?:\s*@\s*[^,，、|]*)?')
+"""The words written on a keepsake, as they are kept among its tags (`keepsake_words`)."""
 
 TIER_NAMES = {"close": "第一次走到了「亲近」", "intimate": "第一次走到了「亲密」"}
 
@@ -144,6 +148,8 @@ class Keepsake:
     letter_id: int | None
     given_at: str
     seen: bool
+    drawn: int = 0
+    """How many times its picture was drawn again: a new address for each, for browsers."""
 
     def shown(self) -> dict:
         return {
@@ -159,6 +165,7 @@ class Keepsake:
             "letter_id": self.letter_id,
             "given_at": self.given_at,
             "seen": self.seen,
+            "drawn": self.drawn,
         }
 
 
@@ -208,6 +215,8 @@ class Keepsakes:
         self._lock = threading.Lock()
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
+            if "drawn" not in {r[1] for r in self._db.execute("PRAGMA table_info(keepsakes)")}:
+                self._db.execute("ALTER TABLE keepsakes ADD COLUMN drawn INTEGER NOT NULL DEFAULT 0")
 
     def on_given(self, listener: Callable[[str, str, str, datetime], None]) -> None:
         """Have `listener` told the user, the character, the keepsake's name and when, as she
@@ -549,6 +558,68 @@ class Keepsakes:
                 (now.isoformat(), user_id, now.astimezone(UTC).isoformat()),
             )
 
+    # Redrawing and taking out.
+
+    async def redraw(self, user_id: str, keepsake_id: int) -> bool:
+        """Draw the keepsake's picture again, in place of the one it has; one given before she
+        described it in a sentence is described anew first, on the deployer's chat model,
+        from its name and look. False if there is no such keepsake of the user's, nothing to
+        draw on, or the picture could not be drawn (the old one kept then)."""
+        if not self.can_draw(user_id):
+            return False
+        with self._lock:
+            row = self._db.execute(
+                "SELECT character_id, name, look, tags FROM keepsakes WHERE id = ? AND user_id = ?",
+                (keepsake_id, user_id),
+            ).fetchone()
+        if row is None:
+            return False
+        character_id, name, look, tags = row
+        recording = self._activity.begin(
+            "keepsake", user_id, character_id, own_llm=False, exempt=False
+        )
+        try:
+            with recording.current():
+                if SCENE_MARK not in tags:
+                    lease = self._config.lease()
+                    try:
+                        words = _WORDS_KEPT.search(tags)
+                        tags = await describe_keepsake(lease.keys.chat_llm, name, look)
+                        if words:
+                            head, mark, scene = tags.partition(SCENE_MARK)
+                            tags = f"{head}, {words.group(0)}{mark}{scene}"
+                    finally:
+                        lease.release()
+                image = await self._draw(user_id, tags)
+        except Exception as e:
+            log.warning("redrawing keepsake %s failed: %s", keepsake_id, type(e).__name__)
+            image = None
+        recording.finish("success" if image else "failed")
+        if image is None:
+            return False
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE keepsakes SET image = ?, tags = ?, drawn = drawn + 1"
+                " WHERE id = ? AND user_id = ?",
+                (image, tags, keepsake_id, user_id),
+            )
+        return True
+
+    def take_out(self, user_id: str, keepsake_id: int) -> bool:
+        """Take the keepsake out of the cabinet, and its card out of the conversation it was
+        given in; False if there is no such keepsake of the user's."""
+        with self._lock, self._db:
+            cursor = self._db.execute(
+                "DELETE FROM keepsakes WHERE id = ? AND user_id = ?", (keepsake_id, user_id)
+            )
+            if cursor.rowcount == 0:
+                return False
+            self._db.execute(
+                "DELETE FROM conversation_events WHERE kind = 'keepsake' AND keepsake_id = ?",
+                (keepsake_id,),
+            )
+        return True
+
     # Drawing the pictures missing.
 
     def missing(self, user_id: str) -> int:
@@ -605,17 +676,17 @@ class Keepsakes:
 
 _COLUMNS = (
     "id, character_id, occasion, about, name, look, emoji, said, image IS NOT NULL AS has_image,"
-    " letter_id, given_at, seen_at"
+    " letter_id, given_at, seen_at, drawn"
 )
 
 
 def _keepsake(row: Sequence) -> Keepsake:
     (id, character_id, occasion, about, name, look, emoji, said, has_image, letter_id,
-     given_at, seen_at) = row
+     given_at, seen_at, drawn) = row
     return Keepsake(
         id, character_id, occasion, about, name, look, emoji,
         [Segment(s["ja"], s["zh"]) for s in json.loads(said)], bool(has_image), letter_id,
-        given_at, seen_at is not None,
+        given_at, seen_at is not None, drawn,
     )
 
 

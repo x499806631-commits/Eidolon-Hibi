@@ -336,3 +336,41 @@ async def test_with_its_pictures_switched_off_it_still_comes_without_one_and_non
     assert shown["keepsakes"][0]["has_image"] is False
     assert (shown["missing"], shown["can_draw"]) == (0, False)
     assert (await client.post("/api/keepsakes/fill-images")).json()["started"] is False
+
+
+async def test_one_given_before_its_sentence_is_described_anew_and_redrawn(
+    make_client: ClientFactory, settings: Settings
+):
+    image = FakeImageService()
+    described = [
+        "what: bookmark\ntags: four-leaf clover, pink ribbon\n"
+        "scene: A clear bookmark with a pressed four-leaf clover lies on a desk."
+    ]
+    client, _, _ = await talked(make_client, settings, GIVES, described, image=image)
+    await client.post("/api/keepsakes/give-now", json={"character_id": "mano"})
+    [given] = (await cabinet(client))["keepsakes"]
+
+    redrawn = await client.post(f"/api/keepsakes/{given['id']}/redraw")
+
+    assert redrawn.status_code == 200, redrawn.text
+    assert redrawn.json()["drawn"] == 1 and given["drawn"] == 0
+    assert "A clear bookmark with a pressed four-leaf clover lies on a desk" in (
+        image.requests[-1]["body"]["input"]
+    )
+    assert (await client.post("/api/keepsakes/999/redraw")).status_code == 404
+
+
+async def test_taken_out_it_leaves_the_cabinet_and_the_conversation(
+    make_client: ClientFactory, settings: Settings
+):
+    client, _, conversation = await talked(make_client, settings, GIVES)
+    await client.post("/api/keepsakes/give-now", json={"character_id": "mano"})
+    [given] = (await cabinet(client))["keepsakes"]
+
+    taken = await client.delete(f"/api/keepsakes/{given['id']}")
+    other = make_client(FakeLLM(), user="someone")
+
+    assert taken.status_code == 204
+    assert (await cabinet(client))["keepsakes"] == []
+    assert [e for e in await record(client, conversation) if e.get("type") == "event"] == []
+    assert (await other.delete(f"/api/keepsakes/{given['id']}")).status_code == 404

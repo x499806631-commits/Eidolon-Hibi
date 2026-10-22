@@ -718,6 +718,38 @@ class KeepsakeDraft:
     said: list[Segment]
 
 
+DESCRIBE_KEEPSAKE_RULES = """你在给一张静物插画写英文提示词。画的是一件小东西：
+名字：{name}
+样子：{look}
+只写下面三行，不写别的：
+what: 它是什么，一到三个英文单词的普通名词，画得出来的那种，例如 bird figurine、bookmark
+tags: 3–5 个英文 tag，补充它的样子、材质、颜色，可以加一个放置的地方（例如 on wooden table）
+scene: 一句英文，把这件东西完整地描述一遍：是什么、什么做的、什么颜色和形状、放在哪里；主语就是这件东西，不写否定，不用比喻，没有人"""
+"""How a keepsake given before her sentences were asked for is described again, to be redrawn."""
+
+
+async def describe_keepsake(llm: ChatLLM, name: str, look: str) -> str:
+    """A keepsake's picture prompt written anew from its name and look (`DESCRIBE_KEEPSAKE_RULES`),
+    as `read_keepsake` keeps it: what it is and the tags, then `SCENE_MARK` and the sentence.
+    Raises EmptyReply if nothing usable comes back."""
+    prompt = [
+        ChatMessage("system", DESCRIBE_KEEPSAKE_RULES.format(name=name, look=look or name)),
+        ChatMessage("user", "写吧。"),
+    ]
+    answer = "".join([item async for item in llm.stream(prompt) if isinstance(item, str)])
+    fields: dict[str, str] = {}
+    for line in answer.splitlines():
+        key, colon, value = line.partition(":")
+        if colon:
+            fields.setdefault(key.strip().lower().lstrip("-* "), value.strip())
+    what, tags, scene = fields.get("what", "")[:60], fields.get("tags", "")[:300], fields.get("scene", "")
+    if not (what or tags):
+        raise EmptyReply("对话模型没有写出提示词")
+    written = ", ".join(t for t in (what, tags) if t)
+    scene = scene.replace(SCENE_MARK.strip(), " ").strip()[:300]
+    return f"{written}{SCENE_MARK}{scene}" if scene else written
+
+
 MAX_KEEPSAKE_NAME = 20
 _KEEPSAKE_TAG = re.compile(r"<keepsake>(.*?)</keepsake>", re.DOTALL)
 

@@ -4,7 +4,9 @@ whether they are being drawn and whether they can be (`/api/keepsakes`); one kee
 (`/api/keepsakes/{id}`) and its picture (`/api/keepsakes/{id}/image`, 404 without one); how
 many the user has not seen yet (`/api/keepsakes/unseen`, for the dot on the navigation) and
 seeing them all (`POST /api/keepsakes/seen`, the cabinet opened); and drawing the pictures
-missing, one at a time, on the deployer's image generation (`POST /api/keepsakes/fill-images`).
+missing, one at a time, on the deployer's image generation (`POST /api/keepsakes/fill-images`);
+drawing one's picture again (`POST /api/keepsakes/{id}/redraw`) and taking one out of the
+cabinet, its card in the conversation with it (`DELETE /api/keepsakes/{id}`).
 To anyone but the user they were given to, there is no such keepsake (404).
 
 Under the development sign-in only (`EIDOLON_DEV_LOGIN=1`), `POST /api/keepsakes/give-now` has
@@ -73,6 +75,27 @@ def add_keepsake_routes(app: FastAPI, backend: Backend) -> None:
         if image is None:
             raise HTTPException(404, NOT_FOUND)
         return Response(image, media_type="image/webp", headers=_CACHE)
+
+    @app.post("/api/keepsakes/{keepsake_id}/redraw")
+    async def redraw(keepsake_id: int, user_id: UserId) -> dict:
+        """Its picture drawn again: the keepsake as it is now. 404 for none of the user's,
+        409 where nothing draws, 502 where the picture could not be drawn."""
+        if keepsakes.one(user_id, keepsake_id) is None:
+            raise HTTPException(404, "没有这件纪念品")
+        if not keepsakes.can_draw(user_id):
+            raise HTTPException(409, "现在没有生图服务，画不了")
+        if not await keepsakes.redraw(user_id, keepsake_id):
+            raise HTTPException(502, "这次没画出来，稍后再试")
+        kept = keepsakes.one(user_id, keepsake_id)
+        assert kept is not None
+        return kept.shown()
+
+    @app.delete("/api/keepsakes/{keepsake_id}", status_code=204)
+    def take_out(keepsake_id: int, user_id: UserId) -> Response:
+        """Out of the cabinet, and its card out of the conversation; 404 for none of the user's."""
+        if not keepsakes.take_out(user_id, keepsake_id):
+            raise HTTPException(404, "没有这件纪念品")
+        return Response(status_code=204)
 
     if backend.settings.dev_login:
 

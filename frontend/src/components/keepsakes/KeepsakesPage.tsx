@@ -135,6 +135,15 @@ export function KeepsakesPage() {
         isWide={isWide}
         onClose={() => setOpen(null)}
         onChat={chat}
+        canDraw={cabinet?.can_draw ?? false}
+        onChanged={(k) => {
+          setOpen(k);
+          setCabinet((before) => before && { ...before, keepsakes: before.keepsakes.map((x) => (x.id === k.id ? k : x)) });
+        }}
+        onRemoved={(id) => {
+          setOpen(null);
+          setCabinet((before) => before && { ...before, keepsakes: before.keepsakes.filter((x) => x.id !== id) });
+        }}
       />
     </PageShell>
   );
