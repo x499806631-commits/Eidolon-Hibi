@@ -220,7 +220,7 @@ shadcn 纪律检查通过，前后端全部测试通过。
 ### 朗读和本地语音
 
 - **朗读**：她每条说完的消息旁边有个小喇叭，点了用她的声音念这一条。念过的会留着，再点不花钱。念消息用的语音和 Fish 模型可以和通话不一样（比如通话用 Drama 3，念消息用 S2.1 Pro）。
-- **本地语音**：通话和念消息都能改用自己电脑上的 GPT-SoVITS，各自在后台「语音合成」里切换。每位偶像的参考音频和权重写在 `local-voices/voices.toml`（不进仓库），写法见 [docs/configuration.md](docs/configuration.md#朗读和本地语音)。没配的偶像仍用 Fish Audio。
+- **本地语音**：通话和念消息都能改用自己电脑上的 GPT-SoVITS，各自切换：在设置「通话」最下面的「语音合成」（部署者才看得到：管理者，或开着开发登录的本地部署），或后台「语音合成」。每位偶像的参考音频和权重写在 `local-voices/voices.toml`（不进仓库），写法见 [docs/configuration.md](docs/configuration.md#朗读和本地语音)。没配的偶像仍用 Fish Audio。
 
 ### ASMR 模式通话
 

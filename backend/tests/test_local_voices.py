@@ -238,3 +238,22 @@ async def test_a_call_on_gpt_sovits_announces_each_segment_ahead_of_its_audio(tm
     assert said == ["ほわっ。", "今日も。"]
     assert order[0] == "playing 0" and "playing 1" in order
     assert order.index("playing 1") > order.index("audio")
+
+
+async def test_the_deployer_switches_voices_from_their_own_settings(
+    make_client: ClientFactory, speech: FakeSpeech, settings: Settings
+):
+    speech.local_voices = {"mano"}
+    client = make_client(FakeLLM())
+
+    before = (await client.get("/api/voice-settings")).json()
+    saved = await client.put("/api/voice-settings", json={
+        "engine": "fish", "model": "drama-3", "read_engine": "fish", "read_model": "s2.1-pro",
+    })
+    elsewhere = make_client(FakeLLM(), settings=replace(settings, dev_login=False))
+
+    assert before["read_engine"] == "same" and before["fish_key"] is True
+    assert before["local_voices"] == ["mano"]
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["read_model"] == "s2.1-pro" and saved.json()["model"] == "drama-3"
+    assert (await elsewhere.get("/api/voice-settings")).status_code == 403

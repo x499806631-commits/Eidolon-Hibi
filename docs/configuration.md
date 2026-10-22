@@ -182,7 +182,7 @@ READ_VOICE_ENGINE=same        # same（和通话一样，默认）、fish、gpt_
 FISH_AUDIO_READ_MODEL=same    # 念消息用 Fish Audio 时的模型；same 是和通话一样
 ```
 
-后台「配置 → 语音」的「语音合成」里也能随时改，不用重启。
+后台「配置 → 语音」的「语音合成」里也能随时改，不用重启。没有后台的本地部署（开着 `EIDOLON_DEV_LOGIN=1`），在设置「通话」最下面的「语音合成（整个部署）」里改，效果一样。
 
 ### 本地语音（GPT-SoVITS）
 

@@ -16,12 +16,18 @@ import { SettingsPane } from "@/components/settings/SettingsPane";
 import { SignInSettings } from "@/components/SignInSettings";
 import { SignOutSettings } from "@/components/SignOutSettings";
 import { StatsSettings } from "@/components/StatsSettings";
+import { VoiceSettingsSection } from "@/components/VoiceSettingsSection";
 import type { SettingsCategory } from "@/lib/settingsCategory";
 
 /** 各类二级页面的内容，按 spec「设置：二级」。记忆和统计自己带页首末端的「清空」「分享」，整页由它们画。 */
 const PANELS: Record<Exclude<SettingsCategory, "memories" | "experiences" | "stats">, ReactNode> = {
   profile: <ProducerProfileSettings />,
-  call: <CallSettings />,
+  call: (
+    <>
+      <CallSettings />
+      <VoiceSettingsSection />
+    </>
+  ),
   "reach-outs": <ReachOutsSettings />,
   features: <FeaturesSettings />,
   appearance: <AppearanceSettings />,

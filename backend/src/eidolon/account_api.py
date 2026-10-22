@@ -29,6 +29,7 @@ from pydantic import (
 from eidolon.accounts import SignInRefused, is_admin
 from eidolon.activity import host
 from eidolon.assembly import Backend
+from eidolon.voice_settings_api import may_change as may_change_voice
 from eidolon.config import (
     DEFAULT_FISH_AUDIO_MODEL,
     SERVICES,
@@ -379,7 +380,8 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
         whether they have their own switch for reach-outs on (GLOSSARY.md「搭话」), None where
         the deployer has reach-outs off, the user's own switches for the features the
         deployment has (GLOSSARY.md「玩法开关」), whether her messages can be read aloud
-        (GLOSSARY.md「朗读」), and the version of the sponsor code
+        (GLOSSARY.md「朗读」), whether they may change the deployment's speech synthesis from
+        their settings, and the version of the sponsor code
         (GLOSSARY.md「赞赏」) while users are shown it, else None."""
         switches = backend.features.of(user_id)
         return {
@@ -395,6 +397,7 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
             "features": {f: switches[f] for f in available_features(backend)},
             "web_search": backend.web is not None,
             "read_aloud": backend.read_aloud.available(),
+            "voice_settings": may_change_voice(backend, user_id),
             "sponsor_version": backend.sponsor.state().version,
         }
 

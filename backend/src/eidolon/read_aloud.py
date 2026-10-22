@@ -93,6 +93,10 @@ class ReadAloud:
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
 
+    def has_local_voice(self, character_id: str) -> bool:
+        """Whether she has a voice on the deployer's GPT-SoVITS server."""
+        return self._speech.has_local_voice(character_id)
+
     def available(self) -> bool:
         """Whether there is speech synthesis to read with now."""
         return self._config.read_aloud_voice() is not None

@@ -740,6 +740,25 @@ export const zh = {
       on: "她们会主动搭话",
     },
     /** 玩法开关（GLOSSARY.md「玩法开关」）：每一项的名字和关掉以后会怎样。只影响自己，所有偶像一起。 */
+    /** 设置「通话」最下面的「语音合成」，只有部署者看得到（GLOSSARY.md「朗读」「本地语音」）。 */
+    voice: {
+      title: "语音合成（整个部署）",
+      description: "通话和念消息用什么说话。这里改的是整个部署，所有人都会跟着变；保存前会先试一下，改了马上生效。",
+      engine: "通话用的语音",
+      model: "通话的 Fish 模型",
+      readEngine: "念消息用的语音",
+      readEngineHint: "点她消息旁的小喇叭时用哪个念。",
+      readModel: "念消息的 Fish 模型",
+      engines: { fish: "Fish Audio", gpt_sovits: "GPT-SoVITS（本地）" },
+      same: "和通话一样",
+      url: "GPT-SoVITS 的地址",
+      urlHint: "Docker 里跑时填 http://host.docker.internal:9880。",
+      localVoices: (names: string) => `voices.toml 里配了：${names}；其他人仍用 Fish Audio。`,
+      noLocalVoices: "voices.toml 里还没有配任何人，大家都会用 Fish Audio。",
+      noFishKey: "这个部署没有 Fish Audio 的 key：没配本地声音的偶像说不了话。",
+      save: "保存",
+      saved: "已保存，马上生效",
+    },
     features: {
       intro: "不喜欢的玩法可以关掉。只影响你自己，所有偶像一起生效。",
       within: (parent: string) => `跟着「${parent}」一起关着`,

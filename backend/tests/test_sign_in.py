@@ -69,6 +69,7 @@ async def test_the_first_sign_in_with_github_makes_a_user_and_signs_them_in(
         "features": {"images": True, "photos": True, "anniversaries": True, "promises": True},
         "web_search": True,  # 测试的部署有聊天密钥，搜索就能用
         "read_aloud": True,  # 测试的部署有 Fish Audio 的 key
+        "voice_settings": True,  # 测试的部署开着开发登录
         "sponsor_version": None,
     }
 

@@ -458,6 +458,8 @@ export type Account = {
   web_search: boolean;
   /** 她的消息能不能念出来（GLOSSARY.md「朗读」）：部署配了语音合成。 */
   read_aloud: boolean;
+  /** 能不能在设置「通话」里改整个部署的语音合成：管理者，或开着开发登录的本地部署。 */
+  voice_settings: boolean;
   sponsor_version: string | null;
 };
 
