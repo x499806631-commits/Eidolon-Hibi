@@ -1,16 +1,16 @@
-"""Promises (约定): what the producer said he would do for an idol on a day, and whether he did.
+"""Promises (约定): what the producer said they would do for an idol on a day, and whether they did.
 
 The background model writes them down as it writes memories, from the same answer: 「给冬优子
 一块布丁」 with the day it is for, taken from a date said outright or worked out from 「明天」
 「后天」. A promise for a day already past is dropped, and one already made for that day is kept
 once.
 
-On the day it is for she asks about it (`asking`), at a minute drawn once between `ASK_FROM` and
+On the day it is for she asks about it (`to_ask`, marked `asked` once what she said is kept), at a minute drawn once between `ASK_FROM` and
 midnight of the producer's own day, at the first turn after it — a turn or the reach-out that
 is one. It is fulfilled when the gift of its name is given to her (`by_gift`) or when the user
 says so themselves (`fulfil`), and is deleted the moment it is.
 
-One not fulfilled that day is one she complains of (`complaining`), from the next day on, once a
+One not fulfilled that day is one she complains of (`to_complain`, then `complained`), from the next day on, once a
 day, in her turns and reach-outs alike; it is kept `KEEP_AFTER_COMPLAINT` after she first
 complains and then deleted (`sweep`). Nothing outlives that.
 """
@@ -179,26 +179,39 @@ class Promises:
                     ),
                 )
 
-    def asking(
+    def to_ask(
         self, user_id: str, character_id: str, now: datetime, timezone: str
     ) -> Promise | None:
-        """The promise for today she asks about now, and only now once: whose asking minute
-        has come and that she has not asked about."""
+        """The promise for today she would ask about now, changing nothing: whose asking
+        minute has come and that she has not asked about. Only once what she says is kept is
+        it marked asked (`asked`), so that a turn that fails, a reach-out not sent and a
+        letter written ahead do not use it up."""
         today = now.astimezone(ZoneInfo(timezone)).date().isoformat()
-        with self._lock, self._db:
+        with self._lock:
             row = self._db.execute(
                 "SELECT * FROM promises WHERE user_id = ? AND character_id = ? AND due_on = ?"
                 " AND asked_at IS NULL AND complained_at IS NULL AND ask_at <= ?"
                 " ORDER BY id LIMIT 1",
                 (user_id, character_id, today, now.astimezone(UTC).isoformat()),
             ).fetchone()
-            if row is None:
-                return None
+        return _promise(row) if row is not None else None
+
+    def asked(self, promise_id: int, now: datetime) -> None:
+        """She asked about it at `now`, in what was kept."""
+        with self._lock, self._db:
             self._db.execute(
-                "UPDATE promises SET asked_at = ? WHERE id = ?",
-                (now.astimezone(UTC).isoformat(), row["id"]),
+                "UPDATE promises SET asked_at = COALESCE(asked_at, ?) WHERE id = ?",
+                (now.astimezone(UTC).isoformat(), promise_id),
             )
-        return _promise(row)
+
+    def asking(
+        self, user_id: str, character_id: str, now: datetime, timezone: str
+    ) -> Promise | None:
+        """The promise for today she asks about now, marked asked at once (`to_ask`, `asked`)."""
+        found = self.to_ask(user_id, character_id, now, timezone)
+        if found is not None:
+            self.asked(found.id, now)
+        return found
 
     def awaiting(self, user_id: str, character_id: str, now: datetime) -> Promise | None:
         """The promise she asked about, that the turn taken at `now` may have kept: asked
@@ -213,27 +226,41 @@ class Promises:
             ).fetchone()
         return _promise(row) if row is not None else None
 
-    def complaining(
+    def to_complain(
         self, user_id: str, character_id: str, now: datetime, timezone: str
     ) -> Promise | None:
-        """The promise for a day gone by that she complains of now, at most once a day: the
-        earliest one for a day before today that she has not complained of today."""
+        """The promise for a day gone by she would complain of now, changing nothing: the
+        earliest one for a day before today that she has not complained of today. Marked
+        only once what she says is kept (`complained`)."""
         today = now.astimezone(ZoneInfo(timezone)).date().isoformat()
-        with self._lock, self._db:
+        with self._lock:
             row = self._db.execute(
                 "SELECT * FROM promises WHERE user_id = ? AND character_id = ? AND due_on < ?"
                 " AND (complained_on IS NULL OR complained_on <> ?)"
                 " ORDER BY due_on, id LIMIT 1",
                 (user_id, character_id, today, today),
             ).fetchone()
-            if row is None:
-                return None
+        return _promise(row) if row is not None else None
+
+    def complained(self, promise_id: int, now: datetime, timezone: str) -> None:
+        """She complained of it at `now`, in what was kept: not again that day."""
+        today = now.astimezone(ZoneInfo(timezone)).date().isoformat()
+        with self._lock, self._db:
             self._db.execute(
                 "UPDATE promises SET complained_at = COALESCE(complained_at, ?), complained_on = ?"
                 " WHERE id = ?",
-                (now.astimezone(UTC).isoformat(), today, row["id"]),
+                (now.astimezone(UTC).isoformat(), today, promise_id),
             )
-        return _promise(row)
+
+    def complaining(
+        self, user_id: str, character_id: str, now: datetime, timezone: str
+    ) -> Promise | None:
+        """The promise she complains of now, marked complained of at once (`to_complain`,
+        `complained`)."""
+        found = self.to_complain(user_id, character_id, now, timezone)
+        if found is not None:
+            self.complained(found.id, now, timezone)
+        return found
 
     def fulfil(self, user_id: str, promise_id: int) -> bool:
         """It was done: the promise is gone. False where it is not theirs, or already gone."""

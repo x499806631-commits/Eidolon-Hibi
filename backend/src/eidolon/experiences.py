@@ -3,9 +3,9 @@ exhibition, played a new game, spent the day asleep — kept so that she remembe
 it, and forgotten when nothing brings it up.
 
 Unlike memories, these belong to one character: what 甜花 did is not 凛世's, and each is
-found among her own only. Unlike memories too, they are not superseded: the same thing is
-kept once (`UNIQUE`), and a fuller telling of it replaces the shorter one, but deleting one
-does not bring another back.
+found among her own only. Unlike memories too, they are not superseded: the same words are
+kept once (`UNIQUE`), and the background model, shown her latest, is told not to write down
+again what is among them, even told more fully.
 
 Each is kept `KEPT` from when it was last recalled (`last_used_at`, or `created_at` where
 nothing has recalled it), and then forgotten by `sweep`; one `pinned` is forgotten never. The
@@ -157,8 +157,8 @@ class Experiences:
     def record(
         self, user_id: str, character_id: str, made: Sequence[NewExperience], now: datetime
     ) -> int:
-        """Keep `made`, said in the turn recorded at `now`: the same thing is kept once, and a
-        fuller telling of it replaces the shorter one rather than joining it."""
+        """Keep `made`, said in the turn recorded at `now`: the same words are kept once, what
+        was looked up about them the latest."""
         kept = 0
         with self._lock, self._db:
             for made_one in made:
@@ -239,7 +239,10 @@ class Experiences:
                 " ORDER BY COALESCE(last_used_at, created_at)",
                 (user_id,),
             ).fetchall()
-        soon = [e for e in (_one(row) for row in rows) if (left := e.left(now)) and left <= SOON]
+        soon = [
+            e for e in (_one(row) for row in rows)
+            if (left := e.left(now)) is not None and left <= SOON
+        ]
         return soon
 
     def remember_used(self, ids: Sequence[int]) -> None:

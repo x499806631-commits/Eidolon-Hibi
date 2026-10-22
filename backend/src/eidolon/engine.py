@@ -623,6 +623,16 @@ def _answering(record: Sequence[Recorded]) -> list[Message]:
     return said
 
 
+@dataclass(frozen=True)
+class _PromisesDue:
+    """What she is told of the promises to her this time (`lines`): the one she asks about
+    (`ask`) and the one she complains of (`complain`), if any, marked once it is kept."""
+
+    lines: list[str]
+    ask: Promise | None
+    complain: Promise | None
+
+
 class ConversationEngine:
     def __init__(
         self,
@@ -688,12 +698,18 @@ class ConversationEngine:
         return self._special_days.prompt_lines(character.id, names, today)
 
     async def _day_lines(
-        self, character: Character, user_id: str, now: datetime, timezone: str
+        self,
+        character: Character,
+        user_id: str,
+        now: datetime,
+        timezone: str,
+        promised: Sequence[str] = (),
     ) -> list[str]:
         """What she is told of the day besides the producer's birthday (`_special_lines`), of
         her letters to the user these last `LETTER_DAYS` days, of how long they have known
-        each other (`anniversaries`), and the weather where the producer is (`weather`), if it
-        can be told."""
+        each other (`anniversaries`), of the promises to her it is time for (`promised`, from
+        `_promises_due`), and the weather where the producer is (`weather`), if it can be
+        told."""
         since = now - timedelta(days=LETTER_DAYS)
         letters = [
             letter for letter in self._store.letters(user_id, character.id, now)
@@ -705,7 +721,7 @@ class ConversationEngine:
             *self._special_lines(character, today),
             *letter_lines(letters, timezone),
             *self._anniversary_lines(character, user_id, today, timezone),
-            *self._promise_lines(character, user_id, now, timezone),
+            *promised,
             *([weather] if weather else []),
         ]
         # 特殊日子和纪念日都说一遍「合适的时候自然地提起」，同一句只留一次。
@@ -763,30 +779,44 @@ class ConversationEngine:
             return []
         return anniversaries.lines(anniversaries.day_of(first, timezone), today)
 
-    def _promise_lines(
+    def _promises_due(
         self, character: Character, user_id: str, now: datetime, timezone: str
-    ) -> list[str]:
+    ) -> "_PromisesDue":
         """What she is told of the promises to her (`promises`): the one today is for, which
-        she asks about once its minute has come, and the ones she complains of for a day gone
-        by without it being kept — both in her own words, once a day."""
+        she asks about once its minute has come, and the one she complains of for a day gone
+        by without it being kept — both in her own words, once a day. Nothing is marked here:
+        `_promises_told` marks them once what she said is kept, so a turn that fails or a
+        reach-out not sent uses up neither. Letters are told of none."""
         if self._promises is None:
-            return []
+            return _PromisesDue([], None, None)
         self._promises.sweep(now)
         if self._experiences is not None:
-            # 她自己的经历：三十天没被想起的，这时候忘掉（和约定义务一样顺手做）
+            # 她自己的经历：三十天没被想起的，这时候忘掉（和约定一样顺手做）
             self._experiences.sweep(now)
-        lines = []
-        if (today := self._promises.asking(user_id, character.id, now, timezone)) is not None:
+        lines: list[str] = []
+        today = self._promises.to_ask(user_id, character.id, now, timezone)
+        if today is not None:
             lines.append(
                 f"制作人答应过「{today.text}」，就是今天。可以按你的性格问问这件事，"
-                "先回应他现在说的话，不要每句都提。"
+                "先回应制作人现在说的话，不要每句都提。"
             )
-        if (late := self._promises.complaining(user_id, character.id, now, timezone)) is not None:
+        late = self._promises.to_complain(user_id, character.id, now, timezone)
+        if late is not None:
             lines.append(
-                f"制作人答应过「{late.text}」，那天已经过去了，他没有做到。按你的性格为这件事"
+                f"制作人答应过「{late.text}」，那天已经过去了，制作人没有做到。按你的性格为这件事"
                 "说一句不满或失望，这一次说完就过，不要一直提。"
             )
-        return lines
+        return _PromisesDue(lines, today, late)
+
+    def _promises_told(self, due: "_PromisesDue", now: datetime, timezone: str) -> None:
+        """What she was told of the promises (`_promises_due`) is in what was kept: she has
+        asked about the one, and complained of the other, for today."""
+        if self._promises is None:
+            return
+        if due.ask is not None:
+            self._promises.asked(due.ask.id, now)
+        if due.complain is not None:
+            self._promises.complained(due.complain.id, now, timezone)
 
     def on_ended(self, listener: Callable[[str, EndsFor], None]) -> None:
         """Have `listener` told the conversation's id, and why, as she ends one, once it is
@@ -871,6 +901,13 @@ class ConversationEngine:
         eligibility = self._photo_eligibility(conversation, character, photo.own)
         asking_photo = eligibility is not None
         judged_apart = None
+        searching = web and self._web is not None
+        # 「是不是让她去查」和检索同时问，不让回话多等一轮判断模型
+        search_apart = (
+            asyncio.ensure_future(self._search_judge.asked(character, history, text))
+            if searching and self._search_judge is not None
+            else None
+        )
         if (judging or asking_photo) and self._retrieval is None and self._affinity_judge:
             judged_apart = asyncio.ensure_future(
                 _judged(self._affinity_judge, character, history, text, judging, asking_photo)
@@ -892,6 +929,10 @@ class ConversationEngine:
                 await judged_apart if judged_apart is not None
                 else (retrieved.judged, retrieved.photo)
             )
+        except BaseException:
+            if search_apart is not None:
+                search_apart.cancel()
+            raise
         finally:
             if judged_apart is not None and not judged_apart.done():
                 judged_apart.cancel()
@@ -927,19 +968,19 @@ class ConversationEngine:
             if eligibility is not None else None
         )
         about_photo = CANNOT_SEND if eligibility is None else photo_asked and photo_asked.prompt
+        promises_due = self._promises_due(character, conversation.user_id, now, timezone)
         # 联网这一段逐回合不同（骰子），所以放在 closing 里，和检索到的东西一起，不动前面能缓存的前缀
-        searching = web and self._web is not None
         closing = [
             p for p in (
                 retrieved.memories_prompt, retrieved.experiences_prompt, retrieved.prompt
             ) if p
         ]
         if searching:
-            # 判断模型只管「他是不是在让她去查」这一件小事；她感不感兴趣由她自己看人设判断
+            # 判断模型只管「制作人是不是在让她去查」这一件小事；她感不感兴趣由她自己看人设判断
             asked = False
-            if self._search_judge is not None:
+            if search_apart is not None:
                 try:
-                    asked = await self._search_judge.asked(character, history, text)
+                    asked = await search_apart
                 except Exception:  # 判断不出来就当没要求，交给她自己
                     log.warning("the search question could not be asked", exc_info=True)
             closing.append(web_rules(self._random(2) == 0, asked))
@@ -950,7 +991,9 @@ class ConversationEngine:
                 now_prompt(
                     profile, now, timezone, "in_call" if in_call is not None else "typing",
                     affinity_lines, last_contact,
-                    await self._day_lines(character, conversation.user_id, now, timezone),
+                    await self._day_lines(
+                        character, conversation.user_id, now, timezone, promises_due.lines
+                    ),
                 ),
                 *([EXPLAINED] if _appealed(messages) else []),
                 *([about_photo] if about_photo else []),
@@ -1042,6 +1085,7 @@ class ConversationEngine:
         if photo.id is not None and self._photos is not None:
             photo.recorded = True
             self._photos.recorded(photo.id)
+        self._promises_told(promises_due, now, timezone)
         memory.write_down(history, text, reply, retrieved.query_vector, found)
         self._judge_promise(conversation, history, text)
         turn = sum(m.role == "user" for m in messages) + 1
@@ -1093,6 +1137,7 @@ class ConversationEngine:
         memories = await self._memory.for_reaching_out(
             conversation, timezone, last_turn_query(messages)
         )
+        promises_due = self._promises_due(character, conversation.user_id, now, timezone)
         prompt = self._prompt(
             character, world_prompt, producer_prompt(profile),
             chat_history(messages, self._history_turns()), told,
@@ -1104,7 +1149,9 @@ class ConversationEngine:
                         female_producer=profile.gender == "female",
                     ) if affinity is not None else [],
                     self._store.last_contact(conversation.user_id, conversation.character_id),
-                    await self._day_lines(character, conversation.user_id, now, timezone),
+                    await self._day_lines(
+                        character, conversation.user_id, now, timezone, promises_due.lines
+                    ),
                 ),
             ],
             [*([memories] if memories else []), REACH_OUT_RULES],
@@ -1122,6 +1169,7 @@ class ConversationEngine:
         parser.finish()
         if not parser.complete:
             raise EmptyReply("对话模型没有返回任何内容")
+        self._promises_told(promises_due, now, timezone)
         return parser.complete
 
     async def write_letter(

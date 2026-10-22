@@ -14,13 +14,15 @@ import httpx
 
 from eidolon.config import Settings
 from eidolon.judge import JudgeError
+from eidolon.llm import LLMError
 from eidolon.promise_judge import KEPT, read_kept
 from eidolon.promises import KEEP_AFTER_COMPLAINT, NewPromise, Promises, parse_promises
 from tests.conftest import ClientFactory
-from tests.fakes import FakeJudge, FakeLLM, FakeServiceClients
+from tests.fakes import FakeJudge, FakeLLM, FakeServiceClients, system_of
 from tests.test_data_package import export, import_package, unzipped
 from tests.test_delete_account import user_id
 from tests.test_producer_profile import REPLY, system_prompt
+from tests.test_text_turn import send_turn, start_conversation
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 NOON = datetime(2026, 10, 21, 12, 30, tzinfo=SHANGHAI)
@@ -294,3 +296,34 @@ async def test_the_promise_stands_when_the_judge_does_not_find_it_kept(
     await asked_the_judge(clients)
 
     assert len((await client.get("/api/promises")).json()) == 1  # 还在，到了日子她会抱怨
+
+
+def asked_at(database: Path) -> str | None:
+    with sqlite3.connect(database) as db:
+        return db.execute("SELECT asked_at FROM promises").fetchone()[0]
+
+
+def test_looking_for_what_she_would_ask_or_complain_of_changes_nothing(promises: Promises):
+    promises.record("u", "mano", [NewPromise("给她一块布丁", date(2026, 10, 21))], NOON)
+    next_day = NOON + timedelta(days=1)
+
+    assert promises.to_ask("u", "mano", NOON, "Asia/Shanghai") is not None
+    assert promises.to_ask("u", "mano", NOON, "Asia/Shanghai") is not None
+    assert promises.to_complain("u", "mano", next_day, "Asia/Shanghai") is not None
+    assert promises.to_complain("u", "mano", next_day, "Asia/Shanghai") is not None
+
+
+async def test_a_turn_that_fails_does_not_use_up_her_asking(
+    make_client: ClientFactory, settings: Settings
+):
+    llm = FakeLLM(LLMError("服务挂了"), REPLY)
+    client = make_client(llm, clock=lambda: datetime(2026, 10, 21, 4, 30, tzinfo=UTC))  # 上海 12:30
+    seed_promise(settings.database_path, user_id(settings.database_path, "producer"))
+    conversation = await start_conversation(client)
+
+    await send_turn(client, conversation, "在吗")
+    assert asked_at(settings.database_path) is None
+    await send_turn(client, conversation, "在吗")
+
+    assert "制作人答应过「给她一块布丁」，就是今天。" in system_of(llm.prompts[-1])
+    assert asked_at(settings.database_path) is not None
