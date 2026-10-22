@@ -1553,11 +1553,12 @@ class Store:
         return ReachOut(cursor.lastrowid, ja, zh, list(said), created_at)
 
     def add_photo_reach_out(
-        self, conversation_id: str, said: list[Segment], photo: NewPhoto
+        self, conversation_id: str, said: list[Segment], photo: NewPhoto | None
     ) -> ReachOut | None:
-        """Record what she said first in the conversation, now, sending `photo` with it,
-        being generated (GLOSSARY.md「外景照片」); not seen yet. Not looked at again as
-        `add_reach_out` does but for her having ended it, when nothing is recorded (None)."""
+        """Record what she said first in the conversation, now, sending `photo` with it, if
+        any, being generated (GLOSSARY.md「外景照片」「体验券」); not seen yet. Not looked at
+        again as `add_reach_out` does but for her having ended it, when nothing is recorded
+        (None)."""
         created_at = _now()
         ja, zh = "".join(s.ja for s in said), "".join(s.zh for s in said)
         with self._lock, self._db:
@@ -1569,14 +1570,15 @@ class Store:
                 (conversation_id, ja, zh, _stored_segments(said), created_at),
             )
             assert cursor.lastrowid is not None
-            self._db.execute(
-                "INSERT INTO reach_out_photos (id, conversation_id, reach_out_id, tag, status,"
-                " created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
-                (photo.id, conversation_id, cursor.lastrowid, photo.tag, created_at, created_at),
-            )
+            if photo is not None:
+                self._db.execute(
+                    "INSERT INTO reach_out_photos (id, conversation_id, reach_out_id, tag, status,"
+                    " created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
+                    (photo.id, conversation_id, cursor.lastrowid, photo.tag, created_at, created_at),
+                )
         return ReachOut(
             cursor.lastrowid, ja, zh, list(said), created_at,
-            Photo(photo.id, "pending", None, photo.tag),
+            Photo(photo.id, "pending", None, photo.tag) if photo else None,
         )
 
     def add_letter(

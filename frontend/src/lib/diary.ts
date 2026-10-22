@@ -22,6 +22,8 @@ export type DiaryEntry = {
   secret: Segment[];
   /** 有一页被夹起来了（全文能看、那一页还不能）。 */
   secret_hidden: boolean;
+  /** 用日记钥匙能看到更多（GLOSSARY.md「日记钥匙」）：合上的、只给看开头的、还夹着一页的。 */
+  unlockable: boolean;
   read: boolean;
 };
 

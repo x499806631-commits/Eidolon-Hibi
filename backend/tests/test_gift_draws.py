@@ -52,6 +52,8 @@ async def test_a_new_user_has_one_draw_the_day_they_come_and_nothing_else_yet(
         "max_draws": 7,
         "backpack": [],
         "reset_cards": 0,
+        "tickets": [],
+        "to_rare": 20,
         "next_draw_at": "2026-09-25T16:00:00+00:00",
         "resettable": [],
         "characters": [
@@ -91,7 +93,7 @@ async def test_no_more_than_seven_are_kept(make_client: ClientFactory):
     assert await draws(client) == 7
 
 
-async def test_the_day_turns_at_midnight_in_beijing_not_where_the_user_is(
+async def test_the_day_turns_at_midnight_where_the_producer_is_by_their_profile(
     make_client: ClientFactory,
 ):
     clock = FakeClock(datetime.fromisoformat("2026-09-25T14:30:00+00:00"))  # 22:30 in Beijing
@@ -102,12 +104,13 @@ async def test_the_day_turns_at_midnight_in_beijing_not_where_the_user_is(
     before = await draws(client)
     clock.advance(hours=1)  # 00:30 on the 26th in Tokyo, 23:30 on the 25th in Beijing
     in_tokyo = await draws(client)
-    clock.advance(hours=1)  # 00:30 on the 26th in Beijing
+    next_at = (await state(client))["next_draw_at"]
 
-    assert [before, in_tokyo, await draws(client)] == [1, 1, 2]
+    assert [before, in_tokyo] == [1, 2]
+    assert next_at == "2026-09-26T15:00:00+00:00"  # midnight in Tokyo
 
 
-async def test_the_next_draw_is_at_the_next_midnight_in_beijing(make_client: ClientFactory):
+async def test_without_a_time_zone_of_their_own_the_next_draw_is_at_midnight_in_beijing(make_client: ClientFactory):
     clock = FakeClock(datetime.fromisoformat("2026-09-25T16:30:00+00:00"))  # 00:30 the 26th
     client = make_client(FakeLLM(), clock=clock)
     client.headers["X-Timezone"] = "America/Los_Angeles"  # the 25th there, which counts not
@@ -160,6 +163,8 @@ async def test_off_the_state_is_read_all_the_same_saying_so(
         "max_draws": 7,
         "backpack": [],
         "reset_cards": 0,
+        "tickets": [],
+        "to_rare": 20,
         "next_draw_at": None,
         "resettable": [],
         "characters": [],

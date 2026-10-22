@@ -14,6 +14,8 @@ import { GivenToast, type GivenNotice } from "@/components/gifts/GivenToast";
 import { GivePanel, type Giving } from "@/components/gifts/GivePanel";
 import { MyGifts } from "@/components/gifts/MyGifts";
 import { ResetCards } from "@/components/gifts/ResetCards";
+import { TicketDialog } from "@/components/gifts/TicketDialog";
+import { Tickets } from "@/components/gifts/Tickets";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -38,6 +40,7 @@ import {
   type GiftState,
   type Given,
 } from "@/lib/gifts";
+import { TICKET_KINDS, type TicketKind } from "@/lib/tickets";
 import { cn } from "@/lib/utils";
 import { CloseIcon, DrawIcon, GiftIcon } from "@/theme/icons";
 
@@ -51,7 +54,7 @@ const NOTICE_MS = 8000;
 
 /**
  * 礼物页（DESIGN.md「礼物页」）：导航栏右边整块一栏，内容最宽 `max-w-3xl`、居中，手机和电脑同一个版式。
- * 上面是抽奖台，有重置卡时下面一条重置卡条，再下面「我的礼物」；点一件（或单抽结果上的「送给谁…」）拉出送礼面板，
+ * 上面是抽奖台，有重置卡时下面一条重置卡条，有体验券时再下面一块体验券（点「使用」弹出用券的框），再下面「我的礼物」；点一件（或单抽结果上的「送给谁…」）拉出送礼面板，
  * 送出后面板收起、底部出提示，页面不跳走。好感度和礼物没开放时整页是「礼物暂时没有开放」，「礼物」照样留在导航里；
  * 抽奖、送礼或用重置卡时才知道没开放（收到「没开放」的 409）也切成这样。
  * 从对话页跳来（`pick`）时页首下面一条「给{角色名}挑一件礼物」：点哪件礼物，面板里都已选好她、排在第一个，
@@ -67,6 +70,7 @@ export function GiftsPage({ pick }: { pick: GiftsFor | null }) {
   const [isGiveOpen, setGiveOpen] = useState(false);
   const [isSending, setSending] = useState(false);
   const [notice, setNotice] = useState<GivenNotice | null>(null);
+  const [using, setUsing] = useState<TicketKind | null>(null);
   const isReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)", false);
   const isWide = useWide();
   const timeZone = useProducerTimezone();
@@ -197,6 +201,7 @@ export function GiftsPage({ pick }: { pick: GiftsFor | null }) {
               draws={state.draws}
               max={state.max_draws}
               next={nextDraw}
+              toRare={state.to_rare}
               isDrawing={drawing !== null}
               onDraw={draw}
             />
@@ -207,6 +212,9 @@ export function GiftsPage({ pick }: { pick: GiftsFor | null }) {
                 characters={arranged}
                 onUse={spendCard}
               />
+            )}
+            {state.tickets.length > 0 && (
+              <Tickets tickets={state.tickets} onUse={setUsing} onDiary={() => go("/diary")} />
             )}
             {state.backpack.length > 0 ? (
               <MyGifts backpack={state.backpack} catalog={catalog} onGive={(held) => startGiving(held.gift)} />
@@ -225,6 +233,16 @@ export function GiftsPage({ pick }: { pick: GiftsFor | null }) {
         onGive={startGiving}
         onAgain={() => draw(false)}
         onClose={() => setDrawing(null)}
+      />
+      <TicketDialog
+        kind={using}
+        characters={arranged}
+        catalog={giftsById}
+        isWide={isWide}
+        timeZone={timeZone}
+        onClose={() => setUsing(null)}
+        onDone={() => getGiftState().then(setState, (e) => setFailure(toFailure(e)))}
+        onGo={go}
       />
       <GivePanel
         giving={giving}
@@ -247,15 +265,26 @@ export function GiftsPage({ pick }: { pick: GiftsFor | null }) {
 function withDrawn(state: GiftState, result: DrawResult, catalog: GiftInfo[]): GiftState {
   const counts = new Map(state.backpack.map((b) => [b.gift_id, b.count]));
   let cards = state.reset_cards;
+  const tickets = new Map(state.tickets.map((h) => [h.kind, h.count]));
   for (const d of result.drawn) {
     if (d.kind === "gift") counts.set(d.gift_id, (counts.get(d.gift_id) ?? 0) + 1);
+    else if (d.kind === "ticket") tickets.set(d.ticket, (tickets.get(d.ticket) ?? 0) + 1);
     else cards += 1;
   }
   const backpack = catalog.flatMap((g) => {
     const count = counts.get(g.id);
     return count ? [{ gift_id: g.id, count }] : [];
   });
-  return { ...state, draws: result.draws, backpack, reset_cards: cards };
+  return {
+    ...state,
+    draws: result.draws,
+    backpack,
+    reset_cards: cards,
+    tickets: TICKET_KINDS.flatMap((kind) => {
+      const count = tickets.get(kind);
+      return count ? [{ kind, count }] : [];
+    }),
+  };
 }
 
 /** 送出一件以后的礼物状态：这件按接口给的件数（送完的不再列），她的好感度换成现在的。 */
@@ -290,13 +319,14 @@ function PickedFor({ character, onCancel }: { character: Character; onCancel: ()
 }
 
 /**
- * 抽奖台：`bg-muted` 圆角块，「抽奖 还有 n 次」、7 个小点（攒了几次亮几个）和一句说明；右边「抽一次」，
+ * 抽奖台：`bg-muted` 圆角块，「抽奖 还有 n 次」、7 个小点（攒了几次亮几个）、一句说明和保底还有几次；右边「抽一次」，
  * 攒了 2 次以上时旁边多一个「全部抽完」，次数为 0 时「抽一次」不可用。
  */
 function DrawDesk({
   draws,
   max,
   next,
+  toRare,
   isDrawing,
   onDraw,
 }: {
@@ -304,6 +334,8 @@ function DrawDesk({
   max: number;
   /** 下次到账的「今天 / 明天 HH:MM」。 */
   next: string;
+  /** 最多再抽几次一定出稀有（保底）。 */
+  toRare: number;
   isDrawing: boolean;
   onDraw: (all: boolean) => void;
 }) {
@@ -320,6 +352,7 @@ function DrawDesk({
           ))}
         </span>
         <p className="text-subtitle text-muted-foreground">{drawNote(draws, max, next)}</p>
+        <p className="text-meta text-muted-foreground">{t.draw.toRare(toRare)}</p>
       </div>
       <div className="flex gap-2">
         {draws >= 2 && (

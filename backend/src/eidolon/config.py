@@ -8,8 +8,11 @@ import os
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, Required, TypedDict, get_args
+from typing import TYPE_CHECKING, Any, Literal, Required, TypedDict, get_args
 from urllib.parse import urlsplit, urlunsplit
+
+if TYPE_CHECKING:
+    from eidolon.outfit_tags import VisionSettings
 
 log = logging.getLogger(__name__)
 
@@ -468,6 +471,9 @@ class Settings:
     contact: str | None = None
     """How to reach the deployer, told to banned users when they try to sign in; None
     tells them no one."""
+    vision: "VisionSettings | None" = None
+    """A model that reads images, for drawing her in an outfit from her outfit list
+    (`outfit_tags`); None and she is told the outfit's name alone."""
     stand_assets_url: str | None = None
     """Where browsers download the stands from, without a trailing slash: the public URL
     of the object storage they are synced to (ADR-0003, revised 2026-09-30). None shows
@@ -555,6 +561,7 @@ class Settings:
             secret_key=os.environ.get("EIDOLON_SECRET_KEY") or None,
             gemini_billing_enabled=os.environ.get("GEMINI_BILLING_ENABLED", "").strip() == "1",
             stand_assets_url=stand_assets_url_from_env(),
+            vision=vision_from_env(),
             admins=admins_from_env(),
             contact=os.environ.get("EIDOLON_CONTACT", "").strip() or None,
         )
@@ -609,6 +616,19 @@ def mirror_cache_path_from_env() -> Path:
 def event_names_path_from_env() -> Path:
     """The admin's table of event names, which `eidolon story sync` names events from."""
     return Path(os.environ.get("EIDOLON_EVENT_NAMES_PATH", "../deploy/event-names.toml"))
+
+
+def vision_from_env() -> "VisionSettings | None":
+    """`VISION_LLM_BASE_URL`, `VISION_LLM_API_KEY` and `VISION_LLM_MODEL`, all three, or
+    none: a model that reads images, over OpenAI's chat completions."""
+    from eidolon.outfit_tags import VisionSettings
+
+    values = [
+        (os.environ.get(f"VISION_LLM_{n}") or "").strip() for n in ("BASE_URL", "API_KEY", "MODEL")
+    ]
+    if not all(values):
+        return None
+    return VisionSettings(*values)
 
 
 def stand_assets_url_from_env() -> str | None:

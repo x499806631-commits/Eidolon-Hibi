@@ -46,6 +46,8 @@ USER_DATA = [
     ("keepsakes", "user_id = ?"),
     ("keepsake_due", "user_id = ?"),
     ("trip_photo_due", "user_id = ?"),
+    ("gift_tickets", "user_id = ?"),
+    ("dates", "user_id = ?"),
     ("letters", "user_id = ?"),
     ("letter_days", "user_id = ?"),
     ("promises", "user_id = ?"),
@@ -92,7 +94,7 @@ NOT_USER_DATA = frozenset(
         "episodes", "episode_cast", "episode_lines", "episode_passages", "embedded_texts",
         "service_calls", "config_overrides", "price_overrides", "price_catalog",
         "price_catalog_thinking", "price_catalog_hosts", "price_catalog_state", "banned_identities", "announcements",
-        "sponsor", "gifts_opened", "reset_card_grants", "backup_runs",
+        "sponsor", "gifts_opened", "reset_card_grants", "backup_runs", "outfit_tags",
     }
 )
 """Every other table: the story corpus, the embedded text set, the calls to outside

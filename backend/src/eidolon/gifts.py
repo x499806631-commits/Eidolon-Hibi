@@ -2,7 +2,8 @@
 and their reset cards, the one way into them for the gifts page and the admin console.
 
 Draw chances are given one a day (`affinity.DRAWS_PER_DAY`) as the day begins, at midnight
-Beijing time wherever the user is (`affinity.day_of`), kept up to `affinity.MAX_DRAWS`.
+in the producer's own time zone (the profile's, Beijing's without one), kept up to
+`affinity.MAX_DRAWS`.
 Nothing gives them on a schedule: whoever reads them first gives what the days since they
 were last given have brought. A user without any yet is given one that day, new or not.
 
@@ -17,36 +18,41 @@ An admin may give every user there is a reset card at once (`grant_reset_cards`)
 ones and admins too, but no one user anything on their own. Each grant is kept, when and
 how many, saying nothing of who granted it or to whom: that too is no one's.
 
-Each draw uses a chance and gives a reset card or a gift, as likely as `affinity.DRAW_ODDS`
-says, any of the rarity's gifts not retired as likely as another: nothing is guaranteed,
-and whom a gift is liked by plays no part. Drawn gifts stack in the backpack, which keeps
+Each draw uses a chance and gives a reset card, a gift or a ticket (GLOSSARY.md「体验券」), as
+likely as `affinity.DRAW_ODDS` says, any of the rarity's gifts not retired as likely as
+another, any of the kinds of ticket the user can use now (`ticket_kinds`) as likely as
+another, a common gift where they can use none; whom a gift is liked by plays no part. The
+draw `affinity.PITY` draws after the last rare gift is one (GLOSSARY.md「保底」): how many
+draws since is kept with the chances. Tickets stack, a count of each kind, until used. Drawn gifts stack in the backpack, which keeps
 them retired since or not. The numbers come from the random source the backend is built
 with (`randomness.Random`). Drawing calls no model and leaves no activity record.
 """
 
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from itertools import accumulate
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from eidolon.affinity import (
     BELOW_TRUST,
     DRAW_ODDS,
     DRAWS_PER_DAY,
     MAX_DRAWS,
+    PITY,
     Affinities,
     Change,
     Status,
     day_of,
-    next_day,
 )
 from eidolon.characters import Character
 from eidolon.clock import Clock
 from eidolon.database import connect
 from eidolon.gift_catalog import Gift
+from eidolon.producer import effective_timezone
 from eidolon.promises import Promises
 from eidolon.randomness import Random
 from eidolon.store import Conversation, Store
@@ -60,7 +66,15 @@ CREATE TABLE IF NOT EXISTS gift_balances (
     user_id TEXT PRIMARY KEY REFERENCES users(id),
     draws INTEGER NOT NULL,
     given_on TEXT NOT NULL,
-    reset_cards INTEGER NOT NULL DEFAULT 0
+    reset_cards INTEGER NOT NULL DEFAULT 0,
+    since_rare INTEGER NOT NULL DEFAULT 0
+);
+-- How many of each kind of ticket each user has (GLOSSARY.md「体验券」).
+CREATE TABLE IF NOT EXISTS gift_tickets (
+    user_id TEXT NOT NULL REFERENCES users(id),
+    kind TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    PRIMARY KEY (user_id, kind)
 );
 -- One row: whether gifts were open when last noticed, and when they last opened (none if
 -- never noticed opening).
@@ -85,6 +99,16 @@ CREATE TABLE IF NOT EXISTS reset_card_grants (
 
 RESET_CARD = "reset_card"
 """What a draw gives that is not a gift."""
+
+TICKET = "ticket:"
+"""What a ticket of a kind is drawn as: `ticket:letter`."""
+
+
+class NoTickets(Exception):
+    """The user has no ticket of the kind left."""
+
+    def __init__(self) -> None:
+        super().__init__("没有这种体验券了")
 
 
 class GiftsClosed(Exception):
@@ -162,7 +186,9 @@ class Drawn:
         """As the browser is told it."""
         return {
             "drawn": [
-                {"kind": "reset_card"} if d == RESET_CARD else {"kind": "gift", "gift_id": d}
+                {"kind": "reset_card"} if d == RESET_CARD
+                else {"kind": "ticket", "ticket": d.removeprefix(TICKET)} if d.startswith(TICKET)
+                else {"kind": "gift", "gift_id": d}
                 for d in self.drawn
             ],
             "draws": self.draws,
@@ -178,6 +204,10 @@ class GiftState:
     backpack: list[tuple[str, int]]
     """Each gift the user has, in catalog order, and how many."""
     reset_cards: int
+    tickets: list[tuple[str, int]]
+    """Each kind of ticket the user has, and how many."""
+    to_rare: int
+    """How many draws at most until a rare gift."""
     next_draw_at: datetime | None
     """When the next draw chance is given, kept up to the most or not: none while closed."""
     characters: list[tuple[str, Status]]
@@ -192,6 +222,8 @@ class GiftState:
             "max_draws": MAX_DRAWS,
             "backpack": [{"gift_id": g, "count": n} for g, n in self.backpack],
             "reset_cards": self.reset_cards,
+            "tickets": [{"kind": k, "count": n} for k, n in self.tickets],
+            "to_rare": self.to_rare,
             "next_draw_at": self.next_draw_at and self.next_draw_at.isoformat(),
             "resettable": [
                 {"id": c, "tier": status.tier, "cooling": status.cooling}
@@ -244,6 +276,7 @@ class Gifts:
         random: Random,
         store: Store,
         promises: Promises | None = None,
+        ticket_kinds: Callable[[str], Sequence[str]] = lambda _: (),
     ) -> None:
         """`is_open` tells whether gifts are open now (the live configuration's affinity
         switch); draws take their numbers from `random`; gift records are kept in `store`, and
@@ -259,9 +292,15 @@ class Gifts:
         self._catalog = catalog
         self._random = random
         self._promises = promises
+        self._ticket_kinds = ticket_kinds
         self._given: list[Callable[[str, str, str, bool, Change | None, datetime], None]] = []
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
+            columns = {row[1] for row in self._db.execute("PRAGMA table_info(gift_balances)")}
+            if "since_rare" not in columns:
+                self._db.execute(
+                    "ALTER TABLE gift_balances ADD COLUMN since_rare INTEGER NOT NULL DEFAULT 0"
+                )
         self.notice()
 
     def notice(self) -> None:
@@ -290,11 +329,13 @@ class Gifts:
         self.notice()
         is_open = self._is_open()
         now = self._clock()
+        zone = self._zone(user_id)
         with self._lock, self._db:
             if is_open:
-                self._give(user_id, day_of(now))
+                self._give(user_id, _local_day(now, zone))
             row = self._db.execute(
-                "SELECT draws, reset_cards FROM gift_balances WHERE user_id = ?", (user_id,)
+                "SELECT draws, reset_cards, since_rare FROM gift_balances WHERE user_id = ?",
+                (user_id,),
             ).fetchone()
             held = dict(
                 self._db.execute(
@@ -302,15 +343,23 @@ class Gifts:
                     (user_id,),
                 ).fetchall()
             )
-        draws, reset_cards = row or (0, 0)
+            tickets = self._db.execute(
+                "SELECT kind, count FROM gift_tickets WHERE user_id = ? AND count > 0"
+                " ORDER BY kind",
+                (user_id,),
+            ).fetchall()
+        draws, reset_cards, since_rare = row or (0, 0, 0)
         backpack = [(g, held[g]) for g in self._catalog if g in held]
         statuses = (
             (character_id, self._affinities.status(user_id, character_id))
             for character_id in (self._characters if is_open else ())
         )
         characters = [(c, status) for c, status in statuses if status is not None]
-        next_draw_at = next_day(now) if is_open else None
-        return GiftState(is_open, draws, backpack, reset_cards, next_draw_at, characters)
+        next_draw_at = _next_local_day(now, zone) if is_open else None
+        return GiftState(
+            is_open, draws, backpack, reset_cards, [(k, n) for k, n in tickets],
+            PITY - since_rare, next_draw_at, characters,
+        )
 
     def draw(self, user_id: str, *, all: bool = False) -> Drawn:
         """Draw once, or as many times as the user has chances if `all`, having been given
@@ -320,16 +369,28 @@ class Gifts:
         self.notice()
         if not self._is_open():
             raise GiftsClosed()
+        kinds = list(self._ticket_kinds(user_id))
+        zone = self._zone(user_id)
         with self._lock, self._db:
-            self._give(user_id, day_of(self._clock()))
-            (draws,) = self._db.execute(
-                "SELECT draws FROM gift_balances WHERE user_id = ?", (user_id,)
+            self._give(user_id, _local_day(self._clock(), zone))
+            draws, since_rare = self._db.execute(
+                "SELECT draws, since_rare FROM gift_balances WHERE user_id = ?", (user_id,)
             ).fetchone()
             if draws == 0:
                 raise NoDraws()
-            drawn = [self._draw_one() for _ in range(draws if all else 1)]
+            drawn: list[str] = []
+            for _ in range(draws if all else 1):
+                d = self._draw_one(kinds, pity=since_rare >= PITY - 1)
+                since_rare = 0 if self._is_rare(d) else since_rare + 1
+                drawn.append(d)
             for d in drawn:
-                if d == RESET_CARD:
+                if d.startswith(TICKET):
+                    self._db.execute(
+                        "INSERT INTO gift_tickets (user_id, kind, count) VALUES (?, ?, 1)"
+                        " ON CONFLICT (user_id, kind) DO UPDATE SET count = count + 1",
+                        (user_id, d.removeprefix(TICKET)),
+                    )
+                elif d == RESET_CARD:
                     self._db.execute(
                         "UPDATE gift_balances SET reset_cards = reset_cards + 1"
                         " WHERE user_id = ?",
@@ -343,9 +404,63 @@ class Gifts:
                     )
             left = draws - len(drawn)
             self._db.execute(
-                "UPDATE gift_balances SET draws = ? WHERE user_id = ?", (left, user_id)
+                "UPDATE gift_balances SET draws = ?, since_rare = ? WHERE user_id = ?",
+                (left, since_rare, user_id),
             )
         return Drawn(drawn, left)
+
+    # Tickets (GLOSSARY.md「体验券」).
+
+    def take_ticket(self, user_id: str, kind: str) -> int:
+        """Take one of the user's tickets of `kind`, to use: how many are left. Raises
+        GiftsClosed if gifts are not open, NoTickets if they have none."""
+        self.notice()
+        if not self._is_open():
+            raise GiftsClosed()
+        with self._lock, self._db:
+            taken = self._db.execute(
+                "UPDATE gift_tickets SET count = count - 1"
+                " WHERE user_id = ? AND kind = ? AND count > 0 RETURNING count",
+                (user_id, kind),
+            ).fetchone()
+        if taken is None:
+            raise NoTickets()
+        return taken[0]
+
+    def put_back_ticket(self, user_id: str, kind: str) -> None:
+        """Give back a ticket taken whose use failed."""
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO gift_tickets (user_id, kind, count) VALUES (?, ?, 1)"
+                " ON CONFLICT (user_id, kind) DO UPDATE SET count = count + 1",
+                (user_id, kind),
+            )
+
+    def tickets(self, user_id: str, kind: str) -> int:
+        """How many tickets of `kind` the user has."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT count FROM gift_tickets WHERE user_id = ? AND kind = ?", (user_id, kind)
+            ).fetchone()
+        return row[0] if row else 0
+
+    def add_liked_gift(self, user_id: str, character_id: str) -> str:
+        """Put one of the gifts she likes in the user's backpack, any of them as likely as
+        another, those not retired if any are: its identifier. Raises NoSuchCharacter for
+        no such character, or one who likes none."""
+        character = self._characters.get(character_id)
+        liked = [g for g in (character.liked_gifts if character else ()) if g in self._catalog]
+        if not liked:
+            raise NoSuchCharacter()
+        current = [g for g in liked if not self._catalog[g].retired] or liked
+        gift_id = current[self._random(len(current))]
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO gift_backpacks (user_id, gift_id, count) VALUES (?, ?, 1)"
+                " ON CONFLICT (user_id, gift_id) DO UPDATE SET count = count + 1",
+                (user_id, gift_id),
+            )
+        return gift_id
 
     def give(self, user_id: str, gift_id: str, character_id: str) -> Given:
         """Give the character one of the gift; its record goes where `Store.add_gift`
@@ -459,7 +574,7 @@ class Gifts:
                 "SELECT id FROM users WHERE id NOT IN (SELECT user_id FROM gift_balances)"
             ).fetchall()
             for (user_id,) in unbalanced:
-                self._start(user_id, day_of(now), reset_cards=1)
+                self._start(user_id, _local_day(now, self._zone(user_id)), reset_cards=1)
             grant = Grant(now, given + len(unbalanced))
             self._db.execute(
                 "INSERT INTO reset_card_grants (granted_at, count) VALUES (?, ?)",
@@ -495,7 +610,7 @@ class Gifts:
         if today <= given_on:
             return
         since = given_on
-        opened = self._opened_on()
+        opened = self._opened_on(today)
         if opened is not None and opened > given_on:
             since = opened - timedelta(days=1)
         due = (today - since).days * DRAWS_PER_DAY
@@ -512,21 +627,48 @@ class Gifts:
             (user_id, DRAWS_PER_DAY, today.isoformat(), reset_cards),
         )
 
-    def _draw_one(self) -> str:
-        """What one draw gives: `RESET_CARD`, or the identifier of a gift not retired."""
-        number = self._random(100)
-        kind = next(
-            k for k, upto in zip(DRAW_ODDS, accumulate(DRAW_ODDS.values())) if number < upto
-        )
+    def _draw_one(self, kinds: Sequence[str], pity: bool = False) -> str:
+        """What one draw gives: `RESET_CARD`, a ticket of one of `kinds` (`ticket:<kind>`),
+        or the identifier of a gift not retired; a rare one if `pity`."""
+        if pity:
+            kind: str = "rare"
+        else:
+            number = self._random(100)
+            kind = next(
+                k for k, upto in zip(DRAW_ODDS, accumulate(DRAW_ODDS.values())) if number < upto
+            )
         if kind == RESET_CARD:
             return RESET_CARD
+        if kind == "ticket":
+            if kinds:
+                return TICKET + kinds[self._random(len(kinds))]
+            kind = "common"
         pool = [g.id for g in self._catalog.values() if g.rarity == kind and not g.retired]
         return pool[self._random(len(pool))]
 
-    def _opened_on(self) -> date | None:
-        """The day gifts last opened on (`affinity.day_of`); None if never noticed
-        opening."""
+    def _is_rare(self, drawn: str) -> bool:
+        gift = self._catalog.get(drawn)
+        return gift is not None and gift.rarity == "rare"
+
+    def _zone(self, user_id: str) -> ZoneInfo:
+        """The producer's time zone: the profile's, Beijing's without one."""
+        return ZoneInfo(effective_timezone(self._store.get_profile(user_id), None))
+
+    def _opened_on(self, today: date) -> date | None:
+        """The day gifts last opened on, in Beijing (`affinity.day_of`), at the latest
+        `today`; None if never noticed opening."""
         row = self._db.execute("SELECT opened_at FROM gifts_opened WHERE id = 1").fetchone()
         if row is None or row[0] is None:
             return None
-        return day_of(datetime.fromisoformat(row[0]))
+        return min(day_of(datetime.fromisoformat(row[0])), today)
+
+
+def _local_day(now: datetime, zone: ZoneInfo) -> date:
+    """The producer's day at `now`, in their time zone."""
+    return now.astimezone(zone).date()
+
+
+def _next_local_day(now: datetime, zone: ZoneInfo) -> datetime:
+    """When the producer's next day begins, in UTC."""
+    begins = datetime.combine(_local_day(now, zone) + timedelta(days=1), time(), zone)
+    return begins.astimezone(UTC)

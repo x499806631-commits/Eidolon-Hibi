@@ -1,6 +1,7 @@
 "use client";
 
 import { GiftTile } from "@/components/gifts/GiftTile";
+import { TicketTile } from "@/components/gifts/Tickets";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from "@/components/ui/dialog";
@@ -87,8 +88,24 @@ export function DrawDialog({
 /**
  * 抽到的一样东西：礼物是 `bg-muted` 圆角方块里的插画、名字、稀有度，稀有的插画角上一个闪光图标；
  * 重置卡是它的插画、「重置卡」、「很少见」。大的（单抽）稀有度写成 Badge，重置卡多一句说明。
+ * 体验券是它的方块、券名、「体验券」，大的多一句它是做什么的。
  */
 function DrawnItem({ drawn, catalog, isLarge = false }: { drawn: Drawn; catalog: Map<string, GiftInfo>; isLarge?: boolean }) {
+  if (drawn.kind === "ticket") {
+    const kind = copy.gifts.tickets.kinds[drawn.ticket];
+    return (
+      <div className={cn("flex flex-col items-center text-center", isLarge ? "gap-2" : "gap-1")}>
+        <TicketTile kind={drawn.ticket} size={isLarge ? "large" : "fill"} />
+        <p className={isLarge ? "text-header" : "text-sm"}>{kind.name}</p>
+        {isLarge ? (
+          <Badge variant="secondary">{t.drawing.ticket.rarity}</Badge>
+        ) : (
+          <p className="text-meta text-muted-foreground">{t.drawing.ticket.rarity}</p>
+        )}
+        {isLarge && <p className="text-subtitle text-muted-foreground">{kind.note}</p>}
+      </div>
+    );
+  }
   const gift = drawn.kind === "gift" ? catalog.get(drawn.gift_id) : undefined;
   const name = gift ? gift.name : drawn.kind === "reset_card" ? t.drawing.resetCard.name : "";
   const rarity = gift ? t.rarity[gift.rarity] : t.drawing.resetCard.rarity;

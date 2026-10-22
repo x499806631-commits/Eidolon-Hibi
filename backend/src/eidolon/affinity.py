@@ -184,11 +184,16 @@ begins."""
 MAX_DRAWS = 7
 """How many draw chances the user can keep at most: a week's."""
 
-DRAW_ODDS: dict[Rarity | Literal["reset_card"], int] = {
-    "reset_card": 1, "common": 69, "uncommon": 25, "rare": 5,
+DRAW_ODDS: dict[Rarity | Literal["reset_card", "ticket"], int] = {
+    "reset_card": 1, "common": 66, "uncommon": 23, "rare": 5, "ticket": 5,
 }
-"""What a draw gives, in percent: a reset card, or a gift of each rarity, any of that rarity's
-not retired as likely as another; no draw is guaranteed anything rarer."""
+"""What a draw gives, in percent: a reset card, a gift of each rarity, any of that rarity's
+not retired as likely as another, or a ticket (GLOSSARY.md「体验券」), any of the kinds the
+user can use as likely as another (a common gift where they can use none). A draw `PITY`
+draws after the last rare one is a rare gift, whatever the number."""
+
+PITY = 20
+"""The draw after so many without a rare gift gives one (GLOSSARY.md「保底」)."""
 
 
 def day_of(now: datetime) -> date:

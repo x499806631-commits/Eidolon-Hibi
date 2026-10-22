@@ -60,7 +60,9 @@ from eidolon.photos import Photos
 from eidolon.proxy import ProxyRoutes
 from eidolon.diary import Diary
 from eidolon.keepsakes import Keepsakes
-from eidolon.trip_photos import TripPhotos
+from eidolon import tickets
+from eidolon.outfit_tags import OutfitTags
+from eidolon.trip_photos import Dates, TripPhotos
 from eidolon.schedule_writer import ScheduleWriter
 from eidolon.schedules import Schedules
 from eidolon.letters import Letters
@@ -153,7 +155,10 @@ class Backend:
     keepsakes: Keepsakes
     """The keepsakes she gives, and the cabinet (GLOSSARY.md「纪念品」)."""
     trip_photos: TripPhotos
-    """The photos she sends from her trips (GLOSSARY.md「外景照片」)."""
+    """The photos she sends from her trips (GLOSSARY.md「外景照片」), and those asked for with
+    tickets, and her days out with the producer (GLOSSARY.md「体验券」「邀约」)."""
+    outfit_tags: OutfitTags
+    """The tags each outfit on the outfit lists is drawn with."""
     features: Features
     """Each user's own switches for the fork's features (GLOSSARY.md「玩法开关」)."""
     world: World | None = None
@@ -448,6 +453,7 @@ def build(
     gifts = Gifts(
         settings.database_path, clock, lambda: config.affinity_on, affinities, characters,
         gift_catalog, random or secure_random, store, promises,
+        tickets.available(settings, features, lambda: config.image_generator() is not None),
     )
     closers.append(gifts.close)
     reach_outs = ReachOuts(
@@ -465,9 +471,11 @@ def build(
         clock, settings.diary, special_days, features,
     )
     closers.append(diary.close)
+    dates = Dates(settings.database_path)
+    closers.append(dates.close)
     schedule_writer = ScheduleWriter(
         schedules, store, engine, characters, config, activity, clock,
-        random or secure_random, settings.schedules, features,
+        random or secure_random, settings.schedules, features, dates.on,
     )
     keepsakes = Keepsakes(
         settings.database_path, store, engine, characters, config, activity, clock,
@@ -478,9 +486,11 @@ def build(
     trip_photos = TripPhotos(
         settings.database_path, store, engine, characters, config, activity, clock,
         random or secure_random, settings.schedules, schedules, affinities, calls.in_call,
-        features,
+        features, dates,
     )
     closers.append(trip_photos.close)
+    outfit_tags = OutfitTags(settings.database_path, settings.vision, settings.stand_assets_url)
+    closers.append(outfit_tags.close)
     affinities.on_scene_done(keepsakes.scene_played)
     gifts.on_given(keepsakes.gift_given)
     promises.on_settled(keepsakes.promise_settled)
@@ -540,6 +550,7 @@ def build(
         features=features,
         keepsakes=keepsakes,
         trip_photos=trip_photos,
+        outfit_tags=outfit_tags,
         schedule_writer=schedule_writer,
         world=world,
         special_days=special_days,

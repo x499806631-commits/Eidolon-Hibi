@@ -18,7 +18,7 @@ from tests.conftest import CharacterConfig, ClientFactory
 from tests.fakes import FAKE_JUDGE, FakeClock, FakeLLM, FakeRandom
 from tests.test_gift_catalog import gift
 
-RESET_CARD, COMMON, UNCOMMON, RARE = 0, 1, 70, 95
+RESET_CARD, COMMON, UNCOMMON, RARE, TICKET = 0, 1, 70, 90, 95
 """A number for each of what a draw can give, the first of its range out of 100."""
 
 FIRST, SECOND = 0, 1
@@ -65,11 +65,13 @@ CARD_DRAWN = {"kind": "reset_card"}
     [
         ((RESET_CARD,), CARD_DRAWN),
         ((COMMON, FIRST), gift_drawn("cake")),
-        ((69, FIRST), gift_drawn("cake")),
+        ((66, FIRST), gift_drawn("cake")),
         ((UNCOMMON, FIRST), gift_drawn("cocoa")),
-        ((94, FIRST), gift_drawn("cocoa")),
+        ((89, FIRST), gift_drawn("cocoa")),
         ((RARE, FIRST), gift_drawn("plush")),
-        ((99, FIRST), gift_drawn("plush")),
+        ((94, FIRST), gift_drawn("plush")),
+        ((TICKET, FIRST), {"kind": "ticket", "ticket": "liked_gift"}),
+        ((99, FIRST), {"kind": "ticket", "ticket": "liked_gift"}),
     ],
 )
 async def test_a_draw_gives_what_the_number_falls_on(

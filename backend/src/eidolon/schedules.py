@@ -72,6 +72,9 @@ TRIP_TWIST = "要去{place}出外景，当天来回"
 TRIP_WITH_TWIST = "要和{names}一起去{place}出外景，当天来回"
 """The twist a trip with others of her unit is (GLOSSARY.md「外景照片」)."""
 
+DATE_TWIST = "下午两点到五点和制作人约好了一起{what}"
+"""The twist a day out with the producer is (GLOSSARY.md「邀约」)."""
+
 TOGETHER_ODDS = 2
 """One trip in so many, where others of her unit are free that day, they go with her."""
 

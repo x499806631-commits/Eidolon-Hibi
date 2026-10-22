@@ -524,14 +524,14 @@ where what retrieval finds would be."""
 
 WANTS_TO_REACH_OUT = "（制作人这会儿没在和你说话。你想先给他发几句。）"
 
-TRIP_PHOTO_RULES = """# 外景的照片
-你今天在{where}出外景，现在是空下来的一会儿。{together}你想给制作人发一张这里的照片，再说几句。
+PHOTO_RULES = """# {title}
+{situation}
 在回复的最前面、第一个 <ja> 之前写一个照片标签，一行一栏：
 <photo>
 shot: selfie 或 other（别人帮你拍）
 framing: portrait、upper body、cowboy shot、full body 选一个；自拍只能选 portrait 或 upper body
-place: 2–4 个英文 tag，写这里是什么地方、室内还是室外、时段或天气、光线，要看得出是{where}
-outfit: 1–4 个英文 tag，你穿的衣服
+place: 2–4 个英文 tag，写这里是什么地方、室内还是室外、时段或天气、光线{place}
+outfit: {outfit}
 action: 2–4 个英文 tag，你的动作、表情
 {others}scene: 一句简短的英文，写画面怎么摆：谁在画面哪一边、看着哪里、手里拿着什么、背景里有什么
 words: （可以不写）照片里真的会有的字，一个完整的词或短语，日语或英语都可以，越短越稳，最好四个字以内，例如招牌、站名
@@ -541,9 +541,28 @@ note: 一句中文，写这是一张什么样的照片，只给你自己回看
 - scene 和 tag 只写画面里真的有的东西：不用比喻，不写否定（不想要的就别提），左右写成画面的左右（on the left side of the picture），颜色用纯颜色词（red、pink，不用 peach、brick red 这种带着东西的颜色名）。
 - 不写发色、瞳色、发型、身材，也不写画风或画师；{nobody}
 - 照片只有全年龄的内容。
-- 标签后面用 <ja><zh> 写一到两段：这是哪里、在干什么、有什么想跟他分享的。照你的性格和口吻。
+- 标签后面用 <ja><zh> 写一到两段：{talk}照你的性格和口吻。
 - 不说要给他打电话。"""
-"""How she is to send the producer a photo from her trip (GLOSSARY.md「外景照片」)."""
+"""How she is to send the producer a photo unasked, or asked with a ticket: what for
+(`title`, `situation`), and what to tell of it."""
+
+OUTFIT_FREE = "1–4 个英文 tag，你穿的衣服"
+ALONE = "照片里只有你一个人。"
+
+
+def photo_rules(
+    title: str, situation: str, talk: str, *, place: str = "", outfit: str = OUTFIT_FREE,
+    others: str = "", nobody: str = ALONE,
+) -> str:
+    """`PHOTO_RULES` for one kind of photo she sends."""
+    return PHOTO_RULES.format(
+        title=title, situation=situation, place=place, outfit=outfit, others=others,
+        nobody=nobody, talk=talk,
+    )
+
+
+TRIP_PHOTO_SITUATION = "你今天在{where}出外景，现在是空下来的一会儿。{together}你想给制作人发一张这里的照片，再说几句。"
+"""What she is told of her trip, sending a photo from it (GLOSSARY.md「外景照片」)."""
 
 TRIP_PHOTO_TOGETHER = "和你一起来的有{names}，照片可以是你一个人的，也可以是和她们的合照。"
 
@@ -553,6 +572,21 @@ others: 合照时 1–4 个英文 tag，写她们穿什么、在做什么
 """What she is told of the others on the trip with her."""
 
 WANTS_TO_SEND_TRIP_PHOTO = "（制作人这会儿没在和你说话。你想给他发一张外景的照片。）"
+
+WANTS_TO_SEND_ASKED_PHOTO = "（制作人用拍照券拜托你拍一张照片。）"
+
+DATE_ACCEPT_RULES = """# 邀约
+制作人用邀约券约你{when}一起{what}。照你的性格和你们现在的关系回应他：可以开心、害羞、嘴硬，但你会去。可以说说你期待什么、想穿什么、想先做什么。
+- 用 <ja><zh> 写一到两段。
+- 不发照片，也不说要给他打电话。"""
+"""How she answers the producer's invitation (GLOSSARY.md「邀约」)."""
+
+WANTS_TO_ANSWER_DATE = "（制作人刚刚约你出去。）"
+
+DATE_AFTER_SITUATION = "今天下午你和制作人一起{what}，刚刚分开回到家。"
+"""What she is told, back from it (GLOSSARY.md「邀约」)."""
+
+WANTS_TO_TALK_AFTER_DATE = "（今天和制作人一起出去回来了。制作人这会儿没在和你说话。你想先给他发几句。）"
 
 CALLING_BACK = "制作人刚才给你打过电话，你在洗澡没接到；现在洗完了，先跟他说一声，问问他有什么事。"
 """Told her as she reaches out after a call she did not answer in the bath (GLOSSARY.md「洗澡」)."""
@@ -1604,14 +1638,65 @@ class ConversationEngine:
         photo from there: its segments and the photo tag she wrote. Raises EmptyReply if
         she says nothing, or writes no photo tag."""
         together = bool(with_names)
-        rules = TRIP_PHOTO_RULES.format(
-            where=place,
-            together=TRIP_PHOTO_TOGETHER.format(names="、".join(with_names)) if together else "",
+        rules = photo_rules(
+            "外景的照片",
+            TRIP_PHOTO_SITUATION.format(
+                where=place,
+                together=TRIP_PHOTO_TOGETHER.format(names="、".join(with_names)) if together else "",
+            ),
+            "这是哪里、在干什么、有什么想跟他分享的。",
+            place=f"，要看得出是{place}",
             others=TRIP_PHOTO_OTHERS if together else "",
-            nobody="照片里只有你，或者你和一起来的她们，没有别的人。" if together else "照片里只有你一个人。",
+            nobody="照片里只有你，或者你和一起来的她们，没有别的人。" if together else ALONE,
         )
         said, tag = await self._reaching_out(conversation, llm, rules, WANTS_TO_SEND_TRIP_PHOTO)
         if tag is None:
+            raise EmptyReply("对话模型没有写照片标签")
+        return said, tag
+
+    async def send_asked_photo(
+        self, conversation: Conversation, llm: ChatLLM, wish: str, outfit_tags: str | None
+    ) -> tuple[list[Segment], str]:
+        """The photo the producer asked her for with a ticket (GLOSSARY.md「体验券」), what
+        they asked for said in `wish`, the outfit's tags, if known, to write as its
+        `outfit`: what she says sending it and her photo tag. Raises EmptyReply if she says
+        nothing, or writes no photo tag."""
+        rules = photo_rules(
+            "制作人想要的照片",
+            f"制作人用拍照券拜托你拍一张照片：{wish}。你很乐意，现在就拍一张发给他，再说几句。",
+            "拍了什么、穿着它的感觉、想对他说的话。",
+            outfit=f"照抄这几个 tag：{outfit_tags}" if outfit_tags else OUTFIT_FREE,
+        )
+        said, tag = await self._reaching_out(conversation, llm, rules, WANTS_TO_SEND_ASKED_PHOTO)
+        if tag is None:
+            raise EmptyReply("对话模型没有写照片标签")
+        return said, tag
+
+    async def accept_date(
+        self, conversation: Conversation, llm: ChatLLM, when: str, what: str
+    ) -> list[Segment]:
+        """What she says, the producer having just invited her to `what` on `when` with a
+        ticket (GLOSSARY.md「体验券」「邀约」). Raises EmptyReply if she says nothing."""
+        said, _ = await self._reaching_out(
+            conversation, llm, DATE_ACCEPT_RULES.format(when=when, what=what),
+            WANTS_TO_ANSWER_DATE,
+        )
+        return said
+
+    async def after_date(
+        self, conversation: Conversation, llm: ChatLLM, what: str, with_photo: bool
+    ) -> tuple[list[Segment], str | None]:
+        """What she says first, back from `what` with the producer today (GLOSSARY.md
+        「邀约」): how it was, and, `with_photo`, a photo taken there and its tag. Raises
+        EmptyReply if she says nothing, or writes no photo tag where she is to."""
+        talk = "今天过得怎么样、印象最深的一刻、想对他说的话。"
+        situation = DATE_AFTER_SITUATION.format(what=what)
+        rules = (
+            photo_rules("约会之后", situation + "你想发一张今天拍的照片给他，再聊聊今天。", talk)
+            if with_photo else f"# 约会之后\n{situation}你想聊聊今天。\n- 用 <ja><zh> 写一到三段：{talk}\n- 不发照片，也不说要给他打电话。"
+        )
+        said, tag = await self._reaching_out(conversation, llm, rules, WANTS_TO_TALK_AFTER_DATE)
+        if with_photo and tag is None:
             raise EmptyReply("对话模型没有写照片标签")
         return said, tag
 

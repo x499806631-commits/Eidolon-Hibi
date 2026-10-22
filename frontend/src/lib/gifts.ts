@@ -1,5 +1,5 @@
 // 礼物（GLOSSARY.md「礼物」「抽奖」「重置卡」）：礼物页读到的状态，和页上那几句话怎么拼、我的礼物怎么筛。
-// 抽奖次数每天北京时间 0 点发 1 次（不论用户在哪个时区），最多攒 7 次，后端读取时补发；下次什么时候到账
+// 抽奖次数每天在制作人的时区 0 点发 1 次（没设时区的按北京时间），最多攒 7 次，后端读取时补发；下次什么时候到账
 // 由后端给出，按制作人的时区写成「今天 / 明天 HH:MM」，写法和冷却解除时刻一样。
 // 送礼一次一件，送出后页面底部那条提示的话也在这里拼。对话页上的送礼入口跳到礼物页时带着谁、从哪段对话来。
 // 重置卡自己用：把所有低于信任的角色拉回信任，重置卡条上那句话也在这里拼。
@@ -7,6 +7,7 @@
 import { api, json } from "@/lib/api";
 import { cueText, untilText, type AffinityChange, type AffinityStatus, type Tier } from "@/lib/affinity";
 import { copy } from "@/i18n";
+import type { HeldTicket, TicketKind } from "@/lib/tickets";
 
 /** 礼物的类别：吃的、饮品、花草、小物件。 */
 export type Category = "food" | "drink" | "flower" | "trinket";
@@ -34,20 +35,24 @@ export type GiftState = {
   /** 只列持有的，按目录的顺序。 */
   backpack: Owned[];
   reset_cards: number;
-  /** 下次发抽奖次数的时刻（ISO，每天北京时间 0 点），攒满了也照样给；没开放时是 null。 */
+  /** 持有的体验券（GLOSSARY.md「体验券」），每种几张。 */
+  tickets: HeldTicket[];
+  /** 最多再抽几次一定出稀有礼物（GLOSSARY.md「保底」）。 */
+  to_rare: number;
+  /** 下次发抽奖次数的时刻（ISO，制作人那边的 0 点），攒满了也照样给；没开放时是 null。 */
   next_draw_at: string | null;
   /** 现在用重置卡会拉回的角色；没开放时是空的。 */
   resettable: Resettable[];
   characters: GiftCharacter[];
 };
 
-/** 抽一次抽到的：一件礼物，或一张重置卡。 */
-export type Drawn = { kind: "gift"; gift_id: string } | { kind: "reset_card" };
+/** 抽一次抽到的：一件礼物、一张重置卡，或一张体验券。 */
+export type Drawn = { kind: "gift"; gift_id: string } | { kind: "reset_card" } | { kind: "ticket"; ticket: TicketKind };
 
 /** 抽奖接口给的：按抽出的顺序排的结果，和抽完还剩几次。 */
 export type DrawResult = { drawn: Drawn[]; draws: number };
 
-/** 读礼物状态；后端读的时候把到今天（北京时间）为止该发的次数补上。 */
+/** 读礼物状态；后端读的时候把到今天（制作人那边的日期）为止该发的次数补上。 */
 export async function getGiftState(): Promise<GiftState> {
   return json(await api("/api/gifts"));
 }

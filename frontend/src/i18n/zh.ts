@@ -1918,6 +1918,8 @@ export const zh = {
     secretHidden: (name: string) => `最后一页被${name}用夹子夹住了。`,
     /** 给看了那一页时，那一页上面的小标题。 */
     secretTitle: "她没打算给你看的一页",
+    /** 能用日记钥匙打开更多时，日记纸下面那个键（GLOSSARY.md「日记钥匙」）。 */
+    unlock: (n: number) => `用日记钥匙打开（还有 ${n} 把）`,
     back: "回到日记",
     /** 日记纸两边的翻页键，读屏读的是哪一天。 */
     previous: (date: string) => `上一页，${date}`,
@@ -1939,7 +1941,7 @@ export const zh = {
       title: "抽奖",
       left: (n: number) => `还有 ${n} 次`,
       label: (n: number, max: number) => `抽奖还有 ${n} 次，最多攒 ${max} 次`,
-      /** 下面那句说明：平时、攒满、用完。`next` 是下次到账的「今天 / 明天 HH:MM」（每天北京时间 0 点发，按制作人的时区写）。 */
+      /** 下面那句说明：平时、攒满、用完。`next` 是下次到账的「今天 / 明天 HH:MM」（每天在制作人那边的 0 点发）。 */
       notes: {
         usual: (next: string, max: number) => `${next} 再发 1 次，最多攒 ${max} 次`,
         full: (max: number) => `已攒满 ${max} 次，抽掉之前不会再发`,
@@ -1947,6 +1949,8 @@ export const zh = {
       },
       once: "抽一次",
       all: "全部抽完",
+      /** 保底（GLOSSARY.md「保底」）。 */
+      toRare: (n: number) => (n <= 1 ? "下一次必出稀有礼物" : `最多再抽 ${n} 次必出稀有礼物`),
     },
     /** 抽奖弹窗：礼物盒跳一会儿，然后揭晓。 */
     drawing: {
@@ -1962,6 +1966,46 @@ export const zh = {
         rarity: "很少见",
         note: "不是礼物，自己用：把所有低于信任的角色拉回信任，冷却中的马上可以说话。能攒，不过期。",
       },
+      ticket: { rarity: "体验券" },
+    },
+    /** 体验券（GLOSSARY.md「体验券」）：持有时出现的一块，每种一行，和用券的弹窗。 */
+    tickets: {
+      title: "体验券",
+      kinds: {
+        liked_gift: { name: "指定礼物", note: "选一位偶像，必定得到一件她喜欢的礼物。" },
+        letter: { name: "来信券", note: "选一位偶像，她马上给你写一封信。" },
+        diary_key: { name: "日记钥匙", note: "在日记页打开她合起来或夹起来的一页，以后都能看。" },
+        photo: { name: "拍照券", note: "选一位偶像和一套衣服，她拍一张照片发给你。" },
+        date: { name: "邀约券", note: "约她改天一起出去；那天结束后她会来找你聊，还会发照片。" },
+      },
+      count: (n: number) => `×${n}`,
+      /** 「×n」的读屏。 */
+      label: (n: number) => `${n} 张`,
+      use: "使用",
+      toDiary: "去日记页",
+      who: "选一位偶像",
+      outfit: "穿什么",
+      outfitFree: "随她挑",
+      outfitDescribe: "自己描述",
+      describePlaceholder: "例如：白色连衣裙配草帽",
+      everyday: "私服",
+      stage: "演出服",
+      noOutfits: "读不到她的衣装库，可以随她挑或者自己描述。",
+      loadingOutfits: "正在读取衣装库",
+      what: "一起做什么",
+      whatPlaceholder: "也可以自己写，例如：去看烟花",
+      when: "哪天",
+      dayLabel: (ahead: number, month: number, day: number) =>
+        `${ahead === 1 ? "明天" : ahead === 2 ? "后天" : `${ahead} 天后`}（${month}月${day}日）`,
+      confirm: "使用",
+      done: {
+        liked_gift: (name: string, gift: string) => `得到了${name}喜欢的「${gift}」，已经放进背包。`,
+        letter: (name: string) => `${name}的信已经放进信箱了。`,
+        photo: (name: string) => `${name}正在拍，照片会出现在你们的对话里。`,
+        date: (name: string) => `${name}回你了，去对话里看看吧。`,
+      },
+      goLetters: "去信箱",
+      goChat: "去对话",
     },
     /** 重置卡条（有重置卡时才出现）和用之前的确认框。 */
     resetCards: {

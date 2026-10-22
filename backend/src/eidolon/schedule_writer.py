@@ -12,14 +12,15 @@ record of its own (`schedule`). A turn never waits for one: without it, she has 
 A night she goes to bed, her bath before it is drawn on `random` too (`schedules.draw_bath`),
 in the tub unless her heart says she showers (GLOSSARY.md「洗澡」). A day she has a live away
 from Tokyo, or one day in `TRIP_ODDS` otherwise (a twist of its own), she is away on a trip,
-kept with the day, for the souvenir she brings the day after (GLOSSARY.md「纪念品」). One trip
+kept with the day, for the souvenir she brings the day after (GLOSSARY.md「纪念品」); a day
+the producer invited her out on (GLOSSARY.md「邀约」), that too, a twist of its own. One trip
 in `TOGETHER_ODDS`, others of her unit whose day is not written yet go with her; their days,
 written after, have them go on it too (GLOSSARY.md「外景照片」).
 """
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -36,6 +37,7 @@ from eidolon.schedules import (
     TRIP_PLACES,
     TRIP_TWIST,
     TRIP_WITH_TWIST,
+    DATE_TWIST,
     TOGETHER_ODDS,
     TWISTS,
     Bath,
@@ -79,7 +81,11 @@ class ScheduleWriter:
         random: Random,
         enabled: bool,
         features: Switches = AllOn(),
+        date_on: Callable[[str, str, date], str | None] = lambda *_: None,
     ) -> None:
+        """`date_on` says what she is to do with the producer on a day, if anything
+        (GLOSSARY.md「邀约」)."""
+        self._date_on = date_on
         self._features = features
         self._schedules = schedules
         self._store = store
@@ -161,6 +167,8 @@ class ScheduleWriter:
     async def _write(self, conversation: Conversation, day: date, again: bool = False) -> None:
         user_id, character_id = conversation.user_id, conversation.character_id
         twists = self._twists()
+        if (what := self._date_on(user_id, character_id, day)) is not None:
+            twists.append(DATE_TWIST.format(what=what))
         names = {c.id: c.name for c in self._characters.values()}
         trip_with: tuple[str, ...] = ()
         joining = self._schedules.joining(user_id, character_id, day)

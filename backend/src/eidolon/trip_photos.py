@@ -18,6 +18,14 @@ character prompt of her own (`photo_prompt.group_prompt`), those of them with th
 It is kept as a reach-out with a photo (`Store.add_photo_reach_out`), being generated, then
 generated on the deployer's image generation, counted towards no limit of the user's, and
 kept sent or not as a reply's photo is. Each has an activity record of its own (`trip_photo`).
+
+The same goes for the photos the producer asks for with a ticket (GLOSSARY.md「体验券」,
+`ask_photo`): in an outfit from her outfit list, drawn with its tags where they are known
+(`outfit_tags`), or one the producer describes, or one she chooses; and for the days out
+the producer invites her to with one (GLOSSARY.md「邀约」, `Dates`): she answers the
+invitation at once, has it in her schedule that day (`schedule_writer`), and once it is over,
+at a time drawn between `AFTER_DATE` and `AFTER_DATE_UNTIL` of that day, tells the producer
+how it was, sending a photo from it where there is image generation, else in words alone.
 """
 
 import asyncio
@@ -41,7 +49,7 @@ from eidolon.engine import ConversationEngine
 from eidolon.features import AllOn, Switches
 from eidolon.image_generation import TIME_LIMIT, ImageFailed
 from eidolon.live_config import LiveConfig
-from eidolon.photo_prompt import group_prompt, image_prompt, read_tag
+from eidolon.photo_prompt import group_prompt, image_prompt, read_tag, worn
 from eidolon.producer import effective_timezone
 from eidolon.randomness import Random
 from eidolon.schedules import Schedules
@@ -55,6 +63,14 @@ WINDOW = timedelta(days=14)
 FROM = time(11)
 UNTIL = time(17)
 """Between when in the producer's day she sends one."""
+DATE_FROM = time(14)
+DATE_UNTIL = time(17)
+"""When a day out with the producer is, as her schedule has it."""
+AFTER_DATE = time(17, 30)
+AFTER_DATE_UNTIL = time(19)
+"""Between when, the day out over, she tells the producer how it was."""
+MAX_DAYS_AHEAD = 7
+"""How many days ahead the producer may invite her."""
 TRIES = 3
 RETRY_AFTER = timedelta(hours=1)
 NOT_NOW = frozenset({"cold", "distant"})
@@ -74,7 +90,123 @@ CREATE TABLE IF NOT EXISTS trip_photo_due (
     last_at TEXT,
     PRIMARY KEY (user_id, character_id, day)
 );
+-- The days out the producer invited her to with a ticket (GLOSSARY.md「邀约」): what to do,
+-- when she is to tell them how it was once it is over, whether she has, how often tried.
+CREATE TABLE IF NOT EXISTS dates (
+    user_id TEXT NOT NULL REFERENCES users(id),
+    character_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    what TEXT NOT NULL,
+    due_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    told INTEGER NOT NULL DEFAULT 0,
+    tries INTEGER NOT NULL DEFAULT 0,
+    last_at TEXT,
+    PRIMARY KEY (user_id, character_id, day)
+);
 """
+
+
+class NoConversation(Exception):
+    """The user has no conversation with her to send it in."""
+
+    def __init__(self) -> None:
+        super().__init__("还没有和她的对话")
+
+
+class NoImages(Exception):
+    """There is no image generation to draw the photo on."""
+
+    def __init__(self) -> None:
+        super().__init__("没有配生图，拍不了照片")
+
+
+class DateTaken(Exception):
+    """She is already going out with the producer that day, or the day cannot be."""
+
+    def __init__(self, why: str = "那天已经约好了") -> None:
+        super().__init__(why)
+
+
+class Dates:
+    """The days out the producer invited each character to (GLOSSARY.md「邀约」), in the
+    database at `path`; their schedules read them as they are written."""
+
+    def __init__(self, path: Path) -> None:
+        self._db = connect(path)
+        self._db.row_factory = sqlite3.Row
+        self._lock = threading.Lock()
+        with self._lock, self._db:
+            self._db.executescript(_SCHEMA)
+
+    def plan(self, user_id: str, character_id: str, day: date, what: str, due_at: datetime) -> None:
+        """Keep the day out. Raises DateTaken if there is one with her that day already."""
+        with self._lock, self._db:
+            cursor = self._db.execute(
+                "INSERT OR IGNORE INTO dates (user_id, character_id, day, what, due_at, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, character_id, day.isoformat(), what,
+                 due_at.astimezone(UTC).isoformat(), datetime.now(UTC).isoformat()),
+            )
+        if cursor.rowcount == 0:
+            raise DateTaken()
+
+    def forget(self, user_id: str, character_id: str, day: date) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "DELETE FROM dates WHERE user_id = ? AND character_id = ? AND day = ?",
+                (user_id, character_id, day.isoformat()),
+            )
+
+    def on(self, user_id: str, character_id: str, day: date) -> str | None:
+        """What she is to do with the producer on `day`, if anything."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT what FROM dates WHERE user_id = ? AND character_id = ? AND day = ?",
+                (user_id, character_id, day.isoformat()),
+            ).fetchone()
+        return row["what"] if row else None
+
+    def due(self, now: datetime) -> list[sqlite3.Row]:
+        """The days out over whose telling is due and not told, nor tried too often lately."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM dates WHERE told = 0 AND tries < ? AND due_at <= ?",
+                (TRIES, now.astimezone(UTC).isoformat()),
+            ).fetchall()
+        return [
+            r for r in rows
+            if r["last_at"] is None or now - datetime.fromisoformat(r["last_at"]) >= RETRY_AFTER
+        ]
+
+    def told(self, user_id: str, character_id: str, day: str) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE dates SET told = 1 WHERE user_id = ? AND character_id = ? AND day = ?",
+                (user_id, character_id, day),
+            )
+
+    def tried(self, user_id: str, character_id: str, day: str, now: datetime) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE dates SET tries = tries + 1, last_at = ?"
+                " WHERE user_id = ? AND character_id = ? AND day = ?",
+                (now.astimezone(UTC).isoformat(), user_id, character_id, day),
+            )
+
+    def close(self) -> None:
+        with self._lock:
+            self._db.close()
+
+
+def _when(today: date, day: date) -> str:
+    """`day` as she would say it, from `today`."""
+    days = (day - today).days
+    if days == 1:
+        return "明天"
+    if days == 2:
+        return "后天"
+    return f"{day.month}月{day.day}日"
 
 
 @dataclass(frozen=True)
@@ -100,6 +232,7 @@ class TripPhotos:
         affinities: Affinities,
         in_call: Callable[[str], bool] = lambda _: False,
         features: Switches = AllOn(),
+        dates: Dates | None = None,
     ) -> None:
         self._store = store
         self._engine = engine
@@ -113,6 +246,8 @@ class TripPhotos:
         self._affinities = affinities
         self._in_call = in_call
         self._features = features
+        self._drawing: set[asyncio.Task] = set()
+        self._dates = dates if dates is not None else Dates(path)
         self._db = connect(path)
         self._db.row_factory = sqlite3.Row
         self._lock = threading.Lock()
@@ -139,11 +274,16 @@ class TripPhotos:
                 log.exception("sending trip photos failed")
 
     async def run_due(self) -> None:
-        """Plan the day's, and send those whose time has come; one going wrong keeps none of
-        the others from it."""
+        """Plan the day's, and send those whose time has come; tell how the days out over
+        were; one going wrong keeps none of the others from it."""
+        now = self._clock()
+        for row in await asyncio.to_thread(self._dates.due, now):
+            try:
+                await self._tell_date(row, now)
+            except Exception:
+                log.exception("telling of a day out in %s failed", row["character_id"])
         if not self.available():
             return
-        now = self._clock()
         for conversation, day in await asyncio.to_thread(self._plan, now):
             try:
                 await self._send(conversation, day, now)
@@ -203,7 +343,6 @@ class TripPhotos:
         self, conversation: Conversation, day: date | None, now: datetime, place: str | None = None
     ) -> None:
         user_id, character_id = conversation.user_id, conversation.character_id
-        character = self._characters[character_id]
         status = self._affinities.status(user_id, character_id)
         if status is not None and (status.tier in NOT_NOW or status.cooling):
             return
@@ -240,20 +379,45 @@ class TripPhotos:
             return
         finally:
             lease.release()
-        photo_id = uuid.uuid4().hex
-        reach_out = self._store.add_photo_reach_out(conversation.id, said, NewPhoto(photo_id, tag))
         if day is not None:
             self._sent(user_id, character_id, day)
-        if reach_out is None:
+        await self._sent_with_photo(conversation, said, tag, others, recording)
+
+    async def _sent_with_photo(
+        self, conversation: Conversation, said: list, tag: str, others: list[Character],
+        recording, outfit_tags: str | None = None, background: bool = False,
+    ) -> None:
+        """Keep what she said with the photo `tag` says, being generated, and draw it, of her
+        and of `others` if her tag says so, in `outfit_tags` if any; in the background if
+        `background`, the recording finished as it is."""
+        character = self._characters[conversation.character_id]
+        photo_id = uuid.uuid4().hex
+        reach_out = self._store.add_photo_reach_out(conversation.id, said, NewPhoto(photo_id, tag))
+        generator = self._config.image_generator()
+        if reach_out is None or generator is None:
+            if reach_out is not None:
+                self._store.finish_photo(photo_id, None, "service_error")
             recording.finish("failed")
             return
         settings = generator.settings
         read = read_tag(tag)
+        if outfit_tags:
+            read = worn(read, outfit_tags)
         together = others if _GROUP.search(tag) else []
         prompt = (
             group_prompt([character, *together], read, settings.style) if together
             else image_prompt(character, read, settings.style)
         )
+        drawing = self._draw(photo_id, generator, prompt, read.stripped, recording)
+        if background:
+            task = asyncio.create_task(drawing)
+            self._drawing.add(task)
+            task.add_done_callback(self._drawing.discard)
+        else:
+            await drawing
+
+    async def _draw(self, photo_id: str, generator, prompt, stripped, recording) -> None:
+        settings = generator.settings
         image: bytes | None = None
         reason: PhotoFailure | None = None
         until = asyncio.get_running_loop().time() + TIME_LIMIT
@@ -261,7 +425,7 @@ class TripPhotos:
             with recording.current():
                 image = (await timed(
                     self._activity, image_origin(settings), generator.generate(prompt, until),
-                    read.stripped,
+                    stripped,
                 )).webp
         except ImageFailed as e:
             log.warning("trip photo %s was not generated: %s", photo_id, e)
@@ -271,6 +435,107 @@ class TripPhotos:
             reason = "service_error"
         self._store.finish_photo(photo_id, image, reason)
         recording.finish("success" if image is not None else "failed")
+
+    async def ask_photo(
+        self, user_id: str, character_id: str, wish: str, outfit_tags: str | None = None
+    ) -> str:
+        """Have her send the photo the producer asked for with a ticket, `wish` saying what
+        they asked for, in the outfit `outfit_tags` says if any: the conversation it is in.
+        Its picture is drawn after this returns. Raises NoConversation, NoImages, and what
+        the model raises."""
+        conversation = self._current(user_id, character_id)
+        if conversation is None or self._store.ended(conversation.id) is not None:
+            raise NoConversation()
+        generator = self._config.image_generator()
+        if generator is None:
+            raise NoImages()
+        recording = self._activity.begin("trip_photo", user_id, character_id, own_llm=False, exempt=False)
+        lease = self._config.lease()
+        try:
+            with recording.current():
+                said, tag = await self._engine.send_asked_photo(
+                    conversation, lease.keys.chat_llm, wish, outfit_tags
+                )
+        except Exception:
+            recording.finish("failed")
+            raise
+        finally:
+            lease.release()
+        await self._sent_with_photo(
+            conversation, said, tag, [], recording, outfit_tags=outfit_tags, background=True
+        )
+        return conversation.id
+
+    async def invite(self, user_id: str, character_id: str, day: date, what: str) -> str:
+        """Invite her out with the producer on `day` to `what` (GLOSSARY.md「邀约」): she
+        answers at once; the conversation it is in. Raises NoConversation, DateTaken (one
+        with her that day already, or a day not from tomorrow to `MAX_DAYS_AHEAD` days on),
+        and what the model raises, the day out forgotten then."""
+        conversation = self._current(user_id, character_id)
+        if conversation is None or self._store.ended(conversation.id) is not None:
+            raise NoConversation()
+        zone = self._zone(user_id)
+        today = self._clock().astimezone(zone).date()
+        if not 1 <= (day - today).days <= MAX_DAYS_AHEAD:
+            raise DateTaken("只能约明天到一周以内")
+        minutes = (AFTER_DATE_UNTIL.hour * 60 + AFTER_DATE_UNTIL.minute) - (
+            AFTER_DATE.hour * 60 + AFTER_DATE.minute
+        )
+        due = datetime.combine(day, AFTER_DATE, zone) + timedelta(minutes=5 * self._random(minutes // 5))
+        await asyncio.to_thread(self._dates.plan, user_id, character_id, day, what, due)
+        when = _when(today, day)
+        recording = self._activity.begin("trip_photo", user_id, character_id, own_llm=False, exempt=False)
+        lease = self._config.lease()
+        try:
+            with recording.current():
+                said = await self._engine.accept_date(conversation, lease.keys.chat_llm, when, what)
+        except Exception:
+            recording.finish("failed")
+            await asyncio.to_thread(self._dates.forget, user_id, character_id, day)
+            raise
+        finally:
+            lease.release()
+        self._store.add_photo_reach_out(conversation.id, said, None)
+        recording.finish("success")
+        return conversation.id
+
+    async def _tell_date(self, row: sqlite3.Row, now: datetime) -> None:
+        """Once the day out is over, have her tell the producer how it was, with a photo
+        where there is image generation and the user has photos on."""
+        user_id, character_id, day = row["user_id"], row["character_id"], row["day"]
+        conversation = self._current(user_id, character_id)
+        if conversation is None or self._store.ended(conversation.id) is not None:
+            self._dates.told(user_id, character_id, day)  # nowhere to tell it
+            return
+        if self._store.is_taking_turn(conversation.id) or self._in_call(conversation.id):
+            return
+        character = self._characters.get(character_id)
+        with_photo = (
+            self._config.image_generator() is not None
+            and self._features.on(user_id, "photos")
+            and character is not None and character.photo_tag is not None
+            and character.photo_appearance is not None
+        )
+        recording = self._activity.begin("trip_photo", user_id, character_id, own_llm=False, exempt=False)
+        lease = self._config.lease()
+        try:
+            with recording.current():
+                said, tag = await self._engine.after_date(
+                    conversation, lease.keys.chat_llm, row["what"], with_photo
+                )
+        except Exception as e:
+            log.warning("telling of a day out failed: %s", type(e).__name__)
+            recording.finish("failed")
+            self._dates.tried(user_id, character_id, day, now)
+            return
+        finally:
+            lease.release()
+        self._dates.told(user_id, character_id, day)
+        if tag is None:
+            self._store.add_photo_reach_out(conversation.id, said, None)
+            recording.finish("success")
+            return
+        await self._sent_with_photo(conversation, said, tag, [], recording)
 
     def _current(self, user_id: str, character_id: str) -> Conversation | None:
         return next(
@@ -304,5 +569,7 @@ class TripPhotos:
         return ZoneInfo(effective_timezone(self._store.get_profile(user_id), None))
 
     def close(self) -> None:
+        for task in self._drawing:
+            task.cancel()
         with self._lock:
             self._db.close()

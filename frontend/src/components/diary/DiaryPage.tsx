@@ -21,9 +21,11 @@ import {
   type DiaryEntry,
 } from "@/lib/diary";
 import { toFailure, type Failure } from "@/lib/failure";
+import { getGiftState } from "@/lib/gifts";
+import { redeemDiaryKey } from "@/lib/tickets";
 import { cn } from "@/lib/utils";
 import { herVars } from "@/theme/herVars";
-import { BackIcon, DiaryClosedIcon, DiaryIcon, DiarySecretIcon, ForwardIcon } from "@/theme/icons";
+import { BackIcon, DiaryClosedIcon, DiaryIcon, DiaryKeyIcon, DiarySecretIcon, ForwardIcon } from "@/theme/icons";
 import { Ja } from "@/theme/Ja";
 
 const t = copy.diary;
@@ -37,12 +39,16 @@ const t = copy.diary;
  * 它另起在一块虚线框里，上面一个回形针和「她没打算给你看的一页」。下面「回到日记」和「去找她」。打开就算读过。
  * 翻页：日记纸两边各一个 ghost 图标键，翻到同一位偶像的前一天、后一天（没有就不显示），键盘 ← →、手机左右滑也能翻；
  * 新的一页像书页一样从翻过来的那一边转进来，减少动态效果时只淡入。翻到的那一页同样算读过。
+ * 有日记钥匙（GLOSSARY.md「日记钥匙」）而这一页还能看到更多时，「去找她」左边多一个「用日记钥匙打开（还有 n 把）」，
+ * 用了以后这一页整页都能看，以后也是。
  */
 export function DiaryPage() {
   const [entries, setEntries] = useState<DiaryEntry[] | null>(null);
   const [open, setOpen] = useState<DiaryEntry | null>(null);
   const [turned, setTurned] = useState<Turn>("none");
   const [failure, setFailure] = useState<Failure | null>(null);
+  const [keys, setKeys] = useState(0);
+  const [isUnlocking, setUnlocking] = useState(false);
   const { characters, go } = useDirectory();
   const byId = useMemo(() => new Map((characters ?? []).map((c) => [c.id, c])), [characters]);
 
@@ -52,10 +58,29 @@ export function DiaryPage() {
       (e) => current && setEntries(e),
       (e) => current && setFailure(toFailure(e)),
     );
+    getGiftState().then(
+      (s) => current && setKeys(s.tickets.find((h) => h.kind === "diary_key")?.count ?? 0),
+      () => {}, // 读不到礼物（没开放）就没有钥匙
+    );
     return () => {
       current = false;
     };
   }, []);
+
+  async function unlock(entry: DiaryEntry) {
+    setUnlocking(true);
+    setFailure(null);
+    try {
+      const { entry: opened, left } = await redeemDiaryKey(entry.id);
+      setKeys(left);
+      setOpen(opened);
+      setEntries((all) => all?.map((e) => (e.id === opened.id ? opened : e)) ?? all);
+    } catch (e) {
+      setFailure(toFailure(e));
+    } finally {
+      setUnlocking(false);
+    }
+  }
 
   function show(entry: DiaryEntry, turn: Turn = "none") {
     setOpen(entry);
@@ -97,7 +122,13 @@ export function DiaryPage() {
               onTurn={turnTo}
             />
             {her && (
-              <div className="flex justify-end">
+              <div className="flex flex-wrap justify-end gap-2">
+                {open.unlockable && keys > 0 && (
+                  <Button variant="outline" size="sm" disabled={isUnlocking} onClick={() => unlock(open)}>
+                    <DiaryKeyIcon data-icon="inline-start" />
+                    {t.unlock(keys)}
+                  </Button>
+                )}
                 <Button variant="outline" size="sm" onClick={() => go(`/conversation/${encodeURIComponent(her.id)}`)}>
                   {t.goChat}
                 </Button>

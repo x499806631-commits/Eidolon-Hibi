@@ -117,6 +117,13 @@ CREATE TABLE IF NOT EXISTS diary_tries (
 """
 
 
+class NothingToUnlock(Exception):
+    """All of the entry is shown already: a diary key would show nothing more."""
+
+    def __init__(self) -> None:
+        super().__init__("这一页已经能全部看到了")
+
+
 @dataclass(frozen=True)
 class Entry:
     """One day of her diary, as written: the paragraphs, and the page she did not mean the
@@ -129,11 +136,14 @@ class Entry:
     secret: tuple[Segment, ...]
     created_at: str
     read_at: str | None
+    unlocked: bool = False
+    """Opened with a diary key (GLOSSARY.md「日记钥匙」): all of it shown, whatever her tier."""
 
     def shown(self, status: Status | None) -> dict:
         """As the producer reads it now, `status` her affinity with them (None while affinity
-        is off): what of it they may read, and only that."""
-        how = shown_by(status)
+        is off): what of it they may read, and only that; and whether a diary key would show
+        them more (`unlockable`)."""
+        how: Shown = "secret" if self.unlocked else shown_by(status)
         segments: tuple[Segment, ...] = ()
         if how == "opening":
             segments = self.segments[:1]
@@ -148,6 +158,7 @@ class Entry:
             "more": len(segments) < len(self.segments),
             "secret": [{"ja": s.ja, "zh": s.zh} for s in self.secret] if how == "secret" else [],
             "secret_hidden": how == "full" and status is not None and bool(self.secret),
+            "unlockable": how in ("closed", "opening") or (how == "full" and bool(self.secret)),
             "read": self.read_at is not None,
         }
 
@@ -213,6 +224,11 @@ class Diary:
         self._lock = threading.Lock()
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
+            columns = {row[1] for row in self._db.execute("PRAGMA table_info(diary_entries)")}
+            if "unlocked" not in columns:
+                self._db.execute(
+                    "ALTER TABLE diary_entries ADD COLUMN unlocked INTEGER NOT NULL DEFAULT 0"
+                )
 
     # What makes a day matter.
 
@@ -375,6 +391,27 @@ class Diary:
                 row = self._db.execute(
                     "SELECT * FROM diary_entries WHERE id = ?", (entry_id,)
                 ).fetchone()
+        return self._shown(user_id, _entry(row))
+
+    def unlock(self, user_id: str, entry_id: int) -> dict:
+        """Open an entry with a diary key (GLOSSARY.md「日记钥匙」): all of it shown from now
+        on, read. Raises NotFound if it is not theirs, NothingToUnlock if all of it is shown
+        already."""
+        with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT * FROM diary_entries WHERE id = ? AND user_id = ?", (entry_id, user_id)
+            ).fetchone()
+            if row is None:
+                raise NotFound(entry_id)
+            entry = _entry(row)
+            if not entry.shown(self._affinities.status(user_id, entry.character_id))["unlockable"]:
+                raise NothingToUnlock()
+            self._db.execute(
+                "UPDATE diary_entries SET unlocked = 1, read_at = COALESCE(read_at, ?)"
+                " WHERE id = ?",
+                (self._clock().isoformat(), entry_id),
+            )
+            row = self._db.execute("SELECT * FROM diary_entries WHERE id = ?", (entry_id,)).fetchone()
         return self._shown(user_id, _entry(row))
 
     def all_of(self, user_id: str) -> list[Entry]:
@@ -544,8 +581,8 @@ def _segments(text: str) -> tuple[Segment, ...]:
 
 
 def _entry(row: tuple) -> Entry:
-    id_, _user, character_id, day, segments, secret, created_at, read_at = row
+    id_, _user, character_id, day, segments, secret, created_at, read_at = row[:8]
     return Entry(
         id_, character_id, date.fromisoformat(day), _segments(segments), _segments(secret),
-        created_at, read_at,
+        created_at, read_at, bool(row[8]) if len(row) > 8 else False,
     )

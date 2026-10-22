@@ -35,7 +35,7 @@ import json
 import logging
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, get_args
 
@@ -223,6 +223,32 @@ def group_prompt(
         ", ".join(base), _negative(NEGATIVE_PROMPT, style, tag.writing), GROUP_SIZE,
         tuple(each),
     )
+
+
+WORN_TAGS = 8
+"""The most tags an outfit given her (`worn`) keeps."""
+
+
+def worn(tag: PhotoTag, outfit: str) -> PhotoTag:
+    """`tag` with her outfit as `outfit` says (comma-separated tags, as `outfit_tags` reads
+    one from her outfit list), cleaned and stripped as hers are, `WORN_TAGS` at most; as it
+    was if none are left."""
+    stripped = list(tag.stripped)
+    seen = {*_FIXED, *_shot_tags(tag.shot), tag.framing, *tag.place, *tag.action}
+    tags: list[str] = []
+    for raw in re.split(r"[,，、]", outfit):
+        written = _cleaned(raw)
+        found = _TABLE.rewrites.get(written, written)
+        if not found or found in seen:
+            continue
+        seen.add(found)
+        if (crossing := _TABLE.crossing(found)) is not None:
+            stripped.append(crossing)
+            continue
+        tags.append(found)
+    if not tags:
+        return tag
+    return replace(tag, outfit=tuple(tags[:WORN_TAGS]), stripped=tuple(stripped))
 
 
 def writing(words: str, on: str, stripped: list[Crossing] | None = None) -> str:

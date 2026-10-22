@@ -15,6 +15,7 @@ function entry(change: Partial<DiaryEntry> = {}): DiaryEntry {
     more: false,
     secret: [],
     secret_hidden: false,
+    unlockable: false,
     read: false,
     ...change,
   };
