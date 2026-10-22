@@ -225,7 +225,9 @@ class FeatureSwitch(BaseModel):
 def available_features(backend: Backend) -> list[Feature]:
     """The features the deployment has, which a user may switch off, in the order they are
     shown: her scenes where affinity is on, her diary, letters and schedule (with her sleep
-    and her bath) where `.env` turns them on, the special days with the calendar, the weather
+    and her bath) where `.env` turns them on, the pictures and the photos always (a user may
+    bring their own image generation), her trip photos with her schedule and image
+    generation, her keepsakes' pictures with them and image generation, the special days with the calendar, the weather
     with the producer's place, and always the anniversaries and the promises."""
     settings = backend.settings
     has: dict[Feature, bool] = {
@@ -236,6 +238,10 @@ def available_features(backend: Backend) -> list[Feature]:
         "schedules": settings.schedules,
         "sleep": settings.schedules,
         "bath": settings.schedules,
+        "images": True,
+        "photos": True,
+        "trip_photos": backend.trip_photos.available(),
+        "keepsake_images": settings.keepsakes and backend.config.image_generator() is not None,
         "anniversaries": True,
         "special_days": backend.special_days is not None,
         "promises": True,

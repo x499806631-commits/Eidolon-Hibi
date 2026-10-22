@@ -185,6 +185,8 @@ export type ReachOut = {
   zh: string;
   segments: Segment[];
   created_at: string;
+  /** The photo she sent with it, if any (GLOSSARY.md「外景照片」). */
+  photo?: Photo;
 };
 
 /** What a conversation's record holds, in order. */
@@ -479,6 +481,10 @@ export const FEATURES = [
   "schedules",
   "sleep",
   "bath",
+  "images",
+  "photos",
+  "trip_photos",
+  "keepsake_images",
   "anniversaries",
   "special_days",
   "promises",
@@ -486,8 +492,15 @@ export const FEATURES = [
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 
-/** The features that are part of another, off with it: her sleep and her bath are kept in her schedule. */
-export const WITHIN: Partial<Record<Feature, Feature>> = { sleep: "schedules", bath: "schedules" };
+/** The features that are part of others, off with any of them: her sleep and her bath are kept in her
+ * schedule; the photos and pictures are drawn on image generation; her trip photos are within both. */
+export const WITHIN: Partial<Record<Feature, readonly Feature[]>> = {
+  sleep: ["schedules"],
+  bath: ["schedules"],
+  photos: ["images"],
+  trip_photos: ["images", "schedules"],
+  keepsake_images: ["images"],
+};
 
 export async function switchFeature(feature: Feature, on: boolean): Promise<void> {
   await expectNoContent(

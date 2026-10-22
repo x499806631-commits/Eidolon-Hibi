@@ -205,7 +205,7 @@ function toEntry(message: Recorded): Entry {
       pending: false,
       at: message.created_at,
       affinity: null,
-      photo: null,
+      photo: message.photo ?? null,
       reachOut: true,
     };
   }

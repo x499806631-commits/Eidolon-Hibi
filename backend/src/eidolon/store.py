@@ -150,6 +150,19 @@ CREATE TABLE IF NOT EXISTS reach_outs (
     record_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS reach_outs_by_conversation ON reach_outs(conversation_id, created_at);
+-- A photo she sent with a reach-out (GLOSSARY.md「外景照片」), one at most to it, kept as a
+-- reply's is (`photos`).
+CREATE TABLE IF NOT EXISTS reach_out_photos (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id),
+    reach_out_id INTEGER NOT NULL UNIQUE REFERENCES reach_outs(id),
+    tag TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'ready', 'failed')),
+    reason TEXT,
+    image BLOB,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 -- The letters she wrote the user (GLOSSARY.md「来信」): longer than what she says in a
 -- conversation and kept apart from any, the Japanese as the model wrote it, each segment with
 -- its subtitle; why she wrote it (`occasion`), when it comes (`created_at`: written ahead, it
@@ -398,26 +411,31 @@ class ReachOut:
     zh: str
     segments: list[Segment]
     created_at: str
+    photo: Photo | None = None
+    """The photo she sent with it, if any (GLOSSARY.md「外景照片」)."""
     type: Literal["reach_out"] = field(default="reach_out", init=False)
 
     def as_reply(self) -> Message:
-        """As those reading only the messages read it: as her reply. Its id is the
-        reach-out's, no message's."""
-        return Message(
+        """As those reading only the messages read it: as her reply, with its photo. Its id
+        is the reach-out's, no message's."""
+        return replace(Message(
             self.id, "character", None, self.ja, self.zh, self.created_at, self.segments
-        )
+        ), photo=self.photo)
 
     def without_cues(self) -> "ReachOut":
         """As people see it."""
         return ReachOut(
             self.id, without_cues(self.ja), without_cues(self.zh),
             [Segment(without_cues(s.ja), without_cues(s.zh)) for s in self.segments],
-            self.created_at,
+            self.created_at, self.photo,
         )
 
     def shown(self) -> dict:
-        """As the browser is told it: as people see it."""
-        return asdict(self.without_cues())
+        """As the browser is told it: as people see it, with its photo as a reply's is, if
+        any."""
+        shown = asdict(self.without_cues())
+        del shown["photo"]
+        return shown | ({"photo": self.photo.shown()} if self.photo else {})
 
 
 Recorded = Message | ConversationEvent | ReachOut
@@ -1096,8 +1114,8 @@ class Store:
             (conversation_id,),
         ).fetchone()
         reach_out = self._db.execute(
-            f"SELECT {_REACH_OUT_COLUMNS} FROM reach_outs WHERE conversation_id = ?"
-            " ORDER BY created_at DESC, id DESC LIMIT 1",
+            f"{_REACH_OUTS} WHERE r.conversation_id = ?"
+            " ORDER BY r.created_at DESC, r.id DESC LIMIT 1",
             (conversation_id,),
         ).fetchone()
         between: list[ConversationEvent | ReachOut] = []
@@ -1164,29 +1182,35 @@ class Store:
         `reason`. False, keeping nothing, if it is no longer there, its conversation
         deleted meanwhile, say, or no longer being generated."""
         with self._lock, self._db:
-            cursor = self._db.execute(
-                "UPDATE photos SET status = ?, reason = ?, image = ?, updated_at = ?"
-                " WHERE id = ? AND status = 'pending'",
-                ("ready" if image is not None else "failed", reason, image, _now(), photo_id),
-            )
-        return cursor.rowcount > 0
+            changed = 0
+            for table in ("photos", "reach_out_photos"):
+                changed += self._db.execute(
+                    f"UPDATE {table} SET status = ?, reason = ?, image = ?, updated_at = ?"
+                    " WHERE id = ? AND status = 'pending'",
+                    ("ready" if image is not None else "failed", reason, image, _now(), photo_id),
+                ).rowcount
+        return changed > 0
 
     def give_up_photos(self, reason: PhotoFailure) -> int:
         """Keep every photo still being generated as not sent, for `reason`: nothing is
         generating it any more, the server having stopped meanwhile. How many there were."""
         with self._lock, self._db:
-            cursor = self._db.execute(
-                "UPDATE photos SET status = 'failed', reason = ?, updated_at = ?"
-                " WHERE status = 'pending'",
-                (reason, _now()),
+            return sum(
+                self._db.execute(
+                    f"UPDATE {table} SET status = 'failed', reason = ?, updated_at = ?"
+                    " WHERE status = 'pending'",
+                    (reason, _now()),
+                ).rowcount
+                for table in ("photos", "reach_out_photos")
             )
-        return cursor.rowcount
 
     def photo(self, photo_id: str, user_id: str) -> Photo | None:
         """The photo, if it is in one of the user's conversations; None if not."""
         with self._lock:
             row = self._db.execute(
-                "SELECT p.id, p.status, p.reason, p.tag FROM photos p"
+                "SELECT p.id, p.status, p.reason, p.tag FROM (SELECT id, status, reason, tag,"
+                " conversation_id FROM photos UNION ALL SELECT id, status, reason, tag,"
+                " conversation_id FROM reach_out_photos) p"
                 " JOIN conversations c ON c.id = p.conversation_id"
                 " WHERE p.id = ? AND c.user_id = ?",
                 (photo_id, user_id),
@@ -1198,7 +1222,9 @@ class Store:
         is none such."""
         with self._lock:
             row = self._db.execute(
-                "SELECT p.image FROM photos p JOIN conversations c ON c.id = p.conversation_id"
+                "SELECT p.image FROM (SELECT id, image, status, conversation_id FROM photos"
+                " UNION ALL SELECT id, image, status, conversation_id FROM reach_out_photos) p"
+                " JOIN conversations c ON c.id = p.conversation_id"
                 " WHERE p.id = ? AND c.user_id = ? AND p.status = 'ready'",
                 (photo_id, user_id),
             ).fetchone()
@@ -1380,8 +1406,7 @@ class Store:
                 (conversation_id,),
             ).fetchall()
             reach_outs = self._db.execute(
-                f"SELECT {_REACH_OUT_COLUMNS} FROM reach_outs WHERE conversation_id = ?",
-                (conversation_id,),
+                f"{_REACH_OUTS} WHERE r.conversation_id = ?", (conversation_id,)
             ).fetchall()
         pending: list[ConversationEvent | ReachOut] = sorted(
             [*map(_event, events), *map(_reach_out, reach_outs)], key=_placed
@@ -1526,6 +1551,33 @@ class Store:
             )
         assert cursor.lastrowid is not None
         return ReachOut(cursor.lastrowid, ja, zh, list(said), created_at)
+
+    def add_photo_reach_out(
+        self, conversation_id: str, said: list[Segment], photo: NewPhoto
+    ) -> ReachOut | None:
+        """Record what she said first in the conversation, now, sending `photo` with it,
+        being generated (GLOSSARY.md「外景照片」); not seen yet. Not looked at again as
+        `add_reach_out` does but for her having ended it, when nothing is recorded (None)."""
+        created_at = _now()
+        ja, zh = "".join(s.ja for s in said), "".join(s.zh for s in said)
+        with self._lock, self._db:
+            if self._ended(conversation_id) is not None:
+                return None
+            cursor = self._db.execute(
+                "INSERT INTO reach_outs (conversation_id, ja, zh, segments, created_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (conversation_id, ja, zh, _stored_segments(said), created_at),
+            )
+            assert cursor.lastrowid is not None
+            self._db.execute(
+                "INSERT INTO reach_out_photos (id, conversation_id, reach_out_id, tag, status,"
+                " created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
+                (photo.id, conversation_id, cursor.lastrowid, photo.tag, created_at, created_at),
+            )
+        return ReachOut(
+            cursor.lastrowid, ja, zh, list(said), created_at,
+            Photo(photo.id, "pending", None, photo.tag),
+        )
 
     def add_letter(
         self,
@@ -1737,7 +1789,12 @@ _MESSAGE_WITH_PHOTO = (
 )
 """A message with its photo, if any, but not its picture (`_message_with_photo`)."""
 _EVENT_COLUMNS = "id, kind, created_at, affinity, gift_id, liked, keepsake_id, note"
-_REACH_OUT_COLUMNS = "id, ja, zh, segments, created_at"
+_REACH_OUTS = (
+    "SELECT r.id, r.ja, r.zh, r.segments, r.created_at, p.id AS photo_id,"
+    " p.status AS photo_status, p.reason AS photo_reason, p.tag AS photo_tag"
+    " FROM reach_outs r LEFT JOIN reach_out_photos p ON p.reach_out_id = r.id"
+)
+"""Reach-outs, each with its photo, if any; `r` the reach-out."""
 _LETTER_COLUMNS = "id, character_id, occasion, ja, zh, segments, created_at, read_at"
 
 def write_profile(db: sqlite3.Connection, user_id: str, profile: ProducerProfile) -> None:
@@ -1885,9 +1942,12 @@ def _letter(row: sqlite3.Row) -> Letter:
 
 
 def _reach_out(row: sqlite3.Row) -> ReachOut:
+    photo = None
+    if "photo_id" in row.keys() and row["photo_id"] is not None:
+        photo = Photo(row["photo_id"], row["photo_status"], row["photo_reason"], row["photo_tag"])
     return ReachOut(
         row["id"], row["ja"], row["zh"],
-        [Segment(**s) for s in json.loads(row["segments"])], row["created_at"],
+        [Segment(**s) for s in json.loads(row["segments"])], row["created_at"], photo,
     )
 
 

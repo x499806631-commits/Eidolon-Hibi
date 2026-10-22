@@ -51,8 +51,8 @@ async def test_the_features_the_deployment_has_are_on_till_the_user_switches_one
     absent = await switch(client, "weather", False)  # no place for the weather here
 
     assert before == {
-        "diary": True, "schedules": True, "sleep": True, "bath": True,
-        "anniversaries": True, "promises": True,
+        "diary": True, "schedules": True, "sleep": True, "bath": True, "images": True,
+        "photos": True, "anniversaries": True, "promises": True,
     }
     assert off.status_code == 204
     assert (await features(client))["diary"] is False
@@ -73,6 +73,22 @@ def test_sleep_and_the_bath_are_off_with_her_schedule(
 
     assert not switches.on(me, "sleep") and not switches.on(me, "bath")
     assert switches.of(me)["sleep"] is True  # as the user set it
+
+
+def test_the_photos_and_pictures_are_off_with_image_generation_and_trip_photos_with_either(
+    make_client: ClientFactory, settings: Settings
+):
+    make_client(FakeLLM())  # signs the user up
+    me = user_id(settings.database_path, "producer")
+    switches = Features(settings.database_path)
+
+    switches.switch(me, "images", False)
+    off = [f for f in ("photos", "trip_photos", "keepsake_images", "keepsakes") if not switches.on(me, f)]
+    switches.switch(me, "images", True)
+    switches.switch(me, "schedules", False)
+
+    assert off == ["photos", "trip_photos", "keepsake_images"]  # her keepsakes still come
+    assert not switches.on(me, "trip_photos") and switches.on(me, "photos")
     switches.close()
 
 

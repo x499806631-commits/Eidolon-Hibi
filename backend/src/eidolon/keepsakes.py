@@ -384,7 +384,7 @@ class Keepsakes:
                     conversation, lease.keys.chat_llm, due.occasion, due.about,
                     self._names(due.user_id, due.character_id),
                 )
-                image = await self._draw(draft.tags)
+                image = await self._draw(due.user_id, draft.tags)
         except Exception as e:
             # Not logged with what was raised: a service's error may repeat what it was asked.
             log.warning("giving keepsake %s failed: %s", due.id, type(e).__name__)
@@ -404,10 +404,19 @@ class Keepsakes:
             except Exception:
                 log.exception("telling of keepsake %s failed", keepsake_id)
 
-    async def _draw(self, tags: str) -> bytes | None:
-        """Its picture, on the deployer's image generation; None without one, or failing."""
+    def can_draw(self, user_id: str) -> bool:
+        """Whether the user's keepsakes' pictures are drawn: on the deployer's image generation,
+        the user not having switched them off (GLOSSARY.md「玩法开关」)."""
+        return (
+            self._config.image_generator() is not None
+            and self._features.on(user_id, "keepsake_images")
+        )
+
+    async def _draw(self, user_id: str, tags: str) -> bytes | None:
+        """Its picture, on the deployer's image generation; None without one, the user having
+        switched them off, or failing."""
         generator = self._config.image_generator()
-        if generator is None:
+        if generator is None or not self._features.on(user_id, "keepsake_images"):
             return None
         settings = generator.settings
         prompt, stripped = keepsake_prompt(tags, settings.style)
@@ -545,7 +554,7 @@ class Keepsakes:
     def fill_images(self, user_id: str) -> bool:
         """Begin drawing the pictures of all the user's keepsakes without one, one at a time,
         on the deployer's image generation; False if there is none, or it is under way."""
-        if self._config.image_generator() is None or self.filling(user_id):
+        if not self.can_draw(user_id) or self.filling(user_id):
             return False
         self._filling[user_id] = asyncio.create_task(self._fill(user_id))
         return True
@@ -563,7 +572,7 @@ class Keepsakes:
             )
             try:
                 with recording.current():
-                    image = await self._draw(tags)
+                    image = await self._draw(user_id, tags)
             except Exception:
                 log.exception("drawing keepsake %s failed", keepsake_id)
                 image = None

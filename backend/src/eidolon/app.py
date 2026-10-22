@@ -59,6 +59,7 @@ from eidolon.photos_api import add_photo_routes
 from eidolon.sessions import UserId, session_middleware
 from eidolon.diary_api import add_diary_routes
 from eidolon.keepsakes_api import add_keepsake_routes
+from eidolon.trip_photos_api import add_trip_photo_routes
 from eidolon.schedules_api import add_schedule_routes
 from eidolon.letters_api import add_letter_routes
 from eidolon.experiences_api import add_experience_routes
@@ -274,7 +275,7 @@ def create_app(backend: Backend) -> FastAPI:
                 "zh": said.zh,
                 "created_at": said.created_at,
                 "reach_out": True,
-            }
+            } | ({"photo": True} if last.photo is not None and last.photo.status == "ready" else {})
         shown = last.without_cues()
         return {
             "role": shown.role,
@@ -373,6 +374,7 @@ def create_app(backend: Backend) -> FastAPI:
     add_letter_routes(app, backend)
     add_diary_routes(app, backend)
     add_keepsake_routes(app, backend)
+    add_trip_photo_routes(app, backend)
     add_schedule_routes(app, backend)
     add_appeal_routes(app, backend.appeals)
     add_promise_routes(app, backend)

@@ -304,3 +304,19 @@ async def test_a_day_now_and_then_has_a_trip_away_from_tokyo(
     written = await schedule(client)
     assert written is not None and written["trip"] == "北海道"
     assert written["twists"] == ["要去北海道出外景，当天来回"]
+
+
+async def test_with_its_pictures_switched_off_it_still_comes_without_one_and_none_are_missing(
+    make_client: ClientFactory, settings: Settings
+):
+    image = FakeImageService()
+    client, _, _ = await talked(make_client, settings, GIVES, image=image)
+    res = await client.put("/api/account/features/keepsake_images", json={"on": False})
+
+    await client.post("/api/keepsakes/give-now", json={"character_id": "mano"})
+    shown = await cabinet(client)
+
+    assert res.status_code == 204 and image.requests == []
+    assert shown["keepsakes"][0]["has_image"] is False
+    assert (shown["missing"], shown["can_draw"]) == (0, False)
+    assert (await client.post("/api/keepsakes/fill-images")).json()["started"] is False

@@ -87,6 +87,30 @@ describe("conversationLog", () => {
     expect(log.entries[1]).not.toHaveProperty("reachOut");
   });
 
+  it("shows the photo she sent with a reach-out from her trip, and waits on it as on a reply's", () => {
+    const photo = { id: "p1", status: "pending" as const, reason: null };
+    const log = play([
+      {
+        type: "loaded",
+        messages: [
+          message(1, "user", "早上好"),
+          {
+            type: "reach_out",
+            id: 3,
+            ja: "見て",
+            zh: "你看",
+            segments: [{ ja: "見て", zh: "你看" }],
+            created_at: "2026-09-26T09:00:00Z",
+            photo,
+          },
+        ],
+      },
+    ]);
+
+    expect(log.entries[1]).toMatchObject({ key: "r3", reachOut: true, photo });
+    expect(pendingPhotos(log)).toEqual(["p1"]);
+  });
+
   it("replaces everything, including a turn in progress, when loaded again", () => {
     const log = play(
       [

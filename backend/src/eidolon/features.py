@@ -1,11 +1,16 @@
 """Each user's own switches for the fork's features (GLOSSARY.md「玩法开关」): her scenes at
-the doors, her diary, her letters, her keepsakes, her schedule and, within it, her sleep and her bath, the
+the doors, her diary, her letters, her keepsakes, her schedule and, within it, her sleep and her bath; the pictures drawn for her and, within
+them, the photos she sends when asked, those she sends from her trips and her keepsakes'
+pictures; the
 anniversaries she brings up, the special days she brings up, the promises she keeps track of,
 and the weather she knows of. All on by default; a user switches off what they would rather
 not have, for all the characters, and only for themselves. What the deployer has off is off
 whatever the user's switch says; that is the features' own business, not this one's.
 
-Sleep and the bath are kept in her schedule, so with her schedule off they are off too.
+Sleep, the bath and her trips are kept in her schedule, so with her schedule off they are
+off too; the photos and pictures are all drawn on image generation, so with it off they are
+off too. Her trip photos are within both. Her keepsakes still come with the pictures off, an
+emoji standing for each.
 """
 
 import threading
@@ -16,14 +21,18 @@ from eidolon.database import connect
 
 Feature = Literal[
     "scenes", "diary", "letters", "keepsakes", "schedules", "sleep", "bath",
-    "anniversaries", "special_days", "promises", "weather",
+    "images", "photos", "trip_photos", "keepsake_images", "anniversaries", "special_days", "promises", "weather",
 ]
 """A feature a user may switch off."""
 
 FEATURES: tuple[Feature, ...] = get_args(Feature)
 
-WITHIN: dict[Feature, Feature] = {"sleep": "schedules", "bath": "schedules"}
-"""The features that are part of another, off with it."""
+WITHIN: dict[Feature, tuple[Feature, ...]] = {
+    "sleep": ("schedules",), "bath": ("schedules",),
+    "photos": ("images",), "trip_photos": ("images", "schedules"),
+    "keepsake_images": ("images",),
+}
+"""The features that are part of others, off with any of them."""
 
 _SCHEMA = """
 -- The features each user has switched off (GLOSSARY.md「玩法开关」); on for all the others.
@@ -45,9 +54,9 @@ class Features:
             self._db.executescript(_SCHEMA)
 
     def on(self, user_id: str, feature: Feature) -> bool:
-        """Whether the user has `feature` on, and the feature it is part of, if any."""
+        """Whether the user has `feature` on, and the features it is part of, if any."""
         off = self._off(user_id)
-        return feature not in off and WITHIN.get(feature) not in off
+        return feature not in off and not any(f in off for f in WITHIN.get(feature, ()))
 
     def of(self, user_id: str) -> dict[Feature, bool]:
         """The user's own switch for every feature, as they set it (not as `on` reads it)."""

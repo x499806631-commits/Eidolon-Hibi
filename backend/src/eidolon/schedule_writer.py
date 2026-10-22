@@ -12,7 +12,9 @@ record of its own (`schedule`). A turn never waits for one: without it, she has 
 A night she goes to bed, her bath before it is drawn on `random` too (`schedules.draw_bath`),
 in the tub unless her heart says she showers (GLOSSARY.md「洗澡」). A day she has a live away
 from Tokyo, or one day in `TRIP_ODDS` otherwise (a twist of its own), she is away on a trip,
-kept with the day, for the souvenir she brings the day after (GLOSSARY.md「纪念品」).
+kept with the day, for the souvenir she brings the day after (GLOSSARY.md「纪念品」). One trip
+in `TOGETHER_ODDS`, others of her unit whose day is not written yet go with her; their days,
+written after, have them go on it too (GLOSSARY.md「外景照片」).
 """
 
 import asyncio
@@ -33,6 +35,8 @@ from eidolon.schedules import (
     TRIP_ODDS,
     TRIP_PLACES,
     TRIP_TWIST,
+    TRIP_WITH_TWIST,
+    TOGETHER_ODDS,
     TWISTS,
     Bath,
     Schedules,
@@ -157,11 +161,29 @@ class ScheduleWriter:
     async def _write(self, conversation: Conversation, day: date, again: bool = False) -> None:
         user_id, character_id = conversation.user_id, conversation.character_id
         twists = self._twists()
-        trip = self._engine.live_away(character_id, day)
+        names = {c.id: c.name for c in self._characters.values()}
+        trip_with: tuple[str, ...] = ()
+        joining = self._schedules.joining(user_id, character_id, day)
+        if joining is not None:
+            trip, trip_with = joining
+            twists.append(TRIP_WITH_TWIST.format(
+                names="、".join(names.get(c, c) for c in trip_with), place=trip
+            ))
+        else:
+            trip = self._engine.live_away(character_id, day)
         if trip is None and self._random(TRIP_ODDS) == 0:
             trip = TRIP_PLACES[self._random(len(TRIP_PLACES))]
-            twists.append(TRIP_TWIST.format(place=trip))
-        names = {c.id: c.name for c in self._characters.values()}
+            free = [
+                c for c in self._engine.unit_mates(character_id)
+                if not self._schedules.tried(user_id, c, day)
+            ]
+            if free and self._random(TOGETHER_ODDS) == 0:
+                trip_with = tuple(free)
+                twists.append(TRIP_WITH_TWIST.format(
+                    names="、".join(names.get(c, c) for c in trip_with), place=trip
+                ))
+            else:
+                twists.append(TRIP_TWIST.format(place=trip))
         before = self._schedules.of(user_id, character_id, day - timedelta(days=1))
         yesterday = schedule_said(before, names)
         recording = self._activity.begin("schedule", user_id, character_id, own_llm=False, exempt=False)
@@ -191,5 +213,5 @@ class ScheduleWriter:
             await asyncio.to_thread(self._schedules.forget, user_id, character_id, day)
         await asyncio.to_thread(
             self._schedules.keep, user_id, character_id, day, slots, twists, wake, sleep, bath,
-            trip if slots else None,
+            trip if slots else None, trip_with,
         )

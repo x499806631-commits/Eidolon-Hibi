@@ -34,10 +34,11 @@ def add_keepsake_routes(app: FastAPI, backend: Backend) -> None:
     keepsakes, clock = backend.keepsakes, backend.clock
 
     def drawing(user_id: str) -> dict:
-        return {
-            "missing": keepsakes.missing(user_id),
+        drawn = keepsakes.can_draw(user_id) or backend.config.image_generator() is None
+        return {  # pictures switched off: none missing, none to draw (GLOSSARY.md「玩法开关」)
+            "missing": keepsakes.missing(user_id) if drawn else 0,
             "filling": keepsakes.filling(user_id),
-            "can_draw": backend.config.image_generator() is not None,
+            "can_draw": keepsakes.can_draw(user_id),
         }
 
     @app.get("/api/keepsakes")

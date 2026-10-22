@@ -203,7 +203,9 @@ action: sitting, smile
         assert isinstance(parameters["seed"], int)
 
 
-@pytest.mark.parametrize("deployment", ["no judge model", "no image generation", "no photo tags"])
+@pytest.mark.parametrize(
+    "deployment", ["no judge model", "no image generation", "no photo tags", "photos off", "images off"]
+)
 async def test_a_turn_that_could_have_no_photo_tells_her_she_cannot_send_one(
     make_client: ClientFactory, settings: Settings, deployment: str
 ):
@@ -218,6 +220,9 @@ async def test_a_turn_that_could_have_no_photo_tells_her_she_cannot_send_one(
     client = make_client(
         llm, clients=clients, settings=settings, image_transport=image.transport()
     )
+    if deployment.endswith(" off"):  # switched off by the user (GLOSSARY.md「玩法开关」)
+        res = await client.put(f"/api/account/features/{deployment.split()[0]}", json={"on": False})
+        assert res.status_code == 204
     conversation = await start_conversation(client, character)
 
     events = await send_turn(client, conversation, "发张自拍给我看看")

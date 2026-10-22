@@ -76,8 +76,14 @@ def size_of(prompt: ImagePrompt) -> tuple[int, int]:
     return prompt.size or (WIDTH, HEIGHT)
 
 
+_CENTER = {"x": 0.5, "y": 0.5}
+"""Where each character of a picture with several is, left to the model (`use_coords` off)."""
+
+
 def generation_request(model: str, prompt: ImagePrompt, seed: int) -> dict:
-    """The body NovelAI's `/ai/generate-image` is sent for `prompt` with `model`."""
+    """The body NovelAI's `/ai/generate-image` is sent for `prompt` with `model`: each of the
+    characters of a picture with several (`ImagePrompt.characters`) a character prompt of
+    her own, in order, as V5 takes them; for each, an empty one in the negative."""
     width, height = size_of(prompt)
     return {
         "input": prompt.positive,
@@ -98,12 +104,22 @@ def generation_request(model: str, prompt: ImagePrompt, seed: int) -> dict:
             "cfg_rescale": 0,
             "negative_prompt": prompt.negative,
             "v4_prompt": {
-                "caption": {"base_caption": prompt.positive, "char_captions": []},
+                "caption": {
+                    "base_caption": prompt.positive,
+                    "char_captions": [
+                        {"char_caption": c, "centers": [_CENTER]} for c in prompt.characters
+                    ],
+                },
                 "use_coords": False,
                 "use_order": True,
             },
             "v4_negative_prompt": {
-                "caption": {"base_caption": prompt.negative, "char_captions": []},
+                "caption": {
+                    "base_caption": prompt.negative,
+                    "char_captions": [
+                        {"char_caption": "", "centers": [_CENTER]} for _ in prompt.characters
+                    ],
+                },
                 "legacy_uc": False,
             },
         },
@@ -189,10 +205,11 @@ class ImageGenerator:
 
 def openai_request(model: str, prompt: ImagePrompt) -> dict:
     """The body OpenAI's image format, `/images/generations`, is sent for `prompt` with
-    `model`: what it asks for at the top level, as relays read it."""
+    `model`: what it asks for at the top level, as relays read it; the characters of a
+    picture with several after the rest, the format having no place of their own for them."""
     return {
         "model": model,
-        "prompt": prompt.positive,
+        "prompt": ", ".join((prompt.positive, *prompt.characters)),
         "negative_prompt": prompt.negative,
         "size": "{}x{}".format(*size_of(prompt)),
         "n": 1,

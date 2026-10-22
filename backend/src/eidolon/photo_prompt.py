@@ -34,6 +34,7 @@ fixed altogether: `nsfw`, the Human Focus preset, and what no photo of hers show
 import json
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, get_args
@@ -109,6 +110,9 @@ class PhotoTag:
     place: tuple[str, ...]
     outfit: tuple[str, ...]
     action: tuple[str, ...]
+    others: tuple[str, ...] = ()
+    """In a group photo, what the others with her wear and do (`others`), cleaned; none if
+    she wrote none."""
     scene: str = ""
     """Her sentence on how it is laid out, cleaned; empty if none, or it crossed the line."""
     writing: str = ""
@@ -123,6 +127,9 @@ class ImagePrompt:
     negative: str
     size: tuple[int, int] | None = None
     """The picture's width and height; None for a photo's, portrait."""
+    characters: tuple[str, ...] = ()
+    """For a picture with several in it, each one's own prompt, in order (V5's character
+    prompts); none for one with one or none, all said in `positive`."""
 
 
 def read_tag(text: str) -> PhotoTag:
@@ -146,9 +153,10 @@ def read_tag(text: str) -> PhotoTag:
     place, outfit, action = (
         _field(fields.get(name, ""), name, seen, stripped) for name in DEFAULTS
     )
+    others = _field(fields.get("others", ""), "others", set(_FIXED), stripped, default=())
     scene = _sentence(fields.get("scene", ""), stripped)
     words = writing(fields.get("words", ""), fields.get("words_on", ""), stripped)
-    return PhotoTag(shot, framing, place, outfit, action, scene, words, tuple(stripped))
+    return PhotoTag(shot, framing, place, outfit, action, others, scene, words, tuple(stripped))
 
 
 def image_prompt(character: Character, tag: PhotoTag, style: str = "") -> ImagePrompt:
@@ -164,6 +172,46 @@ def image_prompt(character: Character, tag: PhotoTag, style: str = "") -> ImageP
         *tag.outfit, *action, *_said(tag.scene, tag.writing), *_finish(style, tag.writing),
     )
     return ImagePrompt(", ".join(positive), _negative(NEGATIVE_PROMPT, style))
+
+
+GROUP_SIZE = (1216, 832)
+"""A group photo's width and height: landscape, to have room for them all."""
+MAX_IN_GROUP = 5
+"""The most in a group photo, her among them."""
+
+
+def group_prompt(
+    characters: Sequence[Character], tag: PhotoTag, style: str = ""
+) -> ImagePrompt:
+    """The prompts a photo of `characters` together (the first the one who sends it, all with
+    their photo tags, `MAX_IN_GROUP` at most) is generated from, as `tag` says it is taken,
+    in the art style `style`: what all of them share in the base prompt (how many girls,
+    the work, the style, how it is taken, where, her sentence and the words), and each a
+    character prompt of her own (V5's), `girl` and who she is, her looks, then what she
+    wears and does: hers from `tag`'s outfit and action, the others' from its `others`, or
+    hers where it says nothing. With one, it is `image_prompt`'s."""
+    characters = list(characters)[:MAX_IN_GROUP]
+    if len(characters) == 1:
+        return image_prompt(characters[0], tag, style)
+    for c in characters:
+        assert c.photo_tag is not None and c.photo_appearance is not None
+    action = tag.action
+    if tag.shot == "other" and not any(g in t for t in action for g in _GAZES):
+        action = (*action, LOOKING_AT_VIEWER)
+    base = (
+        f"{len(characters)}girls", WORK_TAG, *_styled(style), *_shot_tags(tag.shot),
+        tag.framing, *tag.place, *_said(tag.scene, tag.writing), *_finish(style, tag.writing),
+    )
+    others = tag.others or (*tag.outfit, *tag.action)
+    each = [
+        ", ".join(("girl", c.photo_tag or "", c.photo_appearance or "", *(
+            (*tag.outfit, *action) if i == 0 else others
+        )))
+        for i, c in enumerate(characters)
+    ]
+    return ImagePrompt(
+        ", ".join(base), _negative(NEGATIVE_PROMPT, style), GROUP_SIZE, tuple(each)
+    )
 
 
 def writing(words: str, on: str, stripped: list[Crossing] | None = None) -> str:
@@ -319,7 +367,8 @@ def _shot_tags(shot: Shot) -> tuple[str, ...]:
 
 
 def _field(
-    value: str, name: str, seen: set[str], stripped: list[Crossing]
+    value: str, name: str, seen: set[str], stripped: list[Crossing],
+    default: tuple[str, ...] | None = None,
 ) -> tuple[str, ...]:
     """The tags of one of her fields, cleaned and put as the model knows them, those already
     written elsewhere left out (and added to `seen`), those crossing the line stripped (and
@@ -338,7 +387,7 @@ def _field(
         if tag not in _TABLE.known and len(tags) < FIELD_TAGS:
             log.info("a photo tag the tag table does not know, kept: %r", tag)
         tags.append(tag)
-    return tuple(tags[:FIELD_TAGS]) or (DEFAULTS[name],)
+    return tuple(tags[:FIELD_TAGS]) or (default if default is not None else (DEFAULTS[name],))
 
 
 def _cleaned(tag: str) -> str:
@@ -378,5 +427,6 @@ class _TagTable:
 
 
 _TABLE = _TagTable(Path(__file__).with_name("photo_tags.json"))
+
 _FIXED = frozenset({"1girl", "solo", WORK_TAG, *QUALITY_TAGS})
 """What every positive prompt has already, written by her or not."""

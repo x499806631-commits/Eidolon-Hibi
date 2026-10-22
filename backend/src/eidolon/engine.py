@@ -445,7 +445,11 @@ def _reached_out(reach_out: ReachOut, timezone: str) -> str:
     """What she is told of her `reach_out`, the producer in `timezone`: when, then her words
     as her replies are written in her prompt."""
     at = datetime.fromisoformat(reach_out.created_at).astimezone(ZoneInfo(timezone))
-    said = format_reply(reach_out.segments)
+    photo = reach_out.photo
+    said = format_reply(
+        reach_out.segments, photo.tag if photo else None,
+        photo is not None and photo.status == "failed",
+    )
     return f"（{at.month}月{at.day}日 {at:%H:%M}，你先给制作人发了：）{said}"
 
 
@@ -519,6 +523,35 @@ REACH_OUT_RULES = """# 先开口
 where what retrieval finds would be."""
 
 WANTS_TO_REACH_OUT = "（制作人这会儿没在和你说话。你想先给他发几句。）"
+
+TRIP_PHOTO_RULES = """# 外景的照片
+你今天在{where}出外景，现在是空下来的一会儿。{together}你想给制作人发一张这里的照片，再说几句。
+在回复的最前面、第一个 <ja> 之前写一个照片标签，一行一栏：
+<photo>
+shot: selfie 或 other（别人帮你拍）
+framing: portrait、upper body、cowboy shot、full body 选一个；自拍只能选 portrait 或 upper body
+place: 2–4 个英文 tag，写这里是什么地方、室内还是室外、时段或天气、光线，要看得出是{where}
+outfit: 1–4 个英文 tag，你穿的衣服
+action: 2–4 个英文 tag，你的动作、表情
+{others}scene: 一句简短的英文，写画面怎么摆：谁在哪里、看着哪里、手里拿着什么、背景里有什么
+words: （可以不写）照片里真的会有的一小段字，日语或英语，二十个字以内，例如招牌、站名
+words_on: 有 words 时写这段字在哪里，英文短语
+note: 一句中文，写这是一张什么样的照片，只给你自己回看
+</photo>
+- 不写发色、瞳色、发型、身材，也不写画风或画师；{nobody}
+- 照片只有全年龄的内容。
+- 标签后面用 <ja><zh> 写一到两段：这是哪里、在干什么、有什么想跟他分享的。照你的性格和口吻。
+- 不说要给他打电话。"""
+"""How she is to send the producer a photo from her trip (GLOSSARY.md「外景照片」)."""
+
+TRIP_PHOTO_TOGETHER = "和你一起来的有{names}，照片可以是你一个人的，也可以是和她们的合照。"
+
+TRIP_PHOTO_OTHERS = """group: 和她们的合照写 yes，只拍你自己写 no
+others: 合照时 1–4 个英文 tag，写她们穿什么、在做什么
+"""
+"""What she is told of the others on the trip with her."""
+
+WANTS_TO_SEND_TRIP_PHOTO = "（制作人这会儿没在和你说话。你想给他发一张外景的照片。）"
 
 CALLING_BACK = "制作人刚才给你打过电话，你在洗澡没接到；现在洗完了，先跟他说一声，问问他有什么事。"
 """Told her as she reaches out after a call she did not answer in the bath (GLOSSARY.md「洗澡」)."""
@@ -1063,6 +1096,19 @@ class ConversationEngine:
                 return ends
         return None
 
+    def unit_mates(self, character_id: str) -> list[str]:
+        """The others of her unit among the characters, by id, by the world setting; none
+        without one, or where it does not say her unit."""
+        if self._world is None:
+            return []
+        unit = self._world.unit_of(self._characters[character_id].name)
+        if unit is None:
+            return []
+        return [
+            c.id for c in self._characters.values()
+            if c.id != character_id and (self._world.unit_of(c.name) or (None,))[0] == unit[0]
+        ]
+
     def live_away(self, character_id: str, day: date) -> str | None:
         """The city her live on `day` is in, away from Tokyo, by the world setting; None
         without one (GLOSSARY.md「纪念品」)."""
@@ -1544,6 +1590,33 @@ class ConversationEngine:
         yield TurnDone(reply.without_cues(), affinity and affinity.shown(), ended and ended.shown())
 
     async def reach_out(self, conversation: Conversation, llm: ChatLLM) -> list[Segment]:
+        """What she says first in `conversation` (`_reaching_out`), how she does as
+        `REACH_OUT_RULES` says; a photo tag she writes is dropped."""
+        said, _ = await self._reaching_out(conversation, llm, REACH_OUT_RULES, WANTS_TO_REACH_OUT)
+        return said
+
+    async def send_trip_photo(
+        self, conversation: Conversation, llm: ChatLLM, place: str, with_names: Sequence[str]
+    ) -> tuple[list[Segment], str]:
+        """What she says first in `conversation` on a trip to `place` (GLOSSARY.md「外景照片」),
+        with the others of her unit named in `with_names` if any, sending the producer a
+        photo from there: its segments and the photo tag she wrote. Raises EmptyReply if
+        she says nothing, or writes no photo tag."""
+        together = bool(with_names)
+        rules = TRIP_PHOTO_RULES.format(
+            where=place,
+            together=TRIP_PHOTO_TOGETHER.format(names="、".join(with_names)) if together else "",
+            others=TRIP_PHOTO_OTHERS if together else "",
+            nobody="照片里只有你，或者你和一起来的她们，没有别的人。" if together else "照片里只有你一个人。",
+        )
+        said, tag = await self._reaching_out(conversation, llm, rules, WANTS_TO_SEND_TRIP_PHOTO)
+        if tag is None:
+            raise EmptyReply("对话模型没有写照片标签")
+        return said, tag
+
+    async def _reaching_out(
+        self, conversation: Conversation, llm: ChatLLM, rules: str, wants: str
+    ) -> tuple[list[Segment], str | None]:
         """What she says first in `conversation`, the user not talking to her (GLOSSARY.md
         「搭话」), on `llm`: its segments, as the model wrote them, delivery cues and all. Her
         prompt is laid out as a text turn's (ADR-0020), and opens as the next one's will, but
@@ -1593,15 +1666,18 @@ class ConversationEngine:
                 *([SCENE_INVITATION] if scene is not None and scene.turns == 0 else []),
                 *([CALLING_BACK] if _missed_since_last_turn(record) else []),
             ],
-            [*([memories] if memories else []), REACH_OUT_RULES],
-            WANTS_TO_REACH_OUT, None,
+            [*([memories] if memories else []), rules],
+            wants, None,
         )
         parser = ReplyParser()
+        tag: str | None = None
         stream = llm.stream(prompt)
         try:
             async for item in stream:
                 if isinstance(item, str):
-                    parser.feed(item)  # a photo tag is dropped: she sends none
+                    for event in parser.feed(item):
+                        if isinstance(event, PhotoTagged):
+                            tag = event.tag
         finally:
             if (close := getattr(stream, "aclose", None)) is not None:
                 await close()
@@ -1609,7 +1685,7 @@ class ConversationEngine:
         if not parser.complete:
             raise EmptyReply("对话模型没有返回任何内容")
         self._promises_told(promises_due, now, timezone)
-        return parser.complete
+        return parser.complete, tag
 
     async def write_letter(
         self,
@@ -1801,6 +1877,8 @@ class ConversationEngine:
         there being the judge model to ask, typed or in a call alike."""
         has_judge = self._retrieval is not None or self._affinity_judge is not None
         if not has_judge or self._photos is None:
+            return None
+        if not self._features.on(conversation.user_id, "photos"):  # GLOSSARY.md「玩法开关」
             return None
         return self._photos.eligibility(character, conversation.user_id, own)
 

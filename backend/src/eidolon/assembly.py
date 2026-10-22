@@ -60,6 +60,7 @@ from eidolon.photos import Photos
 from eidolon.proxy import ProxyRoutes
 from eidolon.diary import Diary
 from eidolon.keepsakes import Keepsakes
+from eidolon.trip_photos import TripPhotos
 from eidolon.schedule_writer import ScheduleWriter
 from eidolon.schedules import Schedules
 from eidolon.letters import Letters
@@ -151,6 +152,8 @@ class Backend:
     """Has her schedule for each day written, ahead of the turns."""
     keepsakes: Keepsakes
     """The keepsakes she gives, and the cabinet (GLOSSARY.md「纪念品」)."""
+    trip_photos: TripPhotos
+    """The photos she sends from her trips (GLOSSARY.md「外景照片」)."""
     features: Features
     """Each user's own switches for the fork's features (GLOSSARY.md「玩法开关」)."""
     world: World | None = None
@@ -174,6 +177,7 @@ class Backend:
     _keeping_diaries: asyncio.Task[None] | None = field(default=None, repr=False)
     _planning: asyncio.Task[None] | None = field(default=None, repr=False)
     _giving: asyncio.Task[None] | None = field(default=None, repr=False)
+    _sending: asyncio.Task[None] | None = field(default=None, repr=False)
 
     async def start(self) -> None:
         """What is done as the server starts, on its event loop: try the overrides of the
@@ -188,12 +192,13 @@ class Backend:
         self._keeping_diaries = asyncio.create_task(self.diary.keep_writing())
         self._planning = asyncio.create_task(self.schedule_writer.keep_writing())
         self._giving = asyncio.create_task(self.keepsakes.keep_giving())
+        self._sending = asyncio.create_task(self.trip_photos.keep_sending())
 
     async def aclose(self) -> None:
         """Close what `build` opened, last opened first."""
         for task in (
             self._keeping_fresh, self._probing, self._reaching_out, self._writing,
-            self._keeping_diaries, self._planning, self._giving,
+            self._keeping_diaries, self._planning, self._giving, self._sending,
         ):
             if task is not None:
                 task.cancel()
@@ -470,6 +475,12 @@ def build(
         lambda user_id: settings.letters and features.on(user_id, "letters"), features,
     )
     closers.append(keepsakes.close)
+    trip_photos = TripPhotos(
+        settings.database_path, store, engine, characters, config, activity, clock,
+        random or secure_random, settings.schedules, schedules, affinities, calls.in_call,
+        features,
+    )
+    closers.append(trip_photos.close)
     affinities.on_scene_done(keepsakes.scene_played)
     gifts.on_given(keepsakes.gift_given)
     promises.on_settled(keepsakes.promise_settled)
@@ -528,6 +539,7 @@ def build(
         schedules=schedules,
         features=features,
         keepsakes=keepsakes,
+        trip_photos=trip_photos,
         schedule_writer=schedule_writer,
         world=world,
         special_days=special_days,
