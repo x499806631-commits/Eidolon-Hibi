@@ -16,7 +16,7 @@ import {
 } from "@/lib/api";
 import type { Call, CallHandlers, MicInUse } from "@/lib/call";
 import type { CallPreferences } from "@/lib/callPreferences";
-import { LiveConversation, type Ports } from "@/lib/liveConversation";
+import { LiveConversation, NO_ANSWER_RINGS, type Ports } from "@/lib/liveConversation";
 import { CALM } from "@/lib/standAnimations";
 
 /** A call that has connected: records what the conversation asks of it. */
@@ -69,6 +69,9 @@ class FakeVoice {
   callConnected = (setAmbienceAuto: (on: boolean) => void) => void (this.setAmbienceAuto = setAmbienceAuto);
   picked: AmbienceKind[] = [];
   ambiencePicked = (kind: AmbienceKind) => void this.picked.push(kind);
+  /** How many times she was said to be in the tub. */
+  baths = 0;
+  bath = () => void this.baths++;
 }
 
 /** The phone's own sounds: records what the conversation tells it, in order. */
@@ -1315,6 +1318,15 @@ describe("LiveConversation: her voice", () => {
 
     expect(call.ambienceAuto).toEqual([true]);
     expect(voice.picked).toEqual(["rain"]);
+  });
+
+  it("puts her voice in the bathroom when she took the call in the tub (GLOSSARY.md「洗澡」)", async () => {
+    const { live, attempts, voice } = await conversation();
+    await connected(live, attempts);
+
+    attempts[0].handlers.onEvent({ type: "bath" });
+
+    expect(voice.baths).toBe(1);
   });
 
   it("plays her voice in the call under way", async () => {
@@ -2648,5 +2660,37 @@ describe("LiveConversation: what the list shows newer", () => {
 
     expect(live.snapshot().call.phase).toBe("ended");
     expect(reads).toEqual(["c1"]);
+  });
+});
+
+describe("LiveConversation: she does not pick up, in the bath (GLOSSARY.md「洗澡」)", () => {
+  afterEach(() => vi.useRealTimers());
+  const noAnswer = () => new ApiError("她现在没有接电话", 409, { code: "no_answer" });
+
+  it("lets it ring a while, then says she did not pick up", async () => {
+    const { live, attempts } = await conversation();
+    vi.useFakeTimers();
+    const calling = live.startCall();
+    attempts[0].fail(noAnswer());
+    await vi.advanceTimersByTimeAsync(NO_ANSWER_RINGS - 1);
+    const ringing = live.snapshot().call;
+    await vi.advanceTimersByTimeAsync(1);
+    await calling;
+
+    expect(ringing).toMatchObject({ phase: "dialing" });
+    expect(live.snapshot().call).toMatchObject({ phase: "ended", end: { reason: "no_answer", counts: false } });
+  });
+
+  it("is only hung up, hung up while it rings", async () => {
+    const { live, attempts } = await conversation();
+    vi.useFakeTimers();
+    const calling = live.startCall();
+    attempts[0].fail(noAnswer());
+    await vi.advanceTimersByTimeAsync(1000);
+    await live.hangUp();
+    await vi.advanceTimersByTimeAsync(NO_ANSWER_RINGS);
+    await calling;
+
+    expect(live.snapshot().call).toMatchObject({ phase: "idle" });
   });
 });

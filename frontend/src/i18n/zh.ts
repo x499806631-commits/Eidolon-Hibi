@@ -190,6 +190,8 @@ export const zh = {
       hung_up: (name: string) => `${name}挂断了电话`,
       gift: (name: string, gift: string) => `你送给${name}一份${gift}`,
       ended: (name: string) => `${name}结束了对话`,
+      /** 她在洗澡没接（GLOSSARY.md「洗澡」）：只说没接到，不说为什么。 */
+      missed_call: (name: string) => `${name}没接到你的电话`,
     },
     /** 她结束了对话（GLOSSARY.md「已结束的对话」）时换掉输入栏的结束卡：那句话同对话事件（`events.ended`），不写原因；
      * 她在冷却中时换成 `cooling`，写上解除时刻。 */
@@ -206,6 +208,9 @@ export const zh = {
       asleep: "在睡觉 💤",
       woken: "被你吵醒了",
       bedtime: "准备睡了",
+      /** 在洗澡（GLOSSARY.md「洗澡」）：成年的偶像写「在洗澡」，别的只写不在手机旁。 */
+      bath: "在洗澡 🛁",
+      away: "暂时不在手机旁",
       /** 读屏读的：「她现在大概在：舞蹈课 · 事务所」。 */
       label: (doing: string) => `她现在大概在：${doing}`,
     },
@@ -409,6 +414,9 @@ export const zh = {
     redial: "重拨",
     /** 她挂断了（不该说的话说多了，或者跌进冷却）：结束卡的标题；冷却的多一行解除时刻。 */
     hungUp: (name: string) => `${name}挂断了电话。`,
+    /** 她在洗澡，没接（GLOSSARY.md「洗澡」）：铃声响了一阵才停。 */
+    noAnswer: (name: string) => `${name}没有接电话`,
+    noAnswerBody: "她现在好像不方便接电话，晚一点再打给她吧。",
     hungUpCooling: (until: string) => `她现在不想说话，${until} 以后可以再找她。`,
     toOwnKeys: "去设置自带密钥",
     endings: {

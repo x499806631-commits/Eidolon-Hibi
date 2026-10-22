@@ -8,6 +8,7 @@ describe("startFailedEnd", () => {
     ["the hour's calls are used up", new ApiError("本小时的通话次数已用完", 429), "over_limit", "本小时的通话次数已用完"],
     ["calls are unavailable", new ApiError("通话暂时不可用", 503), "not_connected", "通话暂时不可用"],
     ["the connection cannot be made", new Error("无法接通，请稍后再试"), "not_connected", null],
+    ["she does not pick up, in the bath", new ApiError("她现在没有接电话", 409, { code: "no_answer" }), "no_answer", null],
   ])("says why when %s, and that it did not count", (_, error, reason, detail) => {
     // GLOSSARY.md「限额」：被拒绝的、没能接通的通话都不计入。
     expect(startFailedEnd(error)).toEqual({ reason, detail, counts: false });
@@ -64,6 +65,16 @@ describe("endCard", () => {
       detail: null,
       body: null,
       counts: true,
+      action: "redial",
+    });
+  });
+
+  it("says she did not pick up, in the bath, and offers a redial (GLOSSARY.md「洗澡」)", () => {
+    expect(endCard({ reason: "no_answer", detail: null, counts: false }, context)).toEqual({
+      title: "真乃没有接电话",
+      detail: null,
+      body: "她现在好像不方便接电话，晚一点再打给她吧。",
+      counts: false,
       action: "redial",
     });
   });

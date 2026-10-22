@@ -169,7 +169,7 @@ from eidolon.store import (
     timestamp,
 )
 from eidolon.titles import Titles
-from eidolon.schedules import Schedules
+from eidolon.schedules import Schedules, bath_began
 from eidolon.schedules import lines as schedule_lines
 from eidolon.schedules import rest as schedule_rest
 from eidolon.schedules import summary as schedule_summary
@@ -243,6 +243,8 @@ class InCall:
     hurts: tuple[float, ...] = ()
     asmr: bool = False
     """It is an ASMR call (ASMR 模式通话): she is told how to speak in it (`asmr_rules`)."""
+    bath: bool = False
+    """She took the call in the tub (GLOSSARY.md「洗澡」), and talks from there."""
 
 
 @dataclass(frozen=True)
@@ -427,6 +429,8 @@ def _narration(event: ConversationEvent, gift_catalog: Mapping[str, Gift]) -> st
         return "（你挂断了制作人的电话。）"
     if event.kind == "ended":  # only read by a turn it will reject
         return "（你结束了和制作人的对话。）"
+    if event.kind == "missed_call":
+        return "（制作人打来电话，你那会儿在洗澡，没接到。）"
     assert event.gift_id is not None
     liked = "这是你喜欢的东西。" if event.liked else ""
     return f"（制作人送给你一份{gift_catalog[event.gift_id].name}。{liked}）"
@@ -510,6 +514,9 @@ REACH_OUT_RULES = """# 先开口
 where what retrieval finds would be."""
 
 WANTS_TO_REACH_OUT = "（制作人这会儿没在和你说话。你想先给他发几句。）"
+
+CALLING_BACK = "制作人刚才给你打过电话，你在洗澡没接到；现在洗完了，先跟他说一声，问问他有什么事。"
+"""Told her as she reaches out after a call she did not answer in the bath (GLOSSARY.md「洗澡」)."""
 
 LETTER_RULES = """# 写信
 你想给制作人写一封信。信会放进他的信箱里，他可以反复看；这不是聊天，是一封信。
@@ -609,12 +616,28 @@ WANTS_TO_PLAN = "（排今天的安排。只输出 JSON。）"
 ANSWERING = "（制作人打来电话，把睡着的你吵醒了。你迷迷糊糊地接起电话，先开口说话。）"
 """Where the user's words would be as she answers a call that woke her (`opening`)."""
 
+ANSWERING_IN_THE_TUB = "（制作人打来电话，你正在泡澡，就在浴缸里接了起来，先开口说话。）"
+"""Where the user's words would be as she answers a call in the tub (`opening`, `InCall.bath`)."""
+
 ANSWERED = "（制作人打来电话，你接了起来。）"
 """Where the user's words are blank in the history: a call she answered first."""
 
 WOKEN_FOR = timedelta(minutes=30)
 """How long after they were last in touch a message at night does not wake her: she is up."""
 """Where the user's words would be as she writes her schedule."""
+
+Phone = Literal["asleep", "in_the_tub", "away"]
+"""How a call finds her (`ConversationEngine.phone`): asleep, woken by it, she answers first;
+in the tub, an adult who soaks, she answers first from there; in the bath otherwise, she does
+not answer (GLOSSARY.md「洗澡」)."""
+
+
+def habit_lines(character: Character) -> list[str]:
+    """Her daily habits, by her heart: when she sleeps and how she bathes (GLOSSARY.md「她的心」);
+    nothing without them."""
+    heart = character.heart
+    habits = [h.rstrip("。") for h in (heart.sleep, heart.bath_habit) if h] if heart else []
+    return [f"你的生活习惯：{'；'.join(habits)}。"] if habits else []
 
 
 def diary_rules(moments: Sequence[str]) -> str:
@@ -664,6 +687,18 @@ def _since_last_turn(
         else:
             lines.append(_narration_line(entry, gift_catalog, timezone))
     return "".join(lines)
+
+
+def _missed_since_last_turn(record: Sequence[Recorded]) -> bool:
+    """Whether she has not answered a call of the user's since the last turn, nor reached out
+    after it."""
+    missed = False
+    for entry in record:
+        if isinstance(entry, Message | ReachOut):
+            missed = False
+        elif entry.kind == "missed_call":
+            missed = True
+    return missed
 
 
 def _answering(record: Sequence[Recorded]) -> list[Message]:
@@ -767,7 +802,7 @@ class ConversationEngine:
         her letters to the user these last `LETTER_DAYS` days, of how long they have known
         each other (`anniversaries`), of the promises to her it is time for (`promised`, from
         `_promises_due`), and the weather where the producer is (`weather`), if it can be
-        told."""
+        told; and her daily habits (`habit_lines`)."""
         since = now - timedelta(days=LETTER_DAYS)
         letters = [
             letter for letter in self._store.letters(user_id, character.id, now)
@@ -776,6 +811,7 @@ class ConversationEngine:
         weather = await self._weather.now() if self._weather is not None else None
         today = local_date(now, timezone)
         lines = [
+            *habit_lines(character),
             *self._special_lines(character, today),
             *letter_lines(letters, timezone),
             *self._anniversary_lines(character, user_id, today, timezone),
@@ -838,32 +874,87 @@ class ConversationEngine:
         timezone: str,
         last_contact: datetime | None = None,
         in_call: bool = False,
+        in_bath: bool = False,
     ) -> list[str]:
         """What she is told of her schedule for the day it is now (GLOSSARY.md「行程」), read
         only: where she is now, or, asleep, that the user woke her, unless they have been in
-        touch within `WOKEN_FOR` (`last_contact`) or are on the phone (`in_call`); nothing
-        without one."""
+        touch within `WOKEN_FOR` (`last_contact`) or are on the phone (`in_call`); in the
+        bath, if she is for this (`in_bath`, `_in_bath`), that she is; nothing without one."""
         if self._schedules is None:
             return []
         local = now.astimezone(ZoneInfo(timezone))
         today = self._schedules.of(user_id, character.id, local.date())
         yesterday = self._schedules.of(user_id, character.id, local.date() - timedelta(days=1))
         woken = last_contact is None or now - last_contact > WOKEN_FOR
-        return schedule_lines(
-            today, local, self._names(), schedule_rest(today, yesterday, local), woken, in_call
-        )
+        resting = schedule_rest(today, yesterday, local)
+        if resting == "bath" and not in_bath:
+            resting = None
+        return schedule_lines(today, local, self._names(), resting, woken, in_call)
 
-    def asleep(self, conversation: Conversation, device_timezone: str | None = None) -> bool:
-        """Whether she is asleep now by her schedule (GLOSSARY.md「行程」): a call to her
-        then has her answer it first, woken by it."""
+    def _in_bath(
+        self,
+        character: Character,
+        user_id: str,
+        now: datetime,
+        timezone: str,
+        last_contact: datetime | None,
+        in_call: InCall | None,
+    ) -> bool:
+        """Whether she is in the bath for a turn now (GLOSSARY.md「洗澡」): in a call, if she
+        took it in the tub; typing, if her bath is under way and they have not been in touch
+        since it began (`last_contact`): the first message she reads as she comes out."""
+        if in_call is not None:
+            return in_call.bath
         if self._schedules is None:
             return False
+        local = now.astimezone(ZoneInfo(timezone))
+        began = bath_began(
+            self._schedules.of(user_id, character.id, local.date()),
+            self._schedules.of(user_id, character.id, local.date() - timedelta(days=1)),
+            local,
+        )
+        return began is not None and (last_contact is None or last_contact < began)
+
+    def phone(self, conversation: Conversation, device_timezone: str | None = None) -> Phone | None:
+        """How a call now finds her by her schedule (`Phone`; GLOSSARY.md「行程」「洗澡」); None
+        as any other time. Out of the bath once they have been in touch since it began. Only
+        an adult who soaks, by her heart, answers in the bath; an idol without a heart is not
+        known to be one."""
+        if self._schedules is None:
+            return None
         profile = self._store.get_profile(conversation.user_id)
         local = self._clock().astimezone(ZoneInfo(effective_timezone(profile, device_timezone)))
         user_id, character_id = conversation.user_id, conversation.character_id
         today = self._schedules.of(user_id, character_id, local.date())
         yesterday = self._schedules.of(user_id, character_id, local.date() - timedelta(days=1))
-        return schedule_rest(today, yesterday, local) == "asleep"
+        resting = schedule_rest(today, yesterday, local)
+        if resting == "asleep":
+            return "asleep"
+        if resting != "bath":
+            return None
+        began = bath_began(today, yesterday, local)
+        contact = self._store.last_contact(user_id, character_id)
+        if began is None or (contact is not None and contact >= began):
+            return None
+        heart = self._characters[character_id].heart
+        return "in_the_tub" if heart is not None and heart.adult and heart.bath == "tub" else "away"
+
+    def bath_ends(self, conversation: Conversation) -> datetime | None:
+        """When her bath under way now ends (GLOSSARY.md「洗澡」); None if she is in none."""
+        if self._schedules is None:
+            return None
+        profile = self._store.get_profile(conversation.user_id)
+        local = self._clock().astimezone(ZoneInfo(effective_timezone(profile, None)))
+        user_id, character_id = conversation.user_id, conversation.character_id
+        for day in (local.date(), local.date() - timedelta(days=1)):
+            found = self._schedules.of(user_id, character_id, day)
+            if found is None or found.bath is None:
+                continue
+            began = found.bath.starts(found.day, local.tzinfo)
+            ends = began + timedelta(minutes=found.bath.minutes)
+            if began <= local < ends:
+                return ends
+        return None
 
     def _schedule_summary(
         self, character: Character, user_id: str, at: datetime, timezone: str
@@ -1076,8 +1167,15 @@ class ConversationEngine:
         history = [*latest_turns(messages, turns), *_answering(record)]
         affinity = self._affinity(conversation)
         judging = affinity is not None and not affinity.cooling and not opening
+        in_bath = self._in_bath(
+            character, conversation.user_id, self._clock(),
+            effective_timezone(self._store.get_profile(conversation.user_id), device_timezone),
+            last_contact, in_call,
+        )
+        # In the bath, or just out of it, she sends no photo (GLOSSARY.md「洗澡」).
         eligibility = (
-            None if opening else self._photo_eligibility(conversation, character, photo.own)
+            None if opening or in_bath
+            else self._photo_eligibility(conversation, character, photo.own)
         )
         asking_photo = eligibility is not None
         judged_apart = None
@@ -1178,7 +1276,7 @@ class ConversationEngine:
                             *promises_due.lines,
                             *self._schedule_lines(
                                 character, conversation.user_id, now, timezone,
-                                last_contact, in_call is not None,
+                                last_contact, in_call is not None, in_bath,
                             ),
                         ],
                     ),
@@ -1189,7 +1287,7 @@ class ConversationEngine:
                 *([asmr_rules(voiced_by)] if in_call is not None and in_call.asmr else []),
             ],
             closing,
-            ANSWERING if opening else text, voiced_by,
+            (ANSWERING_IN_THE_TUB if in_bath else ANSWERING) if opening else text, voiced_by,
         )
 
         # Offered on every turn, so that what goes before the history (the tools, with
@@ -1354,6 +1452,7 @@ class ConversationEngine:
                     ),
                 ),
                 *([SCENE_INVITATION] if scene is not None and scene.turns == 0 else []),
+                *([CALLING_BACK] if _missed_since_last_turn(record) else []),
             ],
             [*([memories] if memories else []), REACH_OUT_RULES],
             WANTS_TO_REACH_OUT, None,

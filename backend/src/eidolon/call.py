@@ -234,6 +234,14 @@ class CallFailed(Exception):
         super().__init__("无法建立通话")
 
 
+class NoAnswer(Exception):
+    """She did not answer the call: she is in the bath (GLOSSARY.md「洗澡」). It never began,
+    so it counts towards nothing."""
+
+    def __init__(self) -> None:
+        super().__init__("她现在没有接电话")
+
+
 @dataclass(frozen=True)
 class CallOptions:
     """How the browser wants a new call: muted or not, at what quality, the time zone its
@@ -1457,6 +1465,7 @@ class CallTurns(FrameProcessor):
         # till the next is taken up: her voice may start only once a recorded reply is over
         self._answered = False  # the browser said the user hears her: she may answer first
         self._said_anything = False  # the user has said or typed something in the call
+        self._bath = False  # she took the call in the tub
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -1537,7 +1546,7 @@ class CallTurns(FrameProcessor):
         elif frame.type == "hang-up":  # the browser closes the connection next
             self._outcome.ended_by("hung_up")
         elif frame.type == "answered":
-            self._answer()
+            await self._answer()
         elif frame.type == "ambience-auto" and isinstance(data.get("on"), bool):
             self._ambience_auto = data["on"]
             if self._ambience_auto:
@@ -1546,18 +1555,22 @@ class CallTurns(FrameProcessor):
             elif self._picking is not None:
                 await self.cancel_task(self._picking)
 
-    def _answer(self) -> None:
+    async def _answer(self) -> None:
         """The user hears her now, the ringback over (an `answered` client message): asleep by
         her schedule, she answers the phone first, woken by it (GLOSSARY.md「行程」), as an
-        opening turn without words of the user's. Once in a call, before anything is said."""
+        opening turn without words of the user's; in the tub, she does too, and talks from
+        there the whole call, the browser told so with a `bath` message, for the sound of the
+        bathroom (GLOSSARY.md「洗澡」). Once in a call; she answers first only before anything
+        is said."""
         if self._answered:
             return
         self._answered = True
-        if self._said_anything or not self._engine.asleep(
-            self._call.conversation, self._call.device_timezone
-        ):
-            return
-        self._inputs.put_nowait(OPENING)
+        phone = self._engine.phone(self._call.conversation, self._call.device_timezone)
+        if phone == "in_the_tub":
+            self._bath = True
+            await self._send({"type": "bath"})
+        if not self._said_anything and phone in ("asleep", "in_the_tub"):
+            self._inputs.put_nowait(OPENING)
 
     async def _carry_out(
         self,
@@ -1737,7 +1750,8 @@ class CallTurns(FrameProcessor):
         recorded = CallTurnRecorded()
         async for event in self._engine.turn(
             self._call.conversation, text, self._call.llms, self._call.device_timezone, stop,
-            replace(self._outcome.in_call, asmr=self._call.asmr), self._call.voiced_by,
+            replace(self._outcome.in_call, asmr=self._call.asmr, bath=self._bath),
+            self._call.voiced_by,
             self._call.own_image, opening=text == OPENING,
         ):
             if isinstance(event, CallTurnRecorded):

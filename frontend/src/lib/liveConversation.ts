@@ -19,7 +19,7 @@ import {
   type TurnEvent,
 } from "@/lib/api";
 import type { Call, CallHandlers, MicInUse } from "@/lib/call";
-import { droppedEnd, backendEnd, startFailedEnd, type CallEnd } from "@/lib/callEnd";
+import { droppedEnd, backendEnd, NO_ANSWER, startFailedEnd, type CallEnd } from "@/lib/callEnd";
 import type { CallPreferences } from "@/lib/callPreferences";
 import {
   conversationLog,
@@ -81,6 +81,9 @@ export type LiveCall = Extract<CallState, { phase: "dialing" | "connected" }>;
 export function isLive(call: CallState): call is LiveCall {
   return call.phase === "dialing" || call.phase === "connected";
 }
+
+/** How long the ringback rings on a call she does not pick up, in the bath (GLOSSARY.md「洗澡」), in ms. */
+export const NO_ANSWER_RINGS = 12_000;
 
 /** The call the call layer draws: dialing, connected, or ended for a reason (spec「通话层」). */
 export type ShownCall = Extract<CallState, { phase: "dialing" | "connected" | "ended" }>;
@@ -237,6 +240,8 @@ export type Voice = {
   callConnected?: (setAmbienceAuto: (on: boolean) => void) => void;
   /** The backend picked the ambience for the call under way. */
   ambiencePicked?: (kind: AmbienceKind) => void;
+  /** She took the call under way in the tub (GLOSSARY.md「洗澡」): her voice sounds as in a bathroom. */
+  bath?: () => void;
   setTextOnly: (textOnly: boolean) => void;
   /** The page is left. */
   dispose: () => void;
@@ -519,6 +524,11 @@ export class LiveConversation {
       }, asmr);
     } catch (e) {
       if (!current()) return;
+      if (e instanceof ApiError && e.code === NO_ANSWER) {
+        // 她在洗澡没接（GLOSSARY.md「洗澡」）：铃声照样响一阵，没人接才结束；这期间挂断就只是挂断。
+        await new Promise<void>((through) => setTimeout(through, NO_ANSWER_RINGS));
+        if (!current()) return;
+      }
       if (e instanceof ApiError && e.cooldownUntil !== null) {
         // Refused for a cooldown begun elsewhere: no end to show, the page shows the cooldown.
         this.ended(null);
@@ -700,6 +710,9 @@ export class LiveConversation {
         return this.moveCard({ type: "interrupted" }, { stand });
       case "ambience":
         this.ports.voice.ambiencePicked?.(event.kind);
+        return;
+      case "bath":
+        this.ports.voice.bath?.();
         return;
       default:
         this.update({ stand });

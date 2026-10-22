@@ -21,6 +21,7 @@ from eidolon.call import (
     CallFailed,
     CallNotFound,
     CallOptions,
+    NoAnswer,
     IceCandidate,
     Quality,
     SessionDescription,
@@ -335,6 +336,11 @@ def create_app(backend: Backend) -> FastAPI:
     async def call_failed(_: Request, e: CallFailed) -> JSONResponse:
         return JSONResponse({"detail": str(e)}, status_code=500)
 
+    @app.exception_handler(NoAnswer)
+    async def no_answer(_: Request, e: NoAnswer) -> JSONResponse:
+        """She did not pick up; told apart from the other refusals' 409."""
+        return JSONResponse({"detail": str(e), "code": "no_answer"}, status_code=409)
+
     def conversation_or_404(conversation_id: str, user_id: str) -> Conversation:
         conversation = store.get_conversation(conversation_id)
         if conversation is None or conversation.user_id != user_id:
@@ -403,6 +409,9 @@ def create_app(backend: Backend) -> FastAPI:
             raise HTTPException(422, "缺少要通话的对话")
         conversation = conversation_or_404(body.call.conversation_id, user_id)
         refuse_if_ended(conversation)
+        if engine.phone(conversation, device_timezone) == "away":  # GLOSSARY.md「洗澡」
+            store.miss_call(conversation.id)
+            raise NoAnswer()
         return await calls.start(
             user_id,
             conversation,

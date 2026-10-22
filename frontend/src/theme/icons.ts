@@ -10,6 +10,9 @@ export {
   Shirt as OutfitIcon,
 } from "lucide-react";
 
+// 她在洗澡没接到的电话（GLOSSARY.md「洗澡」）：对话事件的分隔线。
+export { PhoneMissed as MissedCallIcon } from "lucide-react";
+
 // 她结束了对话（GLOSSARY.md「已结束的对话」）：对话事件的分隔线和换掉输入栏的结束卡。
 export { MessageCircleOff as EndedIcon } from "lucide-react";
 

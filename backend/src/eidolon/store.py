@@ -24,7 +24,7 @@ from eidolon.producer import Birthday, ProducerProfile
 from eidolon.reply_format import Segment
 
 Role = Literal["user", "character"]
-EventKind = Literal["hung_up", "gift", "ended"]
+EventKind = Literal["hung_up", "gift", "ended", "missed_call"]
 PhotoStatus = Literal["pending", "ready", "failed"]
 """A photo being generated, sent, or not sent after all."""
 PhotoFailure = Literal["timeout", "service_error", "bad_image", "own_key_failed", "used_up"]
@@ -363,7 +363,8 @@ class Typed:
 class ConversationEvent:
     """Something that happened in a conversation that is not a turn (GLOSSARY.md「对话事件」):
     her hanging up on the user (`hung_up`), her ending the conversation (`ended`), after which
-    it can only be read, or the user giving her a gift (`gift`), which
+    it can only be read, a call of the user's she did not answer, in the bath (`missed_call`,
+    GLOSSARY.md「洗澡」), or the user giving her a gift (`gift`), which
     one (`gift_id`) and whether she liked it as it was given (`liked`), kept as it was
     should what she likes change. It can carry how it changed her affinity (`affinity`)."""
 
@@ -1227,6 +1228,24 @@ class Store:
             return self._ended(conversation_id) or self._insert_event(
                 conversation_id, "hung_up", _now()
             )
+
+    def miss_call(self, conversation_id: str) -> ConversationEvent:
+        """Record that she did not answer the user's call in the conversation, now
+        (`missed_call`)."""
+        with self._lock, self._db:
+            return self._insert_event(conversation_id, "missed_call", _now())
+
+    def missed_call_after(self, conversation_id: str, after: datetime) -> datetime | None:
+        """When she last did not answer the user's call in the conversation (`missed_call`),
+        if it was after `after`; None if not."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT created_at FROM conversation_events"
+                " WHERE conversation_id = ? AND kind = 'missed_call' ORDER BY id DESC LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+        missed = datetime.fromisoformat(row[0]) if row else None
+        return missed if missed is not None and missed > after else None
 
     def ended(self, conversation_id: str) -> ConversationEvent | None:
         """Her ending the conversation (GLOSSARY.md「已结束的对话」), as recorded; None while

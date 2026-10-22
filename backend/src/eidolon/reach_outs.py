@@ -30,6 +30,11 @@ before the backend started is not made up for, nor one that fails, the model fai
 saying nothing she could say: each is put off from now by a time drawn anew from her tier's
 range.
 
+A call of the user's she did not answer in the bath (GLOSSARY.md「洗澡」) since the last contact
+has her come back to them once the bath is over, `CALL_BACK_AFTER` after the call at the
+soonest, night or not, her time from the range not waited for; only within `CALL_BACK_WITHIN`
+of the call, and not while she is still in the bath, when she does not reach out at all.
+
 She reaches out on the deployer's chat model as text turns use it, whoever's LLM the user
 brings, held only while she does (`ConversationEngine.reach_out`): nothing counts towards the
 user's limits. Each reach-out has an activity record of its own (`reach_out`), on the
@@ -85,6 +90,12 @@ NIGHT = (time(22), time(8))
 
 MORNING = timedelta(hours=2)
 """How long after the night ends her time put off to the morning may be."""
+
+CALL_BACK_AFTER = timedelta(minutes=10)
+"""How long after a call she did not answer in the bath she comes back at the soonest."""
+
+CALL_BACK_WITHIN = timedelta(hours=2)
+"""How long after a call she did not answer she still comes back for it."""
 
 _SCHEMA = """
 -- When she is to reach out in a conversation (GLOSSARY.md「搭话」): the last contact it was
@@ -240,11 +251,18 @@ class ReachOuts:
         tier = self._tier(conversation)
         if tier is None:
             return None
+        profile = self._store.get_profile(conversation.user_id)
+        zone = ZoneInfo(effective_timezone(profile, None))
+        missed = self._store.missed_call_after(conversation.id, contact)
+        if missed is not None and now - missed <= CALL_BACK_WITHIN:
+            if self._engine.bath_ends(conversation) is not None:  # still in the bath
+                return None
+            if now - missed >= CALL_BACK_AFTER and not self._talking(conversation.id):
+                return _Due(conversation, contact, tier, now, zone)
+            return None
         place, morning, due = self._schedule(conversation.id, contact)
         if due is None:
             due = contact + self._interval(tier, place)
-        profile = self._store.get_profile(conversation.user_id)
-        zone = ZoneInfo(effective_timezone(profile, None))
         if now < due and (
             special := self._special_morning(conversation, profile, contact, morning, now, zone)
         ) is not None and special < due:

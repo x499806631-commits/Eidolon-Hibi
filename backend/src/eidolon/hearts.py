@@ -1,7 +1,8 @@
 """Her heart (GLOSSARY.md「她的心」): what makes each idol happy and what hurts her, which the
 judge model weighs her affinity by, and how she shows each tier of it in her own way; for an
 adult idol, the romance of the closer tiers too, told apart for a male and a female producer.
-And how she plays her scene at close's door and intimate's (GLOSSARY.md「重要的一幕」).
+And how she plays her scene at close's door and intimate's (GLOSSARY.md「重要的一幕」), and her
+daily habits: when she sleeps (GLOSSARY.md「行程」) and how she bathes (GLOSSARY.md「洗澡」).
 
 Each is a file of its own in the `hearts` directory beside the character configuration, named
 by her identifier (`mano.toml`). Like the calendar it is configuration, not data. An idol
@@ -28,6 +29,12 @@ ADULT = 18
 RomanceTier = Literal["close", "intimate"]
 """The tiers that may be romance, for an adult idol."""
 
+BathKind = Literal["tub", "shower"]
+"""How she bathes (GLOSSARY.md「洗澡」): soaking in the tub, or a quick shower."""
+
+BATH_KINDS: dict[str, BathKind] = {"泡澡": "tub", "淋浴": "shower"}
+"""How a heart file writes `bath`."""
+
 _ROMANCE_KEYS = {f"{t}_{g}" for t in get_args(RomanceTier) for g in ("male", "female")}
 
 
@@ -49,6 +56,10 @@ class Heart:
     """How she plays her scene at the door of `close` and of `intimate` (GLOSSARY.md「重要的一幕」)."""
     sleep: str | None = None
     """When she tends to go to bed and get up, for her schedule (GLOSSARY.md「行程」)."""
+    bath: BathKind = "tub"
+    """How she bathes (GLOSSARY.md「洗澡」); in the tub unless her file says otherwise."""
+    bath_habit: str | None = None
+    """Her habits in the bath, told her as part of her daily life."""
 
     @property
     def adult(self) -> bool:
@@ -117,10 +128,16 @@ def _parse(file: Path, data: dict) -> Heart:
     sleep = data.get("sleep")
     if sleep is not None and (not isinstance(sleep, str) or not sleep.strip()):
         raise HeartsError(f"{file}：sleep 要写一段文字（她的作息习惯）")
+    bath = data.get("bath", "泡澡")
+    if not isinstance(bath, str) or bath not in BATH_KINDS:
+        raise HeartsError(f"{file}：bath 只能写「泡澡」或「淋浴」")
+    habit = data.get("bath_habit")
+    if habit is not None and (not isinstance(habit, str) or not habit.strip()):
+        raise HeartsError(f"{file}：bath_habit 要写一段文字（她的洗澡习惯）")
     return Heart(
         age, pleased, hurt, {k: v.strip() for k, v in tiers.items()},
         {k: v.strip() for k, v in romance.items()}, {k: v.strip() for k, v in scenes.items()},
-        sleep.strip() if sleep else None,
+        sleep.strip() if sleep else None, BATH_KINDS[bath], habit.strip() if habit else None,
     )
 
 

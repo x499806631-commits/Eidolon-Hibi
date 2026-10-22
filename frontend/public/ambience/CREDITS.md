@@ -23,3 +23,4 @@ ffmpeg -i <原始文件> -t 180 -ac 2 -ar 44100 -af "loudnorm=I=-28:TP=-2:LRA=11
 | clock-2.mp3 | clock ticking2.wav | （待补） |
 | pages.mp3 | page turn.mp3 | （待补） |
 | cafe-1.mp3 | cafe ambience quiet.flac | （待补） |
+| bath-1.mp3 | 自己准备：浴室的环境音（水声、回声），她在浴缸里接电话时垫在下面（GLOSSARY.md「洗澡」）；没有这个文件就只有回响 | — |

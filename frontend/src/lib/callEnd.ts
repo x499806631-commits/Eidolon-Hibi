@@ -11,11 +11,11 @@ import { copy } from "@/i18n";
 /**
  * The backend's reasons (it never really connected; a voice service failed, or the connection
  * broke, after it connected; its time or turn limit; an own key failed; she hung up, for what
- * the user said in the call or a cooldown begun), and two told apart here: the user has no
- * calls left this hour, or the browser would not let the call use the microphone (or there is
- * none).
+ * the user said in the call or a cooldown begun), and three told apart here: the user has no
+ * calls left this hour, the browser would not let the call use the microphone (or there is
+ * none), or she did not pick up, in the bath (GLOSSARY.md「洗澡」).
  */
-export type EndReason = BackendEndReason | "over_limit" | "mic_denied";
+export type EndReason = BackendEndReason | "over_limit" | "mic_denied" | "no_answer";
 
 export type CallEnd = {
   reason: EndReason;
@@ -31,10 +31,15 @@ export type CallEnd = {
 /** The microphone could not be opened for a call. */
 export class MicUnavailable extends Error {}
 
+/** The backend's code for a call she did not pick up (GLOSSARY.md「洗澡」). */
+export const NO_ANSWER = "no_answer";
+
 /** A call that could not start. None of them count: it was refused, or it never connected. */
 export function startFailedEnd(e: unknown): CallEnd {
   if (e instanceof MicUnavailable) return { reason: "mic_denied", detail: null, counts: false };
   if (!(e instanceof ApiError)) return { reason: "not_connected", detail: null, counts: false };
+  // 她在洗澡，没接（GLOSSARY.md「洗澡」）。
+  if (e.code === NO_ANSWER) return { reason: "no_answer", detail: null, counts: false };
   const reason = e.overLimit ? "over_limit" : "not_connected";
   return { reason, detail: e.message, counts: false };
 }
@@ -83,6 +88,9 @@ export function endCard(end: CallEnd, { name, now, timeZone, giftsOpen, exemptin
     const until = cooling && end.cooldownUntil ? untilText(new Date(end.cooldownUntil), now, timeZone) : null;
     const body = until ? t.hungUpCooling(until) : null;
     return { title: t.hungUp(name), detail, body, counts, action: !cooling ? "redial" : giftsOpen ? "gift" : null };
+  }
+  if (end.reason === "no_answer") {
+    return { title: t.noAnswer(name), detail: null, body: t.noAnswerBody, counts, action: "redial" };
   }
   if (end.reason === "over_limit") {
     const { title, body } = t.endings.over_limit;

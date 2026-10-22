@@ -4,7 +4,9 @@ zone without `day`), null if she has none for it; and what she is up to now
 (`/api/characters/{id}/schedule/now`), for the line under her name on her conversation page:
 the slot she is in and when it ends, `{"free": true}` between slots, either with `bedtime` near
 her bedtime; `{"asleep": true}` asleep, `woken` if the user and she were in touch within
-`engine.WOKEN_FOR`; null without a schedule today.
+`engine.WOKEN_FOR`; in the bath (GLOSSARY.md「洗澡」), till they are in touch, `{"bath": true}`
+for an adult idol and `{"away": true}` for any other, whose bath is not told; null without a
+schedule today.
 
 Under the development sign-in only (`EIDOLON_DEV_LOGIN=1`), `POST /api/schedules/write-now` has
 hers for today written at once, to try schedules out without waiting for the morning."""
@@ -18,7 +20,7 @@ from pydantic import BaseModel
 from eidolon.assembly import Backend
 from eidolon.engine import WOKEN_FOR
 from eidolon.producer import effective_timezone
-from eidolon.schedules import rest
+from eidolon.schedules import bath_began, rest
 from eidolon.sessions import UserId
 
 
@@ -49,6 +51,12 @@ def add_schedule_routes(app: FastAPI, backend: Backend) -> None:
         found = schedules.of(user_id, character_id, local.date())
         yesterday = schedules.of(user_id, character_id, local.date() - timedelta(days=1))
         resting = rest(found, yesterday, local)
+        if resting == "bath":
+            began = bath_began(found, yesterday, local)
+            contact = store.last_contact(user_id, character_id)
+            if began is not None and (contact is None or contact < began):
+                heart = backend.characters[character_id].heart
+                return {"bath": True} if heart is not None and heart.adult else {"away": True}
         if resting == "asleep":
             contact = store.last_contact(user_id, character_id)
             return {"asleep": True, "woken": contact is not None and now - contact <= WOKEN_FOR}

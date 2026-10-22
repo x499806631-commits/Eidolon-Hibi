@@ -12,6 +12,10 @@ not known, or with someone not one of the characters, is dropped.
 Reading it never writes: `lines` is what she is told of it in a turn, a reach-out or her
 diary, the whole day in a sentence and the slot she is in now. It is only roughly so: she is
 told she need not keep to it.
+
+A night she goes to bed, she has a bath before it (GLOSSARY.md「洗澡」), drawn as the day is
+written (`draw_bath`): `BATH_BEFORE` before she goes to bed, as long as her way of bathing
+takes (`BATH_MINUTES`).
 """
 
 import json
@@ -19,12 +23,14 @@ import re
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, tzinfo
 from pathlib import Path
 from typing import Literal, cast, get_args
 
 from eidolon.clock import Clock
 from eidolon.database import connect
+from eidolon.hearts import BathKind
+from eidolon.randomness import Random
 
 SlotKind = Literal["work", "lesson", "school", "live", "rest", "private"]
 """Work (a shoot, a job), a lesson or practice, school, a live, resting at home, her own plans."""
@@ -64,12 +70,20 @@ CREATE TABLE IF NOT EXISTS schedules (
     created_at TEXT NOT NULL,
     wake TEXT,
     sleep TEXT,
+    bath_at TEXT,
+    bath_minutes INTEGER,
     PRIMARY KEY (user_id, character_id, day)
 );
 """
 
-Rest = Literal["asleep", "bedtime"]
-"""Asleep, or her bedtime near (`BEDTIME`)."""
+Rest = Literal["asleep", "bath", "bedtime"]
+"""Asleep, in the bath (GLOSSARY.md「洗澡」), or her bedtime near (`BEDTIME`)."""
+
+BATH_BEFORE = (timedelta(minutes=60), timedelta(minutes=120))
+"""How long before she goes to bed her bath begins: between the two, by five minutes."""
+
+BATH_MINUTES: dict[BathKind, tuple[int, int]] = {"tub": (30, 50), "shower": (15, 25)}
+"""How long her bath takes, in the tub or a shower: between the two, by five minutes."""
 
 BEDTIME = timedelta(minutes=30)
 """How long before she goes to bed it is her bedtime."""
@@ -103,6 +117,31 @@ class Slot:
 
 
 @dataclass(frozen=True)
+class Bath:
+    """Her bath that night (GLOSSARY.md「洗澡」): when it begins, past midnight if before noon,
+    and how many minutes it takes."""
+
+    at: time
+    minutes: int
+
+    def starts(self, day: date, zone: tzinfo | None) -> datetime:
+        """When it begins, on the night of `day`."""
+        night = day + timedelta(days=1) if self.at < time(12) else day
+        return datetime.combine(night, self.at, zone)
+
+
+def draw_bath(sleep: time, kind: BathKind, random: Random) -> Bath:
+    """Her bath before she goes to bed at `sleep`, drawn on `random` (`BATH_BEFORE`,
+    `BATH_MINUTES`)."""
+    low, high = (int(b.total_seconds() // 300) for b in BATH_BEFORE)
+    before = (low + random(high - low + 1)) * 5
+    shortest, longest = BATH_MINUTES[kind]
+    minutes = shortest + random((longest - shortest) // 5 + 1) * 5
+    at = (_minutes(sleep) - before) % (24 * 60)
+    return Bath(time(at // 60, at % 60), minutes)
+
+
+@dataclass(frozen=True)
 class Schedule:
     day: date
     slots: tuple[Slot, ...]
@@ -111,6 +150,8 @@ class Schedule:
     """When she gets up that day; None if it was not written."""
     sleep: time | None = None
     """When she goes to bed that night, past midnight if before noon; None if not written."""
+    bath: Bath | None = None
+    """Her bath that night; None without a time she goes to bed."""
 
     def shown(self) -> dict:
         return {
@@ -119,6 +160,9 @@ class Schedule:
             "twists": list(self.twists),
             "wake": _clock(self.wake),
             "sleep": _clock(self.sleep),
+            "bath": None if self.bath is None else {
+                "at": _clock(self.bath.at), "minutes": self.bath.minutes,
+            },
         }
 
     @property
@@ -200,10 +244,24 @@ def parse_rest(answer: str) -> tuple[time | None, time | None]:
     return wake, sleep
 
 
+def bath_began(today: Schedule | None, yesterday: Schedule | None, at: datetime) -> datetime | None:
+    """When the bath she is in at `at` (in the producer's time zone) began, by her schedules
+    of the day and the day before; None if she is in none."""
+    for schedule in (today, yesterday):
+        if schedule is None or schedule.bath is None:
+            continue
+        began = schedule.bath.starts(schedule.day, at.tzinfo)
+        if began <= at < began + timedelta(minutes=schedule.bath.minutes):
+            return began
+    return None
+
+
 def rest(today: Schedule | None, yesterday: Schedule | None, at: datetime) -> Rest | None:
-    """Whether she is asleep at `at` (in the producer's time zone), or it is her bedtime, by
-    her schedules of the day and the day before; None awake, or not known. Before today's is
-    written she gets up as she did yesterday."""
+    """Whether she is asleep at `at` (in the producer's time zone), in the bath, or it is her
+    bedtime, by her schedules of the day and the day before; None awake, or not known. Before
+    today's is written she gets up as she did yesterday."""
+    if bath_began(today, yesterday, at) is not None:
+        return "bath"
     now = at.time()
     if yesterday is not None and yesterday.sleeps_after_midnight:
         assert yesterday.sleep is not None
@@ -259,15 +317,18 @@ class Schedules:
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
             columns = {row[1] for row in self._db.execute("PRAGMA table_info(schedules)")}
-            for column in ("wake", "sleep"):
+            for column, kind in (
+                ("wake", "TEXT"), ("sleep", "TEXT"), ("bath_at", "TEXT"), ("bath_minutes", "INTEGER")
+            ):
                 if column not in columns:
-                    self._db.execute(f"ALTER TABLE schedules ADD COLUMN {column} TEXT")
+                    self._db.execute(f"ALTER TABLE schedules ADD COLUMN {column} {kind}")
 
     def of(self, user_id: str, character_id: str, day: date) -> Schedule | None:
         """Her schedule for `day` with the user; None if none was written, or it could not be."""
         with self._lock:
             row = self._db.execute(
-                "SELECT slots, twists, wake, sleep FROM schedules WHERE user_id = ? AND character_id = ?"
+                "SELECT slots, twists, wake, sleep, bath_at, bath_minutes FROM schedules"
+                " WHERE user_id = ? AND character_id = ?"
                 " AND day = ?",
                 (user_id, character_id, day.isoformat()),
             ).fetchone()
@@ -280,6 +341,7 @@ class Schedules:
             day, slots, tuple(json.loads(row[1])),
             time.fromisoformat(row[2]) if row[2] else None,
             time.fromisoformat(row[3]) if row[3] else None,
+            Bath(time.fromisoformat(row[4]), row[5]) if row[4] and row[5] else None,
         )
 
     def tried(self, user_id: str, character_id: str, day: date) -> bool:
@@ -293,19 +355,21 @@ class Schedules:
     def keep(
         self, user_id: str, character_id: str, day: date, slots: Sequence[Slot],
         twists: Sequence[str], wake: time | None = None, sleep: time | None = None,
+        bath: Bath | None = None,
     ) -> None:
         """Keep her schedule for `day`; none (`slots` empty) keeps the day from being tried
         again. One kept already is left as it is."""
         with self._lock, self._db:
             self._db.execute(
                 "INSERT OR IGNORE INTO schedules"
-                " (user_id, character_id, day, slots, twists, created_at, wake, sleep)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                " (user_id, character_id, day, slots, twists, created_at, wake, sleep, bath_at,"
+                " bath_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     user_id, character_id, day.isoformat(),
                     json.dumps([s.shown() for s in slots], ensure_ascii=False),
                     json.dumps(list(twists), ensure_ascii=False),
                     self._clock().isoformat(), _clock(wake), _clock(sleep),
+                    _clock(bath.at) if bath else None, bath.minutes if bath else None,
                 ),
             )
 
@@ -343,6 +407,15 @@ WOKEN_BY_CALL = (
     "不用每句都提被吵醒，困了可以自然地道晚安。"
 )
 BEDTIME_NEAR = "快到你睡觉的时间了，可以带一点困意，也可以提醒制作人早点休息。"
+BATH_TOLD = "说到洗澡，只说「在泡澡」「刚洗完」「头发还没干」这种程度，不描写洗澡的过程和身体。"
+JUST_OUT = (
+    "现在（{clock}）你本来在洗澡，制作人的消息是你洗完出来才看到的：可以先说一句刚洗完，"
+    "再自然地接着聊。" + BATH_TOLD
+)
+IN_THE_TUB = (
+    "现在（{clock}）你正在泡澡，一边泡一边和制作人打电话，声音在浴室里有点回响。"
+    "就是平常地聊天；泡久了可以说要出来了，自然地道别，或者说出来再聊。" + BATH_TOLD
+)
 
 
 def lines(
@@ -356,11 +429,17 @@ def lines(
     """What she is told of her schedule at `at` (in the producer's time zone): the day in a
     sentence and where she is now, and that it is only roughly so; asleep (`resting`, by
     `rest`), that she was woken, by a message (`woken` by this one, or awake a while) or a
-    call; near her bedtime, that it is. Nothing without a schedule, unless she is asleep."""
+    call; in the bath (GLOSSARY.md「洗澡」), that she is talking from the tub in a call, or
+    else saw the message as she came out; near her bedtime, that it is. Nothing without a
+    schedule, unless she is asleep or in the bath."""
     clock = at.strftime("%H:%M")
     if resting == "asleep":
-        said = WOKEN_BY_CALL if in_call else WOKEN if woken else STILL_UP
-        return [said.format(clock=clock)]
+        woke = WOKEN_BY_CALL if in_call else WOKEN if woken else STILL_UP
+        return [woke.format(clock=clock)]
+    if resting == "bath":
+        bath = (IN_THE_TUB if in_call else JUST_OUT).format(clock=clock)
+        day = said(schedule, names)
+        return [f"你今天大概的安排：{day}", bath] if day else [bath]
     if schedule is None:
         return []
     day = "；".join(_said(s, names) for s in schedule.slots)

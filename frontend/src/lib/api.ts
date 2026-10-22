@@ -160,7 +160,7 @@ export async function getPhoto(id: string): Promise<PhotoStatus> {
 
 /** The kinds of conversation event (GLOSSARY.md「对话事件」): she hung up on the user; the user
  * gave her a gift; she ended the conversation, which can then only be read (GLOSSARY.md「已结束的对话」). */
-export type EventKind = "hung_up" | "gift" | "ended";
+export type EventKind = "hung_up" | "gift" | "ended" | "missed_call";
 
 /** Something that happened in a conversation that is not a turn, recorded among its messages. */
 export type ConversationEvent = {
@@ -240,6 +240,7 @@ export type CallEvent =
   | SegmentEmotion
   | Speaking
   | AmbiencePicked
+  | InTheTub
   | {
       type: "ended";
       reason: BackendEndReason;
@@ -248,6 +249,9 @@ export type CallEvent =
       cooldown_until?: string | null;
       event?: ConversationEvent;
     };
+
+/** She took the call in the tub (GLOSSARY.md「洗澡」): her voice sounds as in a bathroom. */
+export type InTheTub = { type: "bath" };
 
 /** The judge model picked the ambience to play under her voice (环境音「自动」), sent only while the
  * browser asks for it (`Call.setAmbienceAuto`) and the kind is to change. */

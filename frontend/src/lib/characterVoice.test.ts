@@ -75,6 +75,13 @@ function fakeContext(state: "running" | "suspended" = "suspended") {
         release: { value: 0.25 },
       }),
     createGain: () => node("gain", { gain: param(1) }),
+    sampleRate: 100,
+    currentTime: 0,
+    createConvolver: () => node("convolver"),
+    createBuffer: (channels: number, length: number) => {
+      const data = Array.from({ length: channels }, () => new Float32Array(length));
+      return { length, getChannelData: (channel: number) => data[channel] };
+    },
     createStereoPanner: () => node("panner", { pan: { value: 0 } }),
     createOscillator: () => {
       const n = node("oscillator", { type: "sine", frequency: { value: 440 }, started: false, stopped: false });
@@ -266,5 +273,48 @@ describe("changing phone texture", () => {
     voice.dispose();
 
     expect(context.closed).toBe(true);
+  });
+});
+
+describe("character voice in the bathroom (GLOSSARY.md「洗澡」)", () => {
+  beforeEach(() => vi.stubGlobal("fetch", async () => ({ ok: false })));
+
+  it("goes through the tiles' ring beside her plain voice, whatever the line, once she is in the tub", () => {
+    const { voice, element, sources } = setUp();
+    voice.dial(false);
+    voice.play(track);
+
+    voice.bath();
+
+    expect(element.muted).toBe(true); // Web Audio plays her now, the element holds the stream silently
+    const paths = pathsToSpeakers(sources[sources.length - 1]);
+    expect(paths.some((path) => path.some((n) => n.kind === "convolver"))).toBe(true);
+    expect(paths.some((path) => path.every((n) => n.kind !== "convolver"))).toBe(true);
+    expect(audible(sources[sources.length - 1])).toBe(true);
+  });
+
+  it("rings in the bathroom before the phone line, and arriving after it is told, too", () => {
+    const { voice, sources } = setUp();
+    voice.dial(true);
+
+    voice.bath();
+    voice.play(track);
+
+    const [path] = pathsToSpeakers(sources[sources.length - 1]).filter((p) => p.some((n) => n.kind === "convolver"));
+    expect(path.findIndex((n) => n.kind === "convolver")).toBeLessThan(path.findIndex((n) => n.kind === "filter"));
+  });
+
+  it("is silenced by text only, and is plain again in the next call", () => {
+    const { voice, element, sources } = setUp();
+    voice.dial(false);
+    voice.play(track);
+    voice.bath();
+
+    voice.setTextOnly(true);
+    expect(audible(sources[sources.length - 1])).toBe(false);
+    voice.setTextOnly(false);
+    voice.dial(false);
+    voice.play(track);
+    expect(element.muted).toBe(false);
   });
 });

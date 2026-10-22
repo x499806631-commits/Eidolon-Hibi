@@ -9,6 +9,8 @@ tried, `PER_TICK` at most at a tick, the oldest contacts first. The day's twists
 on from. One the model fails on, or writes nothing usable in, is kept as none and not tried
 again that day. Written on the deployer's chat model as letters are, each with an activity
 record of its own (`schedule`). A turn never waits for one: without it, she has none that day.
+A night she goes to bed, her bath before it is drawn on `random` too (`schedules.draw_bath`),
+in the tub unless her heart says she showers (GLOSSARY.md「洗澡」).
 """
 
 import asyncio
@@ -24,7 +26,7 @@ from eidolon.engine import ConversationEngine
 from eidolon.live_config import LiveConfig
 from eidolon.producer import effective_timezone
 from eidolon.randomness import Random
-from eidolon.schedules import TWISTS, Schedules, Slot, parse_rest, parse_schedule
+from eidolon.schedules import TWISTS, Bath, Schedules, Slot, draw_bath, parse_rest, parse_schedule
 from eidolon.schedules import said as schedule_said
 from eidolon.store import Conversation, Store
 
@@ -144,6 +146,7 @@ class ScheduleWriter:
         lease = self._config.lease()
         slots: list[Slot] = []
         wake = sleep = None
+        bath: Bath | None = None
         try:
             with recording.current():
                 answer = await self._engine.write_schedule(
@@ -151,6 +154,9 @@ class ScheduleWriter:
                 )
             slots = parse_schedule(answer, self._characters)
             wake, sleep = parse_rest(answer)
+            if sleep is not None:
+                heart = self._characters[character_id].heart
+                bath = draw_bath(sleep, heart.bath if heart else "tub", self._random)
             recording.finish("success" if slots else "failed")
         except Exception as e:
             # Not logged with what was raised: a service's error may repeat what it was asked.
@@ -162,5 +168,5 @@ class ScheduleWriter:
         if again:
             await asyncio.to_thread(self._schedules.forget, user_id, character_id, day)
         await asyncio.to_thread(
-            self._schedules.keep, user_id, character_id, day, slots, twists, wake, sleep
+            self._schedules.keep, user_id, character_id, day, slots, twists, wake, sleep, bath
         )
