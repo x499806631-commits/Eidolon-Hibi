@@ -387,4 +387,4 @@ intimate_female = "……"
 ## 致谢
 
 天气、番茄钟、纪念日、约定、联网、她们的经历这一批最初由朋友（用 DeepSeek）做出，之后审阅、修正并继续完善；
-其余功能和这份说明由 Claude 协助完成。角色资料参考萌娘百科（CC BY-NC-SA 4.0）和 wikiwiki，出处见 `characters/facts/*.sources.md`。
+其余功能和这份说明由 Claude 协助完成。行程、作息这些「偶像有自己的日程」的点子，受 [ShinyColorsPet](https://github.com/jerygood870208/ShinyColorsPet)（jerygood870208 老师）启发，代码是另外写的。角色资料参考萌娘百科（CC BY-NC-SA 4.0）和 wikiwiki，出处见 `characters/facts/*.sources.md`。
