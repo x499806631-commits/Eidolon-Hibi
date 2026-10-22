@@ -35,6 +35,16 @@ FISH_AUDIO_MODELS: tuple[FishAudioModel, ...] = get_args(FishAudioModel)
 DEFAULT_FISH_AUDIO_MODEL: FishAudioModel = "s2.1-pro-free"
 """Fish Audio's free-tier model: it draws on no API credit, unlike the paid ones."""
 FREE_FISH_AUDIO_MODELS: frozenset[FishAudioModel] = frozenset({DEFAULT_FISH_AUDIO_MODEL})
+VoiceEngine = Literal["fish", "gpt_sovits"]
+"""What speaks as the characters: Fish Audio, or the deployer's own GPT-SoVITS server
+(GLOSSARY.md「本地语音」, `voices`)."""
+VOICE_ENGINES: tuple[VoiceEngine, ...] = get_args(VoiceEngine)
+SAME_AS_CALLS = "same"
+"""The read-aloud model (GLOSSARY.md「朗读」) that is whatever calls are voiced with."""
+ReadModel = FishAudioModel | Literal["same"]
+READ_MODELS: tuple[str, ...] = (SAME_AS_CALLS, *FISH_AUDIO_MODELS)
+ReadEngine = VoiceEngine | Literal["same"]
+READ_ENGINES: tuple[str, ...] = (SAME_AS_CALLS, *VOICE_ENGINES)
 CHARACTER_BILLED_FISH_AUDIO_MODELS: frozenset[FishAudioModel] = frozenset({"drama-3"})
 """Billed for the characters of text spoken; the others for its UTF-8 bytes."""
 
@@ -403,6 +413,17 @@ class Settings:
     """What Alibaba Cloud Model Studio recognizes speech with, whoever's key it is on."""
     fish_audio_api_key: str | None = None
     fish_audio_model: FishAudioModel = DEFAULT_FISH_AUDIO_MODEL
+    fish_audio_read_model: ReadModel = SAME_AS_CALLS
+    """What her messages are read aloud with (GLOSSARY.md「朗读」); `SAME_AS_CALLS` for the
+    model calls are voiced with, whatever it is changed to."""
+    voice_engine: VoiceEngine = "fish"
+    """What speaks as her in calls (GLOSSARY.md「本地语音」)."""
+    read_engine: ReadEngine = SAME_AS_CALLS
+    """What reads her messages aloud; `SAME_AS_CALLS` for what speaks in calls."""
+    gpt_sovits_url: str | None = None
+    """The deployer's own GPT-SoVITS server (`api_v2.py`), if any."""
+    local_voices_path: Path = Path("../local-voices/voices.toml")
+    """The characters' voices on it (`voices.load_local_voices`)."""
     embedding: "EmbeddingSettings | None" = None
     rerank: "RerankSettings | None" = None
     image: "ImageSettings | None" = None
@@ -532,6 +553,13 @@ class Settings:
             bailian_stt_model=_bailian_stt_model(),
             fish_audio_api_key=os.environ.get("FISH_AUDIO_API_KEY") or None,
             fish_audio_model=fish_audio_model_from_env(),
+            fish_audio_read_model=read_model_from_env(),
+            voice_engine=_choice("VOICE_ENGINE", VOICE_ENGINES, "fish"),  # pyright: ignore[reportArgumentType]
+            read_engine=_choice("READ_VOICE_ENGINE", READ_ENGINES, SAME_AS_CALLS),  # pyright: ignore[reportArgumentType]
+            gpt_sovits_url=(os.environ.get("GPT_SOVITS_URL") or "").strip() or None,
+            local_voices_path=Path(
+                os.environ.get("EIDOLON_LOCAL_VOICES") or "../local-voices/voices.toml"
+            ),
             embedding=EmbeddingSettings.from_env(),
             rerank=RerankSettings.from_env(),
             image=ImageSettings.from_env(),
@@ -581,6 +609,22 @@ def fish_audio_model_from_env() -> FishAudioModel:
     if model not in FISH_AUDIO_MODELS:
         raise RuntimeError(
             f"环境变量 FISH_AUDIO_MODEL 只能是 {'、'.join(FISH_AUDIO_MODELS)}，而不是 {model}"
+        )
+    return model  # pyright: ignore[reportReturnType]  # checked above
+
+
+def _choice(name: str, choices: tuple[str, ...], default: str) -> str:
+    value = (os.environ.get(name) or "").strip() or default
+    if value not in choices:
+        raise RuntimeError(f"环境变量 {name} 只能是 {'、'.join(choices)}，而不是 {value}")
+    return value
+
+
+def read_model_from_env() -> ReadModel:
+    model = (os.environ.get("FISH_AUDIO_READ_MODEL") or "").strip() or SAME_AS_CALLS
+    if model not in READ_MODELS:
+        raise RuntimeError(
+            f"环境变量 FISH_AUDIO_READ_MODEL 只能是 {'、'.join(READ_MODELS)}，而不是 {model}"
         )
     return model  # pyright: ignore[reportReturnType]  # checked above
 

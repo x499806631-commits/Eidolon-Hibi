@@ -751,6 +751,11 @@ class FakeSpeech:
         self.rejects: dict[str, str] = {}
         self.regions: dict[str, BailianRegion] = {}
         self.voiced: list[tuple[str, str, str]] = []
+        self.local_voices: set[str] = set()
+        """The characters with a voice on the GPT-SoVITS server."""
+        self.gpt_sovits_down = False
+        self.read: list[tuple[str, ...]] = []
+        """What was read aloud: ("fish", model, voice id, text) or ("gpt_sovits", url, id, text)."""
 
     def stt(self, key: SttKey, *, own: bool) -> Hearing:
         self.own.append(("stt", own))
@@ -782,6 +787,31 @@ class FakeSpeech:
         self.voiced.append((api_key, model, voice_id))
         if api_key in self.rejects:
             raise RuntimeError(self.rejects[api_key])
+
+    def has_local_voice(self, character_id: str) -> bool:
+        return character_id in self.local_voices
+
+    def gpt_sovits_tts(self, base_url: str, character_id: str, sample_rate: int) -> FakeTTS:
+        self.own.append(("tts", False))
+        self.ttss.append(FakeTTS(base_url, "gpt-sovits", character_id, sample_rate))
+        return self.ttss[-1]
+
+    async def check_gpt_sovits(self, base_url: str) -> None:
+        self.checked.append(("gpt_sovits", base_url))
+        if self.gpt_sovits_down:
+            raise OwnKeyRejected(f"连不上 GPT-SoVITS（{base_url}）")
+
+    async def fish_read(self, api_key: str, model: str, voice_id: str, text: str) -> bytes:
+        self.read.append(("fish", model, voice_id, text))
+        if api_key in self.rejects:
+            raise RuntimeError(self.rejects[api_key])
+        return f"mp3:{text}".encode()
+
+    async def gpt_sovits_read(self, base_url: str, character_id: str, text: str) -> bytes:
+        self.read.append(("gpt_sovits", base_url, character_id, text))
+        if self.gpt_sovits_down:
+            raise RuntimeError("down")
+        return f"wav:{text}".encode()
 
     def _try(self, service: str, api_key: str) -> None:
         self.checked.append((service, api_key))

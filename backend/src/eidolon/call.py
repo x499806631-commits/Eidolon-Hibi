@@ -29,7 +29,7 @@ import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import nullcontext
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from functools import partial
 from typing import Any, Literal, Protocol
@@ -75,6 +75,7 @@ from pipecat.processors.frameworks.rtvi.models import ServerMessage
 from pipecat.services.ai_service import AIService
 from pipecat.services.fish.tts import FishAudioTTSService
 from pipecat.services.soniox.stt import SonioxContextObject, SonioxSTTService
+from pipecat.services.settings import TTSSettings
 from pipecat.services.stt_service import STTService
 from pipecat.services.tts_service import InterruptibleTTSService, TTSService
 from pipecat.transcriptions.language import Language
@@ -124,7 +125,8 @@ from eidolon.config import (
     SttProvider,
     UsageLimits,
 )
-from eidolon.delivery_cues import spoken_by
+from eidolon.billing import bill
+from eidolon.delivery_cues import spoken_by, voiced
 from eidolon.emotion import EmotionJudging, SaidSegment, SegmentToJudge
 from eidolon.engine import (
     CallTurnRecorded,
@@ -146,7 +148,8 @@ from eidolon.own_keys import (
 )
 from eidolon.greetings import FISH_TTS_HTTP_URL
 from eidolon.proxy import ProxiedWebsocket, ProxyRoutes, masked, open_client
-from eidolon.readings import Reading, pronunciation_dictionary
+from eidolon.readings import Reading, pronunciation_dictionary, used_in
+from eidolon.voices import GptSovits, VoiceFailed
 from eidolon.reply_format import SegmentComplete, SegmentDelta, SpeechDelta
 from eidolon.store import Conversation, NotFound, Store
 from eidolon.turn_outcome import TurnOutcome
@@ -310,6 +313,30 @@ class Speech(Protocol):
     async def voice_a_word(self, api_key: str, model: FishAudioModel, voice_id: str) -> None:
         """Have Fish Audio voice a word with `model` in `voice_id`, on the deployer's
         `api_key`, as the service status tries it; raises whatever says why it did not."""
+        ...
+
+    def has_local_voice(self, character_id: str) -> bool:
+        """Whether she has a voice on the deployer's GPT-SoVITS server (GLOSSARY.md「本地语音」)."""
+        ...
+
+    def gpt_sovits_tts(self, base_url: str, character_id: str, sample_rate: int) -> TTSService:
+        """Speech synthesis for one call on the deployer's GPT-SoVITS server at `base_url`,
+        in her voice there."""
+        ...
+
+    async def check_gpt_sovits(self, base_url: str) -> None:
+        """Raise OwnKeyRejected saying why, unless a GPT-SoVITS server answers at `base_url`."""
+        ...
+
+    async def fish_read(self, api_key: str, model: FishAudioModel, voice_id: str, text: str) -> bytes:
+        """`text`, delivery cues and all, read aloud by Fish Audio in `voice_id` with
+        `model`, on the deployer's `api_key`, as mp3 (GLOSSARY.md「朗读」). Raises whatever
+        says why not."""
+        ...
+
+    async def gpt_sovits_read(self, base_url: str, character_id: str, text: str) -> bytes:
+        """`text` read aloud in her voice on the deployer's GPT-SoVITS server, as WAV.
+        Raises VoiceFailed saying why not."""
         ...
 
 
@@ -753,6 +780,60 @@ class FishTTS(InterruptsFirst, ProxiedWebsocket, FishAudioTTSService):
             await websocket.close()
 
 
+class GptSovitsTTS(TTSService):
+    """The deployer's GPT-SoVITS server speaking as the character (GLOSSARY.md「本地语音」),
+    a sentence at a time as they come, each over HTTP, streamed back as it is voiced and
+    resampled to the call's rate. Ahead of the first audio of each segment goes its
+    `segment-playing` message, as Fish Audio's does (`FishTTS`); a segment's last sentence,
+    held back by the aggregator for what might follow, is voiced as soon as the segment has
+    all its Japanese. Delivery cues are not read."""
+
+    def __init__(
+        self, server: GptSovits, base_url: str, character_id: str, **kwargs: Any
+    ) -> None:
+        super().__init__(
+            push_start_frame=True, push_stop_frames=True,
+            settings=TTSSettings(model="gpt-sovits", voice=character_id, language=None),
+            **kwargs,
+        )
+        self._server = server
+        self._base_url = base_url
+        self._character_id = character_id
+        self._arriving: tuple[int, int] | None = None
+        self._announced: tuple[int, int] | None = None
+
+    def can_generate_metrics(self) -> bool:
+        return True
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        if isinstance(frame, SegmentTextFrame):
+            self._arriving = (frame.reply, frame.segment)
+        await super().process_frame(frame, direction)
+        if isinstance(frame, SegmentCompleteFrame) and self._arriving == (frame.reply, frame.segment):
+            held = await self._text_aggregator.flush()
+            if held:
+                await self._push_tts_frames(AggregatedTextFrame(held.text, held.type, raw_text=held.text))
+
+    async def _handle_interruption(self, frame: InterruptionFrame, direction: FrameDirection):
+        await super()._handle_interruption(frame, direction)
+        self._arriving = self._announced = None
+
+    async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:
+        if self._arriving is not None and self._announced != self._arriving:
+            self._announced = self._arriving
+            yield segment_playing(*self._arriving)
+        await self.start_tts_usage_metrics(text)
+        try:
+            async for frame in self._stream_audio_frames_from_iterator(
+                self._server.stream(self._base_url, self._character_id, text),
+                strip_wav_header=True, context_id=context_id,
+            ):
+                await self.stop_ttfb_metrics()
+                yield frame
+        except (VoiceFailed, KeyError) as e:
+            yield ErrorFrame(error=f"GPT-SoVITS: {e}")
+
+
 SONIOX_FOLLOW_ON_TIMEOUT = 4.0
 """How long, in seconds, a follow-on may take Soniox to transcribe (see `Hearing`): it
 finalizes what it heard at most 3 s (its longest endpoint delay) after the last word, and
@@ -782,6 +863,8 @@ class SpeechServices:
     readings: tuple[Reading, ...] = ()
     hot_words: tuple[str, ...] = ()
     routes: ProxyRoutes | None = None
+    gpt_sovits: GptSovits = field(default_factory=GptSovits)
+    """The deployer's GPT-SoVITS server and the characters' voices on it."""
 
     SONIOX_MODELS_URL = "https://api.soniox.com/v1/models"
     FISH_CREDIT_URL = "https://api.fish.audio/wallet/self/api-credit"
@@ -860,6 +943,41 @@ class SpeechServices:
         res.raise_for_status()
         if not res.content:
             raise RuntimeError("Fish Audio 没有返回音频")
+
+    def has_local_voice(self, character_id: str) -> bool:
+        return self.gpt_sovits.has(character_id)
+
+    def gpt_sovits_tts(self, base_url: str, character_id: str, sample_rate: int) -> TTSService:
+        return GptSovitsTTS(self.gpt_sovits, base_url, character_id, sample_rate=sample_rate)
+
+    async def check_gpt_sovits(self, base_url: str) -> None:
+        try:
+            await self.gpt_sovits.check(base_url)
+        except VoiceFailed as e:
+            raise OwnKeyRejected(str(e)) from None
+
+    async def fish_read(self, api_key: str, model: FishAudioModel, voice_id: str, text: str) -> bytes:
+        said = spoken_by(voiced(text), model)
+        body: dict[str, object] = {"text": said, "reference_id": voice_id, "format": "mp3"}
+        dictionary = pronunciation_dictionary(used_in(said, self.readings))
+        if dictionary is not None:
+            body["pronunciation_dictionary"] = dictionary
+        bill("characters" if model in CHARACTER_BILLED_FISH_AUDIO_MODELS else "bytes",
+             len(said) if model in CHARACTER_BILLED_FISH_AUDIO_MODELS else len(said.encode()))
+        async with open_client(self._proxy("tts", False)(), httpx.Timeout(60, connect=10)) as client:
+            res = await client.post(
+                FISH_TTS_HTTP_URL,
+                headers={"Authorization": f"Bearer {api_key}", "model": model},
+                json=body,
+            )
+        if res.is_error:
+            raise RuntimeError(f"Fish Audio 没能合成：{res.status_code} {res.text[:200]}")
+        if not res.content:
+            raise RuntimeError("Fish Audio 没有返回音频")
+        return res.content
+
+    async def gpt_sovits_read(self, base_url: str, character_id: str, text: str) -> bytes:
+        return await self.gpt_sovits.read(base_url, character_id, text)
 
     def _proxy(self, service: Literal["tts", "stt"], own: bool) -> Callable[[], str | None]:
         """Where a connection of `service` on a user's `own` key or the deployer's goes
@@ -1156,10 +1274,16 @@ class Calls:
                 self._watch = asyncio.create_task(self._hang_up_users_gone())
 
         try:
+            if keys.tts_engine == "gpt_sovits" and not self._speech.has_local_voice(character.id):
+                # Without a voice of hers there, Fish Audio speaks if the deployer has it
+                if not keys.tts:
+                    raise CallFailed()
+                keys = replace(keys, tts_engine="fish")
             call = Call(
                 conversation, character, admission.llms, options.muted, options.quality,
-                options.device_timezone, admission.own_llm, keys.tts_model, own_image,
-                options.asmr,
+                options.device_timezone, admission.own_llm,
+                keys.tts_model if keys.tts_engine == "fish" else DEFAULT_FISH_AUDIO_MODEL,
+                own_image, options.asmr,
             )
             answer = await self._answer(SmallWebRTCRequest(offer.sdp, offer.type), serve)
         except BaseException:
@@ -1307,8 +1431,13 @@ class _LiveCall:
         self._turns = CallTurns(
             engine, store, call, outcome, hearing.follow_on_timeout, emotions, ambience, weather
         )
-        tts = speech.tts(
-            keys.tts, keys.tts_model, call.character.voice_id, sample_rate, own="tts" in keys.own
+        local = keys.tts_engine == "gpt_sovits"
+        tts = (
+            speech.gpt_sovits_tts(keys.gpt_sovits_url, call.character.id, sample_rate) if local
+            else speech.tts(
+                keys.tts, keys.tts_model, call.character.voice_id, sample_rate,
+                own="tts" in keys.own,
+            )
         )
         own_services: dict[FrameProcessor, Service] = {
             processor: service
@@ -1321,7 +1450,10 @@ class _LiveCall:
         self._meter = CallMeter(
             outcome.recording,
             stt, Origin("stt", _stt_host(keys.stt), _model(stt), "stt" in keys.own),
-            tts, Origin("tts", host(FISH_TTS_URL), _model(tts), "tts" in keys.own),
+            tts, Origin(
+                "tts", host(keys.gpt_sovits_url if local else FISH_TTS_URL), _model(tts),
+                "tts" in keys.own,
+            ),
         )
         pipeline = Pipeline(
             [

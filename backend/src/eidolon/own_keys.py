@@ -52,6 +52,7 @@ import httpcore
 import httpx
 
 from eidolon.activity import ActivityLog, ServiceName, llm_origin, metered_llm
+from eidolon.voices import DEFAULT_GPT_SOVITS_URL
 from eidolon.config import (
     DEFAULT_FISH_AUDIO_MODEL,
     DEFAULT_NOVELAI_BASE_URL,
@@ -61,6 +62,7 @@ from eidolon.config import (
     ImageSettings,
     LLMSettings,
     Service,
+    VoiceEngine,
     SttKey,
     SttProvider,
 )
@@ -361,6 +363,10 @@ class KeyCheck(Protocol):
         `model`."""
         ...
 
+    async def check_gpt_sovits(self, base_url: str) -> None:
+        """Raise OwnKeyRejected saying why, unless a GPT-SoVITS server answers at `base_url`."""
+        ...
+
 
 def _no_hold() -> Callable[[], None]:
     return _nothing
@@ -378,6 +384,10 @@ class DeployerKeys:
     tts: str | None = None
     tts_model: FishAudioModel = DEFAULT_FISH_AUDIO_MODEL
     """What Fish Audio speaks with on the deployer's key."""
+    tts_engine: VoiceEngine = "fish"
+    """What speaks as her in calls: Fish Audio on `tts`, or the deployer's own GPT-SoVITS
+    server at `gpt_sovits_url` (GLOSSARY.md「本地语音」), which needs no key."""
+    gpt_sovits_url: str = DEFAULT_GPT_SOVITS_URL
     emotions: EmotionJudging | None = None
     """Judging her emotion during a call, on the deployer's judge model, whoever's keys
     the call is on; None if it is not judged here (see `call.Calls`)."""
@@ -440,6 +450,10 @@ class CallKeys:
     """Called once the call has ended, to let go of the deployer's keys it ran on."""
     tts_model: FishAudioModel = DEFAULT_FISH_AUDIO_MODEL
     """What Fish Audio speaks with on `tts`: the user's choice on their own key."""
+    tts_engine: VoiceEngine = "fish"
+    """Fish Audio on `tts`, or the deployer's GPT-SoVITS server at `gpt_sovits_url` (never
+    for one on their own Fish Audio key)."""
+    gpt_sovits_url: str = DEFAULT_GPT_SOVITS_URL
     emotions: EmotionJudging | None = None
     """The deployer's, as the call connected (see `DeployerKeys.emotions`)."""
     own_llm: bool = False
@@ -496,16 +510,17 @@ class OwnKeys:
             stt = brought.stt if brought.stt is not None else deployer.stt
             tts = brought.tts if brought.tts is not None else deployer.tts
             tts_model = brought.tts_model if brought.tts is not None else deployer.tts_model
-            assert stt and tts
+            engine: VoiceEngine = "fish" if brought.tts is not None else deployer.tts_engine
+            assert stt and (tts or engine != "fish")
             own = brought.services & {"stt", "tts"}
             llms = self._llms(brought, deployer, call=True)
         except BaseException:
             lease.release()
             raise
         return CallKeys(
-            llms, stt, tts, own, self.exempt("call", brought.services), lease.release,
-            tts_model, deployer.emotions, own_llm=brought.llm is not None,
-            ambience=deployer.ambience,
+            llms, stt, tts or "", own, self.exempt("call", brought.services), lease.release,
+            tts_model, engine, deployer.gpt_sovits_url, deployer.emotions,
+            own_llm=brought.llm is not None, ambience=deployer.ambience,
         )
 
     def exempt(self, kind: UsageKind, services: Iterable[Service]) -> bool:
@@ -637,7 +652,8 @@ def _rejecting(api_key: str, label: str = "") -> Iterator[None]:
 def _require_speech(own: frozenset[Service], deployer: DeployerKeys) -> None:
     """Raise CallsUnavailable unless a call bringing the user's own keys for `own` has a
     key for each of speech recognition and synthesis, theirs or the deployer's."""
-    if not ("stt" in own or deployer.stt) or not ("tts" in own or deployer.tts):
+    speaks = deployer.tts or deployer.tts_engine != "fish"
+    if not ("stt" in own or deployer.stt) or not ("tts" in own or speaks):
         raise CallsUnavailable()
 
 

@@ -188,6 +188,12 @@ export const zh = {
     emptyTitle: (name: string) => `和${name}打个招呼吧`,
     emptyDescription: "打字，或者点右上角的电话和她通话。",
     replying: (name: string) => `${name}正在回复`,
+    /** 她消息旁的小喇叭（GLOSSARY.md「朗读」）。 */
+    readAloud: {
+      read: (name: string) => `听${name}念这条`,
+      stop: "停下",
+      failed: "没能念出来，再点一次试试",
+    },
     /** 对话事件（GLOSSARY.md「对话事件」）给用户看的一句话：消息区的分隔线和列表的「最后一句」都用它。 */
     events: {
       hung_up: (name: string) => `${name}挂断了电话`,
@@ -1480,6 +1486,10 @@ export const zh = {
         turns_per_call: "单次通话的回合上限",
         history_turns: "带上的历史回合数",
         /** 免限额密钥（GLOSSARY.md「免限额密钥」）的三个开关。 */
+        engine: "通话用的语音",
+        read_engine: "念消息用的语音",
+        read_model: "念消息用的 Fish 模型",
+        gpt_sovits_url: "GPT-SoVITS 的地址",
         exempting_llm: "免限额密钥：LLM",
         exempting_tts: "免限额密钥：语音合成",
         exempting_stt: "免限额密钥：语音识别",
@@ -1524,6 +1534,11 @@ export const zh = {
         },
       } as Partial<Record<string, Record<string, string>>>,
       formHints: {
+        engine: "选 GPT-SoVITS 时，通话在你自己的 GPT-SoVITS 上合成；没在 voices.toml 里配声音的偶像仍用 Fish Audio（要有 key）。",
+        read_engine: "点她消息旁的小喇叭时用哪个念。可以和通话不一样，比如通话用 Drama 3、念消息用便宜的模型或本地的。",
+        tts_model: "通话用 Fish Audio 时的模型。",
+        read_model: "念消息用 Fish Audio 时的模型。",
+        gpt_sovits_url: "GPT-SoVITS 的 api_v2.py 监听的地址，默认 http://127.0.0.1:9880。保存前会试着连一下。",
         reasoning_effort: `${reasoningEffortHints.effort}选「高」及以上时，max_tokens 留空或设宽裕一些，思考也算在上限里。`,
         call_reasoning_effort: reasoningEffortHints.callEffort,
         extra_body: reasoningEffortHints.extraBody,
@@ -1575,6 +1590,9 @@ export const zh = {
         cloudflare: "Cloudflare Workers AI",
       } as Record<string, string>,
       regions: { beijing: "北京", singapore: "新加坡" } as Record<string, string>,
+      /** 语音合成里说话的是谁（GLOSSARY.md「本地语音」）。 */
+      voiceEngines: { fish: "Fish Audio", gpt_sovits: "GPT-SoVITS（本地）" } as Record<string, string>,
+      sameAsCalls: "和通话一样",
       imageFormats: { novelai: "NovelAI 官方格式", openai: "OpenAI 图像格式" } as Record<string, string>,
       imageModels: {
         "nai-diffusion-5-curated": "V5 Curated",

@@ -17,6 +17,9 @@ skills-lock.json
 .playwright-mcp/
 
 
+# 本地语音（GPT-SoVITS）的参考音频和每位偶像的声音配置，不进仓库（ADR-0003）
+/local-voices/
+
 # 剧情库的原始数据和整理后的数据库都不进仓库（ADR-0003）
 /corpus/
 # 活动名对照表属于部署配置，只保留示例

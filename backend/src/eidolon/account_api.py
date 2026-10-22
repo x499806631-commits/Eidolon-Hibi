@@ -378,7 +378,8 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
         console, the exempting keys now (GLOSSARY.md「免限额密钥」), in a fixed order, and
         whether they have their own switch for reach-outs on (GLOSSARY.md「搭话」), None where
         the deployer has reach-outs off, the user's own switches for the features the
-        deployment has (GLOSSARY.md「玩法开关」), and the version of the sponsor code
+        deployment has (GLOSSARY.md「玩法开关」), whether her messages can be read aloud
+        (GLOSSARY.md「朗读」), and the version of the sponsor code
         (GLOSSARY.md「赞赏」) while users are shown it, else None."""
         switches = backend.features.of(user_id)
         return {
@@ -393,6 +394,7 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
             "reach_outs": backend.reach_outs.switch_of(user_id),
             "features": {f: switches[f] for f in available_features(backend)},
             "web_search": backend.web is not None,
+            "read_aloud": backend.read_aloud.available(),
             "sponsor_version": backend.sponsor.state().version,
         }
 

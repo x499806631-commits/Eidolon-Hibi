@@ -64,6 +64,7 @@ from eidolon.activity import (
 )
 from eidolon.characters import Character
 from eidolon.clock import Clock
+from eidolon.voices import DEFAULT_GPT_SOVITS_URL
 from eidolon.config import (
     CLOUDFLARE_JUDGE_MODELS,
     DEFAULT_REACH_OUTS_PER_DAY,
@@ -71,6 +72,12 @@ from eidolon.config import (
     ChatModelSettings,
     DEFAULT_JEV_BASE_URL,
     FISH_AUDIO_MODELS,
+    READ_ENGINES,
+    READ_MODELS,
+    SAME_AS_CALLS,
+    VOICE_ENGINES,
+    FishAudioModel,
+    VoiceEngine,
     BailianJudgeSettings,
     CloudflareJudgeSettings,
     ImageSettings,
@@ -419,23 +426,67 @@ class _MemoryLLM(_LLMItem):
         await check_chat_llm(client, settings.reasoning_effort)
 
 
+@dataclass(frozen=True)
+class ReadVoice:
+    """What her messages are read aloud with (`LiveConfig.read_aloud_voice`)."""
+
+    engine: VoiceEngine
+    api_key: str | None
+    """The deployer's Fish Audio key, if any."""
+    model: FishAudioModel
+    gpt_sovits_url: str
+
+
 class _TTS(_Item):
+    """What speaks as the characters: Fish Audio (its key, the model calls are voiced
+    with) or the deployer's own GPT-SoVITS server (GLOSSARY.md「本地语音」), in calls
+    (`engine`) and reading her messages aloud (GLOSSARY.md「朗读」, `read_engine`, with
+    `read_model` on Fish Audio), each `SAME_AS_CALLS` by default."""
+
     name = TTS
-    fields = ("api_key", "model")
+    fields = ("api_key", "engine", "model", "read_engine", "read_model", "gpt_sovits_url")
     secrets = frozenset({"api_key"})
 
     def env(self) -> Values:
         s = self.c.settings
-        return {"api_key": s.fish_audio_api_key, "model": s.fish_audio_model}
+        return {
+            "api_key": s.fish_audio_api_key, "engine": s.voice_engine,
+            "model": s.fish_audio_model, "read_engine": s.read_engine,
+            "read_model": s.fish_audio_read_model,
+            "gpt_sovits_url": s.gpt_sovits_url or DEFAULT_GPT_SOVITS_URL,
+        }
 
     async def tried(self, values: Values) -> tuple[Values, Any]:
-        if not values["api_key"]:
-            raise ConfigRejected("还没有语音合成的 key，请填写")
+        engine = values.get("engine") or "fish"
+        read_engine = values.get("read_engine") or SAME_AS_CALLS
+        read = values.get("read_model") or SAME_AS_CALLS
+        url = (values.get("gpt_sovits_url") or "").strip() or DEFAULT_GPT_SOVITS_URL
+        if engine not in VOICE_ENGINES:
+            raise ConfigRejected(f"通话的语音只能是 {'、'.join(VOICE_ENGINES)}，而不是 {engine}")
+        if read_engine not in READ_ENGINES:
+            raise ConfigRejected(f"朗读的语音只能是 {'、'.join(READ_ENGINES)}，而不是 {read_engine}")
         if values["model"] not in FISH_AUDIO_MODELS:  # kept before there was a list
             raise ConfigRejected(f"语音合成的模型只能是 {'、'.join(FISH_AUDIO_MODELS)}，而不是 {values['model']}")
-        await self.c._check_speech(
-            lambda check: check.check_tts(values["api_key"], values["model"], own=False)
-        )
+        if read not in READ_MODELS:
+            raise ConfigRejected(f"朗读的模型只能是 {'、'.join(READ_MODELS)}，而不是 {read}")
+        values = values | {
+            "engine": engine, "read_engine": read_engine, "read_model": read, "gpt_sovits_url": url,
+        }
+        reading = engine if read_engine == SAME_AS_CALLS else read_engine
+        if "fish" in (engine, reading):
+            if not values["api_key"]:
+                raise ConfigRejected("还没有语音合成的 key，请填写")
+            if engine == "fish":
+                await self.c._check_speech(
+                    lambda check: check.check_tts(values["api_key"], values["model"], own=False)
+                )
+            read_model = values["model"] if read == SAME_AS_CALLS else read
+            if reading == "fish" and (engine != "fish" or read_model != values["model"]):
+                await self.c._check_speech(
+                    lambda check: check.check_tts(values["api_key"], read_model, own=False)
+                )
+        if "gpt_sovits" in (engine, reading):
+            await self.c._check_speech(lambda check: check.check_gpt_sovits(url))
         return values, None
 
     async def retry(self, values: Values) -> Values:
@@ -1038,6 +1089,7 @@ class LiveConfig:
             case "chat_llm" | "memory_llm":
                 return True
             case "tts":
+                # The service status tries Fish Audio: it shows how Fish Audio is doing
                 return bool(self.effective(TTS)["api_key"])
             case "stt":
                 return self.stt_key is not None
@@ -1114,6 +1166,21 @@ class LiveConfig:
             values |= self._overrides.get(name, {})
         return values
 
+    def read_aloud_voice(self) -> "ReadVoice | None":
+        """What her messages are read aloud with now (GLOSSARY.md「朗读」): Fish Audio, on the
+        deployer's key and the model for it, or their GPT-SoVITS server, with Fish Audio to
+        fall back on for one without a voice there if there is a key; None with neither."""
+        tts = self.effective(TTS)
+        engine = tts.get("engine") or "fish"
+        read_engine = tts.get("read_engine") or SAME_AS_CALLS
+        engine = engine if read_engine == SAME_AS_CALLS else read_engine
+        read = tts.get("read_model") or SAME_AS_CALLS
+        model = tts["model"] if read == SAME_AS_CALLS else read
+        api_key = tts["api_key"] or None
+        if engine == "fish" and api_key is None:
+            return None
+        return ReadVoice(engine, api_key, model, tts.get("gpt_sovits_url") or DEFAULT_GPT_SOVITS_URL)
+
     def lease(self) -> DeployerLease:
         """The deployer's keys for a turn or call starting now, held until it releases
         them. Each model's requests are recorded as service calls to the model it is, and
@@ -1149,6 +1216,7 @@ class LiveConfig:
                 memory.client, self._activity, llm_origin("memory_llm", memory.settings)
             ),
             self.stt_key, tts["api_key"], tts["model"],
+            tts.get("engine") or "fish", tts.get("gpt_sovits_url") or DEFAULT_GPT_SOVITS_URL,
             emotions, hold_background=lambda: memory.again().release,
             call_llm=metered_llm(
                 chat.client.call, self._activity, llm_origin("chat_llm", chat.settings.call)

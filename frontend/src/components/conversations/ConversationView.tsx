@@ -36,6 +36,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { readableKey } from "@/lib/readAloud";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { copy } from "@/i18n";
 import { cueText, untilText } from "@/lib/affinity";
@@ -80,6 +81,7 @@ import { OutfitPicker } from "./OutfitPicker";
 import { PastConversations } from "./PastConversations";
 import { PhotoBlock } from "./PhotoBlock";
 import { useDirectory, useWide } from "./ConversationDirectory";
+import { ReadAloudButton } from "./ReadAloudButton";
 import { useFocusBack } from "./useFocusBack";
 import { usePastConversation, type Viewing } from "./usePastConversation";
 import { useProducerTimezone } from "./useProducerTimezone";
@@ -414,6 +416,7 @@ export function ConversationView({
               character={character}
               affinityOn={affinity !== null}
               timeZone={timeZone}
+              canRead={account?.read_aloud === true}
             />
           ) : viewing.status === "failed" ? (
             <Empty className="h-full">
@@ -447,6 +450,7 @@ export function ConversationView({
             character={character}
             affinityOn={affinity !== null}
             timeZone={timeZone}
+            canRead={account?.read_aloud === true}
             onAppeal={live && !cooling && !ended ? (key) => live.appeal(key) : undefined}
           />
         )}
@@ -606,6 +610,7 @@ function Messages({
   character,
   affinityOn,
   timeZone,
+  canRead = false,
   onAppeal,
 }: {
   entries: Entry[];
@@ -613,6 +618,8 @@ function Messages({
   character: Character;
   affinityOn: boolean;
   timeZone: string;
+  /** 她的消息旁有没有小喇叭（GLOSSARY.md「朗读」）。 */
+  canRead?: boolean;
   /** 说明她的回复（按记录里的 key）不是那个意思；没成就给出原因。 */
   onAppeal?: (key: string) => Promise<string | null>;
 }) {
@@ -672,7 +679,7 @@ function Messages({
                 </MessageScrollerItem>
               ) : (
                 <MessageScrollerItem key={line.entry.key} messageId={line.entry.key} className={cn(line.first && "mt-2")}>
-                  <Bubbled line={line} entry={line.entry} character={character} />
+                  <Bubbled line={line} entry={line.entry} character={character} canRead={canRead} />
                 </MessageScrollerItem>
               ),
             )}
@@ -719,11 +726,14 @@ function Bubbled({
   line: { first, last },
   entry,
   character,
+  canRead,
 }: {
   line: Extract<Line, { kind: "entry" }>;
   entry: Exclude<Entry, { kind: "event" }>;
   character: Character;
+  canRead: boolean;
 }) {
+  const readable = canRead ? readableKey(entry) : null;
   const time = <time className="shrink-0 pb-0.5 text-meta text-muted-foreground tabular-nums">{clock(entry.at)}</time>;
   if (entry.kind === "user") {
     return (
@@ -768,6 +778,7 @@ function Bubbled({
               )}
             </BubbleContent>
           </Bubble>
+          {readable && <ReadAloudButton messageKey={readable} name={character.name} />}
           {last && !entry.pending && time}
         </div>
       </MessageContent>

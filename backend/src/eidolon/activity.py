@@ -102,6 +102,7 @@ says how soon its first word came and at which reasoning effort."""
 
 RecordKind = Literal[
     "turn", "call", "reach_out", "letter", "diary", "schedule", "keepsake", "trip_photo",
+    "read_aloud",
 ]
 """A reach-out is neither a turn nor a call, nor counted as one anywhere; it is always on the
 deployer's keys."""

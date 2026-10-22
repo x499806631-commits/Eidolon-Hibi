@@ -46,7 +46,8 @@ shadcn 纪律检查通过，前后端全部测试通过。
 | | [偶像日记](#偶像日记) | `.env` 里 `EIDOLON_DIARY=1` |
 | | [回礼和纪念品柜](#回礼和纪念品柜) | `.env` 里 `EIDOLON_KEEPSAKES=1`（图要生图服务，可选） |
 | 礼物 | [抽奖、保底和体验券](#抽奖保底和体验券)，含拜托 | 跟着好感度和礼物 |
-| 通话 | [ASMR 模式](#asmr-模式通话) | 对话页「更多」菜单 |
+| 通话 | [朗读和本地语音](#朗读和本地语音) | 有语音合成就有；本地语音见 `.env` / 后台 |
+| | [ASMR 模式](#asmr-模式通话) | 对话页「更多」菜单 |
 | | [环境音和「🎲 自动」](#环境音和-自动) | 通话底栏的环境音键 |
 | 其他 | [番茄钟「一起专心」](#番茄钟一起专心) | 对话页「更多」菜单 |
 | | [联网](#联网) | 对话页「更多」菜单，按角色开关 |
@@ -216,6 +217,11 @@ shadcn 纪律检查通过，前后端全部测试通过。
 
 ## 通话
 
+### 朗读和本地语音
+
+- **朗读**：她每条说完的消息旁边有个小喇叭，点了用她的声音念这一条。念过的会留着，再点不花钱。念消息用的语音和 Fish 模型可以和通话不一样（比如通话用 Drama 3，念消息用 S2.1 Pro）。
+- **本地语音**：通话和念消息都能改用自己电脑上的 GPT-SoVITS，各自在后台「语音合成」里切换。每位偶像的参考音频和权重写在 `local-voices/voices.toml`（不进仓库），写法见 [docs/configuration.md](docs/configuration.md#朗读和本地语音)。没配的偶像仍用 Fish Audio。
+
 ### ASMR 模式通话
 
 对话页「更多」菜单里的「ASMR 模式」。她贴着耳边轻声慢慢地说，聊什么都可以：提示词里加了 ASMR 的说法，
@@ -320,6 +326,9 @@ EIDOLON_DIARY=1           # 偶像日记
 EIDOLON_KEEPSAKES=1       # 回礼和纪念品柜（图要生图服务，没有就用 emoji）
 EIDOLON_SCHEDULES=1       # 行程（含作息、洗澡、名字下面那一行）
 FISH_AUDIO_MODEL=drama-3  # ASMR 推荐
+# FISH_AUDIO_READ_MODEL=s2.1-pro   # 念消息用的 Fish 模型，默认和通话一样
+# VOICE_ENGINE=gpt_sovits         # 通话用本地的 GPT-SoVITS
+# READ_VOICE_ENGINE=gpt_sovits    # 念消息用本地的 GPT-SoVITS
 # EIDOLON_WEATHER_LAT=    # 天气：你所在位置的纬度和经度，两个一起填（北纬、东经为正）
 # EIDOLON_WEATHER_LON=
 # EIDOLON_SEARCH_KEY=     # 联网：聊天模型不是 DeepSeek 时，填一把 DeepSeek 的钥匙

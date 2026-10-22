@@ -25,6 +25,7 @@
 - [角色](#角色)
 - [读音与招呼](#读音与招呼)
 - [语音通话](#语音通话)
+- [朗读和本地语音](#朗读和本地语音)
 - [立绘](#立绘)
 - [剧情库](#剧情库)
 - [世界设定](#世界设定)
@@ -167,6 +168,53 @@ docker compose cp backend:/data/drafts/mano.md characters/sheets/mano.md
 
 > [!NOTE]
 > 浏览器和后端之间直接走 WebRTC（UDP）。本机用 docker compose 启动时，Linux 上的浏览器可以直接连到容器；macOS 的 Docker Desktop 或用手机访问时，通常要配 TURN 服务器，见 `.env.example` 里的 `EIDOLON_ICE_SERVERS` 和 `EIDOLON_TURN_URLS`。生产配置自带 coturn，见 [`deploy.md`](deploy.md)。
+
+## 朗读和本地语音
+
+### 朗读她的消息
+
+部署配了语音合成时，对话里她每条说完的消息旁边有一个小喇叭，点了用她的声音念这一条。念过的会留在服务器上，再点直接播放、不再花钱；每位用户每小时最多念 60 条新的。用部署者的 key，不计入用户的回合和通话限额，运行记录里是单独的一类。
+
+念消息用的语音和模型可以和通话分开：
+
+```
+READ_VOICE_ENGINE=same        # same（和通话一样，默认）、fish、gpt_sovits
+FISH_AUDIO_READ_MODEL=same    # 念消息用 Fish Audio 时的模型；same 是和通话一样
+```
+
+后台「配置 → 语音」的「语音合成」里也能随时改，不用重启。
+
+### 本地语音（GPT-SoVITS）
+
+通话和念消息都可以改用你自己跑的 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)，各自单独切换：
+
+```
+VOICE_ENGINE=gpt_sovits                 # 通话用什么说话：fish（默认）或 gpt_sovits
+READ_VOICE_ENGINE=gpt_sovits            # 念消息用什么，same 就跟着通话
+GPT_SOVITS_URL=http://127.0.0.1:9880    # GPT-SoVITS 的 api_v2.py 监听的地址（默认就是这个）
+EIDOLON_LOCAL_VOICES=../local-voices/voices.toml   # 每位偶像的声音，默认就是这个位置
+```
+
+1. 在 GPT-SoVITS 的目录里启动接口服务：`python api_v2.py -a 127.0.0.1 -p 9880`。它和后端要在同一台电脑上，或者能用同样的路径读到同一批文件：参考音频和权重是按路径交给它的。
+2. 在仓库根目录建 `local-voices/`（不进仓库），放每位偶像的参考音频（3–10 秒、只有她一个人、没有背景音乐），再写 `local-voices/voices.toml`：
+
+```toml
+[mano]
+ref_audio = "mano/ref.wav"            # 相对这个文件，也可以写绝对路径
+ref_text = "ほわっ……プロデューサーさん、おはようございます"   # 参考音频里说的话
+ref_lang = "ja"                       # 可选，默认 ja
+# 给她训练过模型时再写这两行（可选），不写就用服务当前载入的模型
+gpt_weights = "D:/GPT-SoVITS/GPT_weights_v2/mano-e15.ckpt"
+sovits_weights = "D:/GPT-SoVITS/SoVITS_weights_v2/mano_e8_s200.pth"
+```
+
+3. 在 `.env` 或后台把通话、念消息改成 GPT-SoVITS。后台保存前会试着连一下这个地址。
+
+- 没在 `voices.toml` 里配声音的偶像仍用 Fish Audio 说话（要有 Fish Audio 的 key；没有 key 时她的通话接不通、消息念不了）。
+- GPT-SoVITS 一次只载入一套权重：换到另一位偶像时先换权重，所以同一时间只合成一段，几个人同时用时会排队。
+- 语气提示（`[shyly]` 这类）不会念出来，只念台词；情绪跟着参考音频走。
+- 通话里每句话单独合成，第一句出来得快不快取决于你的显卡。
+- 自带 Fish Audio key 的用户照样用自己的 key 和模型，不走本地语音。
 
 ## 立绘
 

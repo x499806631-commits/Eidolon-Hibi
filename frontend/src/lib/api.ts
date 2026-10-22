@@ -456,6 +456,8 @@ export type Account = {
   features: Partial<Record<Feature, boolean>>;
   /** 部署有没有配联网搜索（GLOSSARY.md「联网」）：没配就没有「更多」菜单里那一项。 */
   web_search: boolean;
+  /** 她的消息能不能念出来（GLOSSARY.md「朗读」）：部署配了语音合成。 */
+  read_aloud: boolean;
   sponsor_version: string | null;
 };
 

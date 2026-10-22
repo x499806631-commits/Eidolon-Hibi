@@ -408,7 +408,10 @@ async def test_speech_saved_during_a_call_holds_from_the_next_call(
     assert speech.checked == [("tts", NEW_FISH), ("bailian", NEW_DASHSCOPE)]
     assert speech.tts_models == ["drama-3"]  # tried with the model it is to speak with
     shown = stt.json()
-    assert shown["tts"]["effective"] == {"api_key_last4": "0001", "model": "drama-3"}
+    assert shown["tts"]["effective"] == {
+        "api_key_last4": "0001", "engine": "fish", "model": "drama-3", "read_engine": "same",
+        "read_model": "same", "gpt_sovits_url": "http://127.0.0.1:9880",
+    }
     assert shown["stt"]["effective"] == {
         "provider": "bailian", "soniox_api_key_last4": DEPLOYER_SONIOX_KEY[-4:],
         "dashscope_api_key_last4": "0002", "region": "singapore",

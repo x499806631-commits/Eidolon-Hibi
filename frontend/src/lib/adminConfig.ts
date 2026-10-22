@@ -18,6 +18,12 @@ import { EFFORT_UNSET, effortOf, extraBodyText, parseExtraBody, type JsonObject 
 
 export type ConfigStatus = "env" | "overridden" | "failed";
 
+/** 说话的是谁：Fish Audio，或部署者自己的 GPT-SoVITS 服务（GLOSSARY.md「本地语音」）。 */
+export const VOICE_ENGINES = ["fish", "gpt_sovits"] as const;
+
+/** 念消息的语音、模型「和通话一样」。 */
+export const SAME_AS_CALLS = "same";
+
 export type ItemName =
   | "chat_llm"
   | "memory_llm"
@@ -258,11 +264,16 @@ const THRESHOLD = (names: string[]): ItemSpec => ({
 export const ITEM_SPECS: Record<ItemName, ItemSpec> = {
   chat_llm: CHAT_LLM,
   memory_llm: LLM,
+  // 语音合成：通话和念消息（GLOSSARY.md「朗读」）各用 Fish Audio 还是自己的 GPT-SoVITS（GLOSSARY.md「本地语音」）。
   tts: {
-    rows: ["model", "api_key"],
+    rows: ["engine", "model", "read_engine", "read_model", "gpt_sovits_url", "api_key"],
     secrets: ["api_key"],
     form: [
+      { name: "engine", kind: "select", options: VOICE_ENGINES },
       { name: "model", kind: "select", options: FISH_AUDIO_MODELS },
+      { name: "read_engine", kind: "select", options: [SAME_AS_CALLS, ...VOICE_ENGINES] },
+      { name: "read_model", kind: "select", options: [SAME_AS_CALLS, ...FISH_AUDIO_MODELS] },
+      { name: "gpt_sovits_url", kind: "text" },
       { name: "api_key", kind: "secret" },
     ],
     tried: true,

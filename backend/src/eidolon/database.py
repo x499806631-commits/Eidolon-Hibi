@@ -49,6 +49,7 @@ USER_DATA = [
     ("gift_tickets", "user_id = ?"),
     ("dates", "user_id = ?"),
     ("favor_ties", "user_id = ?"),
+    ("read_aloud", "user_id = ?"),
     ("favor_wakes", "user_id = ?"),
     ("favor_make_ups", "user_id = ?"),
     ("favor_parties", "user_id = ?"),

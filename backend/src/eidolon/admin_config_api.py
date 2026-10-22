@@ -11,7 +11,11 @@ from pydantic import BaseModel, Field, StrictBool, ValidationError, field_valida
 
 from eidolon.admin_api import Admin
 from eidolon.assembly import Backend
+from eidolon.voices import DEFAULT_GPT_SOVITS_URL
 from eidolon.config import (
+    ReadEngine,
+    ReadModel,
+    VoiceEngine,
     MAX_IMAGE_CONCURRENCY,
     BailianRegion,
     FishAudioModel,
@@ -78,8 +82,17 @@ class ChatLLMInput(LLMInput):
 
 
 class TTSInput(BaseModel):
+    """Fish Audio's model and key, what speaks in calls and what reads her messages aloud
+    (GLOSSARY.md「本地语音」「朗读」), and where the deployer's GPT-SoVITS server is."""
+
     model: FishAudioModel
     api_key: str | None = ApiKey
+    engine: VoiceEngine = "fish"
+    read_engine: ReadEngine = "same"
+    read_model: ReadModel = "same"
+    gpt_sovits_url: str = Field(
+        DEFAULT_GPT_SOVITS_URL, max_length=200, pattern=r"^https?://[\x21-\x7e]+$"
+    )
 
 
 class STTInput(BaseModel):

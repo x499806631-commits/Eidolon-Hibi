@@ -51,6 +51,7 @@ import {
   readOnlyValue,
   restoreItem,
   rows,
+  SAME_AS_CALLS,
   saveItem,
   statusDisplay,
   TAB_ITEMS,
@@ -279,6 +280,7 @@ function fieldHint(name: ItemName, spec: FieldSpec, keysEditable: boolean, item?
   if (spec.kind === "maxTokens") return t.maxTokensHint;
   if (spec.kind === "probability") return t.formHints.probability;
   if (name === "judge" && spec.name === "model") return t.formHints.judge_model;
+  if (name === "tts" && spec.name === "model") return t.formHints.tts_model;
   if (name === "image" && spec.name === "base_url") return t.formHints.image_base_url;
   return t.formHints[spec.name];
 }
@@ -290,8 +292,10 @@ function optionLabel(name: ItemName, field: string, option: string): string {
   if (field === "window_minutes") return t.minutes(option);
   // 生图的模型：下拉里是官方模型的短名，最后一项是手填。
   if (name === "image" && field === "model") return option === CUSTOM_MODEL ? t.customModel : (t.imageModels[option] ?? option);
-  // 语音合成的模型，和设置页一个叫法。
-  if (field === "model") return copy.settings.ownKeys.ttsModels[option as FishAudioModel] ?? option;
+  // 语音合成的模型，和设置页一个叫法；念消息的那几项多一个「和通话一样」。
+  if (option === SAME_AS_CALLS && (field === "read_engine" || field === "read_model")) return t.sameAsCalls;
+  if (field === "engine" || field === "read_engine") return t.voiceEngines[option] ?? option;
+  if (field === "model" || field === "read_model") return copy.settings.ownKeys.ttsModels[option as FishAudioModel] ?? option;
   return t.providers[option] ?? option;
 }
 

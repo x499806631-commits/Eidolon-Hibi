@@ -144,3 +144,6 @@ export {
   CalendarHeart as DateTicketIcon,
   HandHelping as FavorTicketIcon,
 } from "lucide-react";
+
+// 朗读（GLOSSARY.md「朗读」）：她消息旁的小喇叭，念的时候换成停。
+export { Volume2 as ReadAloudIcon, Square as StopReadingIcon } from "lucide-react";
