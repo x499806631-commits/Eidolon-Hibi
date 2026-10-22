@@ -56,6 +56,7 @@ _QUESTION = {
         "角色扮演的通话中，角色是《偶像大师 闪耀色彩》的偶像，正在和她的制作人通话。"
         "通话时背景里会放一段环境音，营造气氛。按「现在」「季节」和「上文」聊的内容，"
         "此刻最适合放哪一种环境音？聊天里明确提到的场景优先，其次看时间和季节。"
+        "制作人那边的真实天气也可以参考，比如下雨时雨声更合适。"
         "制作人是自己想听环境音才开的，除非话题明显不适合，不要选「安静」。"
     ),
     "criteria": {name: description for name, (_, description) in _OPTIONS.items()},
@@ -87,12 +88,14 @@ def _part_of_day(hour: int) -> str:
 @dataclass(frozen=True)
 class AmbienceMoment:
     """What the ambience is picked by: who she is, the time where the producer is, whether
-    it is an ASMR call, and the latest messages of the conversation."""
+    it is an ASMR call, the latest messages of the conversation, and the weather there if it
+    is known (`weather.Weather.now`)."""
 
     character: Character
     local: datetime
     asmr: bool
     history: Sequence[Message]
+    weather: str | None = None
 
 
 def moment_state(moment: AmbienceMoment) -> dict[str, object]:
@@ -104,7 +107,7 @@ def moment_state(moment: AmbienceMoment) -> dict[str, object]:
             recent.append(f"制作人：{message.text}")
         else:
             recent.append(f"{moment.character.name}：{message.without_cues().zh or ''}")
-    return {
+    state: dict[str, object] = {
         "角色": moment.character.name,
         "现在": f"{local.month}月{local.day}日 星期{_WEEKDAYS[local.weekday()]}"
         f" {_part_of_day(local.hour)} {local:%H:%M}",
@@ -112,6 +115,9 @@ def moment_state(moment: AmbienceMoment) -> dict[str, object]:
         "通话": "ASMR 模式，她贴在耳边小声说话" if moment.asmr else "普通的通话",
         "上文": recent or "（还没有聊什么）",
     }
+    if moment.weather:
+        state["天气"] = moment.weather
+    return state
 
 
 class AmbienceJudge(Protocol):

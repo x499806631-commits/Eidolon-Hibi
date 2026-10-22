@@ -176,8 +176,12 @@ describe("sendTurn", () => {
     const [path, init] = fetch.mock.calls[0];
     expect(path).toBe("/api/conversations/c1/turns");
     expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body as string)).toEqual({ text: "おはよう", own_keys: { llm } });
-    expect(JSON.parse(fetch.mock.calls[1][1].body as string)).toEqual({ text: "おはよう" });
+    expect(JSON.parse(init.body as string)).toEqual({
+      text: "おはよう", own_keys: { llm }, web: false,
+    });
+    expect(JSON.parse(fetch.mock.calls[1][1].body as string)).toEqual({
+      text: "おはよう", web: false,
+    });
   });
 
   it("yields each event once its frame is complete, however the stream is split", async () => {

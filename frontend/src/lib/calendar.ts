@@ -10,17 +10,27 @@ export type MonthDay = { month: number; day: number };
 /** 一个节日：名字、一句背景和小图标（emoji；都可能是空的），第一天；持续几天的（樱花季）还有最后一天，不跨年。 */
 export type CalendarHoliday = { name: string; note: string; icon: string; start: MonthDay; end: MonthDay | null };
 
-/** 日历接口给的一年：每位偶像的生日，和这一年有的节日。 */
+/** 一份纪念日：和某位偶像认识满一百天或满整年的日子，连同那是什么（「认识第 100 天」）。 */
+export type CalendarAnniversary = { character_id: string; month: number; day: number; label: string };
+
+/** 一个约定（GLOSSARY.md「约定」）：答应在某天为她做的一件事，还没做到。 */
+export type CalendarPromise = { id: number; character_id: string; month: number; day: number; text: string };
+
+/** 日历接口给的一年：每位偶像的生日、这一年有的节日、这个用户自己的纪念日，和他还没做到的约定。 */
 export type CalendarYear = {
   birthdays: { character_id: string; month: number; day: number }[];
   holidays: CalendarHoliday[];
+  anniversaries: CalendarAnniversary[];
+  promises: CalendarPromise[];
 };
 
-/** 某一天的一件事：一位偶像的生日、制作人的生日，或一个节日。 */
+/** 某一天的一件事：一位偶像的生日、制作人的生日、一个节日、和某位偶像的纪念日，或一个约定。 */
 export type DayEvent =
   | { kind: "birthday"; characterId: string }
   | { kind: "producer" }
-  | { kind: "holiday"; holiday: CalendarHoliday };
+  | { kind: "holiday"; holiday: CalendarHoliday }
+  | { kind: "anniversary"; characterId: string; label: string }
+  | { kind: "promise"; characterId: string; promiseId: number; text: string };
 
 /** 这个月里有事的一天，和那天的事（偶像的生日、制作人的生日、节日，依次）。 */
 export type MarkedDay = { day: number; events: DayEvent[] };
@@ -28,6 +38,11 @@ export type MarkedDay = { day: number; events: DayEvent[] };
 /** 读某一年的偶像生日和节日。 */
 export async function getCalendar(year: number): Promise<CalendarYear> {
   return json(await api(`/api/calendar?${new URLSearchParams({ year: String(year) })}`));
+}
+
+/** 说这个约定已经做到了：它也就像送到了礼物一样消失。 */
+export async function fulfilPromise(id: number): Promise<void> {
+  await json(await api(`/api/promises/${id}/fulfil`, { method: "POST" }));
 }
 
 /** 某个时区现在是几年几月几日。 */
@@ -88,6 +103,14 @@ export function monthEvents(
   for (const b of calendar.birthdays) {
     const on = birthdayIn(year, b);
     if (on.month === month) add(on.day, { kind: "birthday", characterId: b.character_id });
+  }
+  // 纪念日挨着她的生日一起排：都是和某位偶像有关的事，偶像的在前、制作人的生日和节日在后。
+  for (const a of calendar.anniversaries) {
+    if (a.month === month) add(a.day, { kind: "anniversary", characterId: a.character_id, label: a.label });
+  }
+  // 约定（答应在某天为她做的事）也排在这天，和偶像的事一起。
+  for (const p of calendar.promises) {
+    if (p.month === month) add(p.day, { kind: "promise", characterId: p.character_id, promiseId: p.id, text: p.text });
   }
   if (producerBirthday) {
     const on = birthdayIn(year, producerBirthday);

@@ -27,7 +27,9 @@ CALENDAR_FILE = "calendar.toml"
 _DAY = re.compile(r"(\d{2})-(\d{2})")
 
 _OWN_BIRTHDAY = "今天是你自己的生日。"
-_MENTION = "这些是今天的日子：聊到合适的时候可以自然地提起，先回应制作人说的话，不要每句都提。"
+MENTION = "这些是今天的日子：聊到合适的时候可以自然地提起，先回应制作人说的话，不要每句都提。"
+"""How she is told of a day's birthdays and holidays: brought up when it fits, never in every
+reply. The anniversaries say it too (`anniversaries.lines`)."""
 
 
 class SpecialDaysError(RuntimeError):
@@ -115,7 +117,7 @@ class SpecialDays:
             lead = f"这段时间是{holiday.name}。" if holiday.end else f"今天是{holiday.name}。"
             lines.append(lead + holiday.note)
         if lines:
-            lines.append(_MENTION)
+            lines.append(MENTION)
         return lines
 
 

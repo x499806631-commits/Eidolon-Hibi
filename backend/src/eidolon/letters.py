@@ -381,6 +381,7 @@ class Letters:
             plan.occasion, said, plan.deliver_at,
         )
         await asyncio.to_thread(self._done, due)
+
         recording.finish("success")
 
 

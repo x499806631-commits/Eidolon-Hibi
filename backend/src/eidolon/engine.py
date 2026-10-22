@@ -106,6 +106,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from typing import Literal, ParamSpec, TypeVar
 
+from eidolon.activity import detached
 from eidolon.affinity import (
     EXPLAINED,
     FED_UP_TURNS,
@@ -121,6 +122,12 @@ from eidolon.affinity import (
     warns,
 )
 from eidolon.affinity_judge import AffinityJudge
+from eidolon import anniversaries
+from eidolon.promises import Promise, Promises
+from eidolon.experiences import Experiences
+from eidolon.promise_judge import PromiseJudge
+from eidolon.search_judge import SearchJudge
+from eidolon.randomness import Random, secure_random
 from eidolon.characters import Character
 from eidolon.clock import Clock
 from eidolon.config import FishAudioModel, ImageSettings
@@ -160,6 +167,8 @@ from eidolon.store import (
 )
 from eidolon.titles import Titles
 from eidolon.special_days import SpecialDays
+from eidolon.weather import Weather
+from eidolon.web_search import SEARCH_TOOL, Found, Search, result_text, rules as web_rules
 from eidolon.world import World
 
 MAX_INPUT_LENGTH = 2000
@@ -630,6 +639,13 @@ class ConversationEngine:
         affinity_judge: AffinityJudge | None = None,
         photos: Photos | None = None,
         special_days: SpecialDays | None = None,
+        weather: Weather | None = None,
+        promises: "Promises | None" = None,
+        promise_judge: "PromiseJudge | None" = None,
+        web: Search | None = None,
+        search_judge: "SearchJudge | None" = None,
+        experiences: "Experiences | None" = None,
+        random: Random = secure_random,
     ) -> None:
         """Without `retrieval`, turns carry no story or character facts and find no
         memories. Each turn reads only the conversation's latest turns, as many as
@@ -639,7 +655,8 @@ class ConversationEngine:
         retrieval's judge judges what turns do to it, or without retrieval
         `affinity_judge`, which judges whether turns ask for a photo too. Without `photos`,
         or without the judge model, no turn has a photo. Without `special_days`, no turn
-        knows of birthdays or holidays but the producer's birthday."""
+        knows of birthdays or holidays but the producer's birthday. Without `weather`, no
+        turn is told the weather where the producer is."""
         self._store = store
         self._characters = characters
         self._gift_catalog = gift_catalog
@@ -653,6 +670,13 @@ class ConversationEngine:
         self._affinity_judge = affinity_judge
         self._photos = photos
         self._special_days = special_days
+        self._weather = weather
+        self._promises = promises
+        self._promise_judge = promise_judge
+        self._web = web
+        self._search_judge = search_judge
+        self._experiences = experiences
+        self._random = random
         self._ended_listeners: list[Callable[[str, EndsFor], None]] = []
 
     def _special_lines(self, character: Character, today: date) -> list[str]:
@@ -663,20 +687,106 @@ class ConversationEngine:
         names = {c.id: c.name for c in self._characters.values()}
         return self._special_days.prompt_lines(character.id, names, today)
 
-    def _day_lines(
+    async def _day_lines(
         self, character: Character, user_id: str, now: datetime, timezone: str
     ) -> list[str]:
-        """What she is told of the day besides the producer's birthday (`_special_lines`), and
-        of her letters to the user these last `LETTER_DAYS` days."""
+        """What she is told of the day besides the producer's birthday (`_special_lines`), of
+        her letters to the user these last `LETTER_DAYS` days, of how long they have known
+        each other (`anniversaries`), and the weather where the producer is (`weather`), if it
+        can be told."""
         since = now - timedelta(days=LETTER_DAYS)
         letters = [
             letter for letter in self._store.letters(user_id, character.id, now)
             if datetime.fromisoformat(letter.created_at) >= since
         ]
-        return [
-            *self._special_lines(character, local_date(now, timezone)),
+        weather = await self._weather.now() if self._weather is not None else None
+        today = local_date(now, timezone)
+        lines = [
+            *self._special_lines(character, today),
             *letter_lines(letters, timezone),
+            *self._anniversary_lines(character, user_id, today, timezone),
+            *self._promise_lines(character, user_id, now, timezone),
+            *([weather] if weather else []),
         ]
+        # 特殊日子和纪念日都说一遍「合适的时候自然地提起」，同一句只留一次。
+        return list(dict.fromkeys(lines))
+
+    def _judge_promise(
+        self, conversation: Conversation, history: Sequence[Message], text: str
+    ) -> None:
+        """Have the judge model say whether what the producer just said kept the promise she
+        asked about, and take it away if it did (`promise_judge`): after the turn, so the reply
+        never waits for it. Nothing where she asked about none lately, or where there is no
+        judge model to ask."""
+        promises, judge = self._promises, self._promise_judge
+        if promises is None or judge is None:
+            return
+        awaited = promises.awaiting(
+            conversation.user_id, conversation.character_id, self._clock()
+        )
+        if awaited is None:
+            return
+        asyncio.create_task(
+            self._kept(conversation, self._characters[conversation.character_id], history, text, awaited),
+            context=detached(),  # after the turn, not part of it (see `activity`)
+        )
+
+    async def _kept(
+        self,
+        conversation: Conversation,
+        character: Character,
+        history: Sequence[Message],
+        text: str,
+        awaited: Promise,
+    ) -> None:
+        """Take `awaited` away where the judge model says the turn kept it; leave it where it
+        cannot say, so that she complains of it as she would have anyway."""
+        promises, judge = self._promises, self._promise_judge
+        if promises is None or judge is None:
+            return
+        try:
+            if await judge.kept(character, history, text, awaited.text):
+                promises.fulfil(conversation.user_id, awaited.id)
+        except Exception:  # the turn is over: never let this reach it
+            log.warning(
+                "the promise judge could not be asked, so promise %s stands", awaited.id,
+                exc_info=True,
+            )
+
+    def _anniversary_lines(
+        self, character: Character, user_id: str, today: date, timezone: str
+    ) -> list[str]:
+        """What `today` is of how long the producer and `character` have known each other, as
+        she is told it (`anniversaries`)."""
+        first = self._store.first_records(user_id).get(character.id)
+        if first is None:
+            return []
+        return anniversaries.lines(anniversaries.day_of(first, timezone), today)
+
+    def _promise_lines(
+        self, character: Character, user_id: str, now: datetime, timezone: str
+    ) -> list[str]:
+        """What she is told of the promises to her (`promises`): the one today is for, which
+        she asks about once its minute has come, and the ones she complains of for a day gone
+        by without it being kept — both in her own words, once a day."""
+        if self._promises is None:
+            return []
+        self._promises.sweep(now)
+        if self._experiences is not None:
+            # 她自己的经历：三十天没被想起的，这时候忘掉（和约定义务一样顺手做）
+            self._experiences.sweep(now)
+        lines = []
+        if (today := self._promises.asking(user_id, character.id, now, timezone)) is not None:
+            lines.append(
+                f"制作人答应过「{today.text}」，就是今天。可以按你的性格问问这件事，"
+                "先回应他现在说的话，不要每句都提。"
+            )
+        if (late := self._promises.complaining(user_id, character.id, now, timezone)) is not None:
+            lines.append(
+                f"制作人答应过「{late.text}」，那天已经过去了，他没有做到。按你的性格为这件事"
+                "说一句不满或失望，这一次说完就过，不要一直提。"
+            )
+        return lines
 
     def on_ended(self, listener: Callable[[str, EndsFor], None]) -> None:
         """Have `listener` told the conversation's id, and why, as she ends one, once it is
@@ -693,6 +803,7 @@ class ConversationEngine:
         in_call: InCall | None = None,
         voiced_by: FishAudioModel | None = None,
         own_image: ImageSettings | None = None,
+        web: bool = False,
     ) -> AsyncGenerator[TurnEvent, None]:
         """Take one turn on `llms`, `in_call` if it is taken in one, its reply voiced with
         `voiced_by` (None for a text turn's), which has her write delivery cues as it reads
@@ -712,7 +823,8 @@ class ConversationEngine:
         try:
             with taking:
                 async for event in self._reply(
-                    conversation, text, llms, device_timezone, stop, in_call, voiced_by, photo
+                    conversation, text, llms, device_timezone, stop, in_call, voiced_by, photo,
+                    web,
                 ):
                     yield event
         except OwnKeyFailed as e:  # theirs to fix, so they are told what went wrong
@@ -736,6 +848,7 @@ class ConversationEngine:
         in_call: InCall | None,
         voiced_by: FishAudioModel | None,
         photo: _Photo,
+        web: bool = False,
     ) -> AsyncIterator[TurnEvent]:
         if self._store.ended(conversation.id) is not None:
             yield TurnRejected(ENDED)
@@ -814,6 +927,22 @@ class ConversationEngine:
             if eligibility is not None else None
         )
         about_photo = CANNOT_SEND if eligibility is None else photo_asked and photo_asked.prompt
+        # 联网这一段逐回合不同（骰子），所以放在 closing 里，和检索到的东西一起，不动前面能缓存的前缀
+        searching = web and self._web is not None
+        closing = [
+            p for p in (
+                retrieved.memories_prompt, retrieved.experiences_prompt, retrieved.prompt
+            ) if p
+        ]
+        if searching:
+            # 判断模型只管「他是不是在让她去查」这一件小事；她感不感兴趣由她自己看人设判断
+            asked = False
+            if self._search_judge is not None:
+                try:
+                    asked = await self._search_judge.asked(character, history, text)
+                except Exception:  # 判断不出来就当没要求，交给她自己
+                    log.warning("the search question could not be asked", exc_info=True)
+            closing.append(web_rules(self._random(2) == 0, asked))
         prompt = self._prompt(
             character, world_prompt, producer_prompt(profile),
             chat_history(messages, turns), narrations(record, self._gift_catalog, timezone),
@@ -821,19 +950,24 @@ class ConversationEngine:
                 now_prompt(
                     profile, now, timezone, "in_call" if in_call is not None else "typing",
                     affinity_lines, last_contact,
-                    self._day_lines(character, conversation.user_id, now, timezone),
+                    await self._day_lines(character, conversation.user_id, now, timezone),
                 ),
                 *([EXPLAINED] if _appealed(messages) else []),
                 *([about_photo] if about_photo else []),
                 *([asmr_rules(voiced_by)] if in_call is not None and in_call.asmr else []),
             ],
-            [p for p in (retrieved.memories_prompt, retrieved.prompt) if p],
+            closing,
             text, voiced_by,
         )
 
         # Offered on every turn, so that what goes before the history (the tools, with
         # many services) opens every turn's prompt alike, for the service to cache it.
         tools: list[Tool] = [RECALL_STORY_TOOL] if self._retrieval else []
+        if searching:
+            tools.append(SEARCH_TOOL)
+        # 这一回合查到的网页：回完话交给后台抽取，她"经历过"的事才带得上来源
+        found: list[Found] = []
+        searched = False
         parser = ReplyParser()
         try:
             for step in range(MAX_TOOL_ROUNDS + 1):
@@ -877,7 +1011,13 @@ class ConversationEngine:
                 ]
                 last_round = step + 1 == MAX_TOOL_ROUNDS
                 for call in calls:
-                    result = await _unless_stopped(stop, self._call_tool, character, call)
+                    # 一回合最多查一次网：并行发来的第二个 search_web 直接回绝
+                    searching_call = call.name == SEARCH_TOOL.name and searching and not searched
+                    result = await _unless_stopped(
+                        stop, self._call_tool, character, call, found, searching_call
+                    )
+                    if searching_call:
+                        searched = True
                     if last_round:
                         result = f"{result}\n\n{LAST_ROUND_NOTE}"
                     prompt.append(ChatMessage("tool", result, tool_call_id=call.id))
@@ -902,7 +1042,8 @@ class ConversationEngine:
         if photo.id is not None and self._photos is not None:
             photo.recorded = True
             self._photos.recorded(photo.id)
-        memory.write_down(history, text, reply, retrieved.query_vector)
+        memory.write_down(history, text, reply, retrieved.query_vector, found)
+        self._judge_promise(conversation, history, text)
         turn = sum(m.role == "user" for m in messages) + 1
         self._titles.after_turn(conversation, turn, llms.background, llms.hold_background)
         ended = self._store.ended(conversation.id) if ends_conversation else None
@@ -963,7 +1104,7 @@ class ConversationEngine:
                         female_producer=profile.gender == "female",
                     ) if affinity is not None else [],
                     self._store.last_contact(conversation.user_id, conversation.character_id),
-                    self._day_lines(character, conversation.user_id, now, timezone),
+                    await self._day_lines(character, conversation.user_id, now, timezone),
                 ),
             ],
             [*([memories] if memories else []), REACH_OUT_RULES],
@@ -1026,7 +1167,7 @@ class ConversationEngine:
                         female_producer=profile.gender == "female",
                     ) if affinity is not None else [],
                     self._store.last_contact(conversation.user_id, conversation.character_id),
-                    self._day_lines(character, conversation.user_id, now, timezone),
+                    await self._day_lines(character, conversation.user_id, now, timezone),
                 ),
             ],
             [
@@ -1118,8 +1259,25 @@ class ConversationEngine:
             conversation.user_id, conversation.character_id, judged, add_turn
         )
 
-    async def _call_tool(self, character: Character, call: ToolCall) -> str:
-        """The tool's result, or what went wrong, for the model to read."""
+    async def _call_tool(
+        self,
+        character: Character,
+        call: ToolCall,
+        found: list[Found] | None = None,
+        allowed: bool = True,
+    ) -> str:
+        """The tool's result, or what went wrong, for the model to read. A search's results
+        are also added to `found`, for the turn to write down what she said she did."""
+        if call.name == SEARCH_TOOL.name and self._web is not None:
+            if not allowed:
+                return "这一回合已经查过一次了。就按查到的说，不要再查。"
+            query = (call.arguments or {}).get("query")
+            if not isinstance(query, str) or not query.strip():
+                return "调用参数有误：需要 query（要查的事，一句话）。"
+            results = await self._web.find(query.strip())
+            if found is not None:
+                found.extend(results)
+            return result_text(query.strip(), results)
         if call.name != RECALL_STORY_TOOL.name or self._retrieval is None:
             return f"没有 {call.name} 这个工具。"
         query = (call.arguments or {}).get("query")

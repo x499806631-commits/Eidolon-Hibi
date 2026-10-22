@@ -70,6 +70,8 @@ from eidolon.affinity_judge import LEVEL as AFFINITY_LEVEL
 from eidolon.affinity_judge import MANIPULATION, OUT_OF_LINE
 from eidolon.judge import SAID, JudgeError
 from eidolon.photo_judge import PHOTO
+from eidolon.promise_judge import KEPT
+from eidolon.search_judge import ASKED
 
 if TYPE_CHECKING:
     from eidolon.judge import JudgeModel
@@ -425,6 +427,10 @@ class FakeJudgeModel:
         self.affinity_asked: list[str] = []
         self.photo = 0.0
         self.photo_asked: list[str] = []
+        self.kept = 0.0
+        self.kept_asked: list[str] = []
+        self.asks_search = 0.0
+        self.search_asked: list[str] = []
         self.states: list[dict[str, Any]] = []
 
     async def answer(
@@ -434,6 +440,8 @@ class FakeJudgeModel:
             "turn" if "recall" in questions
             else "affinity" if AFFINITY_LEVEL in questions
             else "photo" if PHOTO in questions
+            else "kept" if KEPT in questions
+            else "search" if ASKED in questions
             else "emotion" if "emotion" in questions
             else "check"
         )
@@ -449,6 +457,12 @@ class FakeJudgeModel:
         if PHOTO in questions:
             self.photo_asked.append(state[SAID])
             scripted |= {PHOTO: {"noul": self.photo}}
+        if KEPT in questions:
+            self.kept_asked.append(state[SAID])
+            scripted |= {KEPT: {"noul": self.kept}}
+        if ASKED in questions:
+            self.search_asked.append(state[SAID])
+            scripted |= {ASKED: {"noul": self.asks_search}}
         if kind == "turn" and self.needs is not None:
             return await self.needs.need(state) | scripted
         if kind == "emotion" and self.feels is not None:

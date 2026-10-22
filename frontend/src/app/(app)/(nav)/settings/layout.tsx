@@ -15,6 +15,7 @@ import {
   AboutIcon,
   AppearanceIcon,
   DataPackageIcon,
+  ExperiencesIcon,
   MemoriesIcon,
   OwnKeysIcon,
   PhoneIcon,
@@ -29,6 +30,7 @@ const t = copy.settings;
 const ICONS = {
   profile: ProfileIcon,
   memories: MemoriesIcon,
+  experiences: ExperiencesIcon,
   stats: StatsIcon,
   call: PhoneIcon,
   "reach-outs": ReachOutsIcon,

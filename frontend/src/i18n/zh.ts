@@ -142,6 +142,7 @@ export const zh = {
       embedding: "检索",
       rerank: "重排",
       image: "照片",
+      web_search: "联网",
     },
     serviceStatuses: { ok: "正常", unsteady: "不稳定", down: "故障", idle: "最近没有调用" },
     serviceStatusWindow: (minutes: number) => `最近 ${minutes} 分钟`,
@@ -154,6 +155,26 @@ export const zh = {
     callTooltip: "语音通话",
     /** 更多菜单里的 ASMR 模式通话：她在耳边轻声慢慢地说话，聊什么都可以。 */
     asmrCall: "ASMR 模式",
+    /** 番茄钟「一起专心」：更多菜单里打开，先选专心多久，页首下方出现一条计时条。
+     * 休息固定 5 分钟；到点那一句、还剩多久都按角色名或时间插值。第一版只在前端提示。 */
+    focus: {
+      start: "一起专心",
+      title: "一起专心多久？",
+      restHint: "时间到了她会提醒你休息 5 分钟，休息完接着来。",
+      minutesLabel: "专心（分钟）",
+      preset: (minutes: string) => `${minutes} 分钟`,
+      hint: "填 1 到 120 分钟，或者点上面的几档。休息固定 5 分钟。",
+      go: "开始专心",
+      cancel: "算了",
+      pause: "暂停计时",
+      resume: "继续计时",
+      end: "结束计时",
+      left: (left: string) => `一起专心 · 还剩 ${left}`,
+      resting: (name: string) => `${name}说：休息一下吧～`,
+    },
+    /** 更多菜单里的「联网」（GLOSSARY.md「联网」）：拨开之后她聊到现实里的东西可以自己上网查，
+     * 按角色记在这台设备上，默认关。 */
+    web: "联网",
     placeholder: "用中文或日语说点什么",
     send: "发送",
     /** 消息区里跨天处的日期条；昨天、更早的写法和列表一样（conversationList）。 */
@@ -559,6 +580,7 @@ export const zh = {
     categories: {
       profile: "档案",
       memories: "记忆",
+      experiences: "她们的经历",
       stats: "统计",
       call: "通话",
       "reach-outs": "搭话",
@@ -1017,6 +1039,7 @@ export const zh = {
           embedding: "向量化",
           rerank: "重排",
           image: "生图",
+          web_search: "联网搜索",
         },
         errorKinds: {
           timeout: "超时",
@@ -1421,6 +1444,7 @@ export const zh = {
           tts: "语音合成走代理",
           stt: "语音识别走代理",
           image: "生图走代理",
+          web_search: "联网搜索走代理",
           own_llm: "自带的 LLM 走代理",
           own_tts: "自带的语音合成走代理",
           own_stt: "自带的语音识别走代理",
@@ -1436,6 +1460,7 @@ export const zh = {
           embedding: "显示「检索」（向量化）",
           rerank: "显示「重排」",
           image: "显示「照片」（生图）",
+          web_search: "显示「联网」（联网搜索）",
         },
       } as Partial<Record<string, Record<string, string>>>,
       formHints: {
@@ -1750,6 +1775,11 @@ export const zh = {
     date: (month: number, day: number, weekday: string) => `${month}月${day}日 周${weekday}`,
     birthdayOf: (name: string) => `${name}的生日`,
     producerBirthday: "你的生日",
+    /** 和某位偶像的纪念日（认识满一百天、满整年）：清单那行的标题；「认识第 100 天」写在下面一行。 */
+    anniversaryOf: (name: string) => `和${name}的纪念日`,
+    /** 约定（GLOSSARY.md「约定」）：答应在那天为她做的事，和「已经做到了」那个键。 */
+    promiseNote: "答应她的事",
+    promiseDone: "已经做到了",
     lasting: (from: string, to: string) => `${from} 至 ${to}`,
     goChat: "去找她",
     empty: "这个月没有特别的日子",
@@ -1888,6 +1918,30 @@ export const zh = {
     clearTitle: "清空全部记忆？",
     clearDescription: (count: number) => `确定清空全部 ${count} 条记忆吗？所有角色都会忘记这些事，无法恢复。`,
     clearConfirm: "确定清空",
+  },
+  /** 她自己的经历（GLOSSARY.md「她们的经历」）：设置里的二级页，按角色存。 */
+  experiences: {
+    intro: "她们自己在聊天里说做过的事。每个人只记得自己的，三十天没有被提起就会忘掉；点一下文字，就再记三十天。",
+    empty: "她还没有说起过自己做过什么。",
+    goneCharacter: "已不在的角色",
+    pickCharacter: "看谁的",
+    backToCharacters: "回到头像",
+    dueNotice: (count: number) => `${count} 条快到期限`,
+    dueNoticeAction: "看看",
+    hideNotice: "不再提示",
+    dueTitle: "快到期限的",
+    dueEmpty: "没有快到期限的。",
+    daysLeft: (days: number) => `还有 ${days} 天忘掉`,
+    dueLeftHint: (days: number) => `还有 ${days} 天忘掉 · 点一下，就再记 30 天`,
+    keep30: "留着",
+    pinned: "永久保留",
+    keep: "永久保留",
+    unkeep: "恢复计时",
+    source: "看的地方",
+    remove: "删掉",
+    removeLabel: (text: string) => `删掉这条经历：${text}`,
+    removeTitle: "删掉这条经历？",
+    removeDescription: (text: string) => `「${text}」会从她的记忆里消失，无法恢复。`,
   },
   privacy: {
     title: "隐私政策",

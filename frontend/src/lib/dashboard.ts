@@ -51,7 +51,8 @@ export type ServiceName =
   | "judge"
   | "embedding"
   | "rerank"
-  | "image";
+  | "image"
+  | "web_search";
 
 export type ErrorKind =
   | "timeout"

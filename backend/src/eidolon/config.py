@@ -49,6 +49,7 @@ generation, whose photos count by whose they are on alone."""
 
 ProxiedService = Literal[
     "chat_llm", "memory_llm", "judge", "embedding", "rerank", "tts", "stt", "image",
+    "web_search",
     "own_llm", "own_tts", "own_stt", "own_image",
 ]
 """What may reach its provider through the proxy (GLOSSARY.md「网络代理」): the deployer's
@@ -67,7 +68,8 @@ OWN_KEYS_PROXIED: dict[Service, ProxiedService] = {
 PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
 
 ServiceName = Literal[
-    "chat_llm", "memory_llm", "tts", "stt", "judge", "embedding", "rerank", "image"
+    "chat_llm", "memory_llm", "tts", "stt", "judge", "embedding", "rerank", "image",
+    "web_search",
 ]
 """The outside services: the LLM playing the characters and the one writing down memories,
 speech synthesis and recognition, the judge model, embedding, reranking and image
@@ -410,6 +412,9 @@ class Settings:
     usage_limits: "UsageLimits" = field(default_factory=lambda: UsageLimits())
     history_turns: int | None = DEFAULT_HISTORY_TURNS
     """How many of the conversation's latest turns each prompt carries; None is all of them."""
+    weather: "WeatherSettings | None" = None
+    """Where the producer is, for the weather said in every turn (GLOSSARY.md「天气」); None
+    unless `.env` gives both `EIDOLON_WEATHER_LAT` and `EIDOLON_WEATHER_LON`."""
     exempting_keys: frozenset[Service] = frozenset(EXEMPTING_SERVICES)
     """The services a call must bring the user's own keys for, all of them, to count
     towards no limit (GLOSSARY.md「免限额密钥」), at least one; all three unless `.env`
@@ -426,6 +431,11 @@ class Settings:
     proxy: ProxySettings = field(default_factory=ProxySettings)
     """Which of the deployer's services go through which proxy; none unless `.env` sets
     one, and the admin console may override it."""
+    search_key: str | None = None
+    """The key the web search is asked with (`EIDOLON_SEARCH_KEY`), or None for the chat
+    model's: search is a service of its own, so that changing the chat model does not end it."""
+    search_url: str = "https://api.deepseek.com/v1/tools/search"
+    """Where the web search is asked (`EIDOLON_SEARCH_URL`)."""
     service_status: ServiceStatusSettings = field(default_factory=ServiceStatusSettings)
     domain: str | None = None
     """The public deployment's domain (behind Caddy); None in development."""
@@ -513,12 +523,18 @@ class Settings:
             emotion=EmotionSettings.from_env(),
             usage_limits=UsageLimits.from_env(),
             history_turns=history_turns_from_env(),
+            weather=WeatherSettings.from_env(),
             exempting_keys=exempting_keys_from_env(),
             affinity_and_gifts=_switch("EIDOLON_AFFINITY_AND_GIFTS", default=True),
             reach_outs=_switch("EIDOLON_REACH_OUTS"),
             letters=_switch("EIDOLON_LETTERS"),
             proxy=proxy_from_env(),
             service_status=service_status_from_env(),
+            search_key=os.environ.get("EIDOLON_SEARCH_KEY", "").strip() or None,
+            search_url=(
+                os.environ.get("EIDOLON_SEARCH_URL", "").strip()
+                or "https://api.deepseek.com/v1/tools/search"
+            ),
             domain=os.environ.get("EIDOLON_DOMAIN", "").strip() or None,
             dev_login=os.environ.get("EIDOLON_DEV_LOGIN", "").strip() == "1",
             github=OAuthSettings.from_env("GITHUB"),
@@ -819,6 +835,45 @@ def _relevance(name: str) -> float | None:
     if not 0 <= relevance <= 1:
         raise RuntimeError(f"环境变量 {name} 需要是 0 到 1 之间的数，而不是 {value}")
     return relevance
+
+
+@dataclass(frozen=True)
+class WeatherSettings:
+    """Where the producer is (GLOSSARY.md「天气」), in degrees, north and east positive: the
+    weather said in every turn is the one there."""
+
+    latitude: float
+    longitude: float
+
+    @classmethod
+    def from_env(cls) -> "WeatherSettings | None":
+        """None unless both `EIDOLON_WEATHER_LAT` and `EIDOLON_WEATHER_LON` are set: without
+        a place there is no weather, and the rest of the deployment stands as it was."""
+        latitude = _degrees("EIDOLON_WEATHER_LAT")
+        longitude = _degrees("EIDOLON_WEATHER_LON")
+        if latitude is None and longitude is None:
+            return None
+        if latitude is None or longitude is None:
+            raise RuntimeError(
+                "EIDOLON_WEATHER_LAT 和 EIDOLON_WEATHER_LON 要一起填：只填一个就没有天气"
+            )
+        if not -90 <= latitude <= 90:
+            raise RuntimeError(f"EIDOLON_WEATHER_LAT 需要是 -90 到 90 之间的纬度，而不是 {latitude}")
+        if not -180 <= longitude <= 180:
+            raise RuntimeError(
+                f"EIDOLON_WEATHER_LON 需要是 -180 到 180 之间的经度，而不是 {longitude}"
+            )
+        return cls(latitude, longitude)
+
+
+def _degrees(name: str) -> float | None:
+    value = (os.environ.get(name) or "").strip()
+    if not value:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        raise RuntimeError(f"环境变量 {name} 需要是一个数（度数），而不是 {value}") from None
 
 
 @dataclass(frozen=True)

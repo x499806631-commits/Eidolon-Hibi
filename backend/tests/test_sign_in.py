@@ -66,6 +66,7 @@ async def test_the_first_sign_in_with_github_makes_a_user_and_signs_them_in(
         "is_admin": False,
         "exempting_keys": ["llm", "tts", "stt"],
         "reach_outs": None,
+        "web_search": True,  # 测试的部署有聊天密钥，搜索就能用
         "sponsor_version": None,
     }
 

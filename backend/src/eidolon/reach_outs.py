@@ -407,6 +407,7 @@ class ReachOuts:
         except ReachOutRefused:  # they were in touch meanwhile
             recording.finish("rejected")
             return
+
         recording.finish("success")
         await asyncio.to_thread(self._store.reach_out_recorded_as, reach_out.id, recording.row_id)
 

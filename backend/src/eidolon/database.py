@@ -22,6 +22,8 @@ from pathlib import Path
 USER_DATA = [
     ("memory_vectors", "user_id = ?"),
     ("memories", "user_id = ?"),
+    ("experience_vectors", "user_id = ?"),
+    ("experiences", "user_id = ?"),
     ("photos", "conversation_id IN (SELECT id FROM conversations WHERE user_id = ?)"),
     ("messages", "conversation_id IN (SELECT id FROM conversations WHERE user_id = ?)"),
     ("conversation_events",
@@ -40,6 +42,7 @@ USER_DATA = [
     ("reach_outs_off", "user_id = ?"),
     ("letters", "user_id = ?"),
     ("letter_days", "user_id = ?"),
+    ("promises", "user_id = ?"),
     ("data_package_imports", "user_id = ?"),
     ("sessions", "user_id = ?"),
     ("sign_in_methods", "user_id = ?"),

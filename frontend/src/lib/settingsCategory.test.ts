@@ -34,7 +34,7 @@ describe("一级列表有哪几类", () => {
 
   it("账号里没有搭话（部署者没开）时没有这一类，别的照旧", () => {
     expect(settingsGroups(null)).toEqual([
-      ["profile", "memories", "stats"],
+      ["profile", "memories", "experiences", "stats"],
       ["call", "appearance", "own-keys"],
       ["sign-in", "data-package"],
       ["about"],

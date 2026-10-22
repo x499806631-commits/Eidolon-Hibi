@@ -46,6 +46,7 @@ from eidolon.characters import Character
 from eidolon.clock import Clock
 from eidolon.database import connect
 from eidolon.gift_catalog import Gift
+from eidolon.promises import Promises
 from eidolon.randomness import Random
 from eidolon.store import Conversation, Store
 
@@ -239,10 +240,12 @@ class Gifts:
         catalog: dict[str, Gift],
         random: Random,
         store: Store,
+        promises: Promises | None = None,
     ) -> None:
         """`is_open` tells whether gifts are open now (the live configuration's affinity
-        switch); draws take their numbers from `random`; gift records are kept in `store`.
-        Notices whether they have opened since last noticed."""
+        switch); draws take their numbers from `random`; gift records are kept in `store`, and
+        a gift named in a promise to her fulfils it (`promises`). Notices whether they have
+        opened since last noticed."""
         self._db = connect(path)
         self._store = store
         self._lock = threading.Lock()
@@ -252,6 +255,7 @@ class Gifts:
         self._characters = characters
         self._catalog = catalog
         self._random = random
+        self._promises = promises
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
         self.notice()
@@ -382,6 +386,9 @@ class Gifts:
                     (user_id, gift_id),
                 )
             raise
+        if self._promises is not None:
+            # 约定里写着这件礼物（例如「给她一块布丁」），送了就算是兑现了
+            self._promises.by_gift(user_id, character_id, gift.name)
         return Given(conversation.id, change, affinity, taken[0])
 
     def use_reset_card(self, user_id: str) -> Reset:

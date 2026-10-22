@@ -176,6 +176,7 @@ class ProxyInput(BaseModel):
     tts: StrictBool
     stt: StrictBool
     image: StrictBool
+    web_search: StrictBool
     own_llm: StrictBool
     own_tts: StrictBool
     own_stt: StrictBool
@@ -195,6 +196,7 @@ class ServiceStatusInput(BaseModel):
     embedding: StrictBool
     rerank: StrictBool
     image: StrictBool
+    web_search: StrictBool
 
 
 INPUTS: dict[str, type[BaseModel]] = {

@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
+from eidolon import data_package
 from eidolon.config import Settings
 from tests.conftest import ClientFactory
 from tests.fakes import FakeLLM, FakeRandom
@@ -51,7 +52,7 @@ async def test_her_reach_outs_move_to_another_deployment_as_they_were_and_seen(
 
     package = await export(here, "conversations")
     _, manifest, data = unzipped(package)
-    assert manifest["format"] == 2
+    assert manifest["format"] == data_package.FORMAT
     [packaged] = data["conversations"][0]["reach_outs"]
     assert packaged == PACKAGED_REACH_OUT | {"created_at": packaged["created_at"]}
     res = await import_package(there, package, "conversations")

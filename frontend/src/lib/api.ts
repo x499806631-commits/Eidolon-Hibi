@@ -444,6 +444,8 @@ export type Account = {
   is_admin: boolean;
   exempting_keys: OwnService[];
   reach_outs: boolean | null;
+  /** 部署有没有配联网搜索（GLOSSARY.md「联网」）：没配就没有「更多」菜单里那一项。 */
+  web_search: boolean;
   sponsor_version: string | null;
 };
 
@@ -662,6 +664,51 @@ export async function clearMemories(): Promise<void> {
   await expectNoContent(await api("/api/memories", { method: "DELETE" }));
 }
 
+/** 她自己的经历（GLOSSARY.md「她们的经历」）：她说过的、已经发生过的亲历，按角色存。 */
+export type Experience = {
+  id: number;
+  character_id: string;
+  text: string;
+  summary: string;
+  url: string | null;
+  created_at: string;
+  /** 永久保留：不计时，永远不忘。 */
+  pinned: boolean;
+  /** 还有几天忘掉；永久保留的是 null。 */
+  days_left: number | null;
+  /** 快到期限（剩 7 天以内）：界面上挂红点、写还有几天。 */
+  due_soon: boolean;
+  /** 只有跨角色的「即将到期」列表带。 */
+  character_name?: string;
+};
+
+export async function listExperiences(character: string): Promise<Experience[]> {
+  return json(await api(`/api/experiences?character=${encodeURIComponent(character)}`));
+}
+
+export async function listDueSoonExperiences(): Promise<Experience[]> {
+  return json(await api("/api/experiences?due_soon=true"));
+}
+
+/** 再记 30 天。 */
+export async function keepExperience(id: number): Promise<void> {
+  await json(await api(`/api/experiences/${id}/keep`, { method: "POST" }));
+}
+
+export async function pinExperience(id: number, pinned: boolean): Promise<void> {
+  await json(
+    await api(`/api/experiences/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pinned }),
+    }),
+  );
+}
+
+export async function deleteExperience(id: number): Promise<void> {
+  await expectNoContent(await api(`/api/experiences/${id}`, { method: "DELETE" }));
+}
+
 /** Checks a response that carries no body. */
 export async function expectNoContent(res: Response): Promise<void> {
   if (!res.ok) await json(res);
@@ -729,13 +776,19 @@ export async function getCallSetup(conversationId: string, own: readonly OwnServ
 
 /**
  * Sends one text turn, bringing the user's own LLM (as `own_keys`) if this browser keeps one for
- * them, and yields the reply's server-sent events as they arrive.
+ * them, and — where this browser turned it on for her — letting her look things up (`web`),
+ * and yields the reply's server-sent events as they arrive.
  */
-export async function* sendTurn(conversationId: string, text: string, userId: string): AsyncGenerator<TurnEvent> {
+export async function* sendTurn(
+  conversationId: string,
+  text: string,
+  userId: string,
+  web = false,
+): AsyncGenerator<TurnEvent> {
   const res = await api(`/api/conversations/${conversationId}/turns`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text, own_keys: turnOwnKeys(userId) }),
+    body: JSON.stringify({ text, own_keys: turnOwnKeys(userId), web }),
   });
   if (!res.ok || !res.body) {
     await json(res);

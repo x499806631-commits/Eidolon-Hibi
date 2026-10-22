@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from eidolon.accounts import Accounts
-from eidolon.activity import ActivityLog, metered_retrieval
+from eidolon.activity import ActivityLog, MeteredWebSearch, Origin, host, metered_retrieval
 from eidolon.admission import Admissions
 from eidolon.affinity import Affinities
 from eidolon.announcements import Announcements
@@ -76,6 +76,10 @@ from eidolon.titles import Titles
 from eidolon.usage import UsageLimiter
 from eidolon.special_days import SpecialDays, load_special_days, special_days_path
 from eidolon.hearts import hearts_path, load_hearts, with_hearts
+from eidolon.promises import Promises
+from eidolon.experiences import Experiences
+from eidolon.weather import Weather
+from eidolon.web_search import WebSearch
 from eidolon.world import World, load_world, world_path
 
 log = logging.getLogger(__name__)
@@ -137,6 +141,15 @@ class Backend:
     """The world setting; None without its data file."""
     special_days: SpecialDays | None = None
     """The idols' birthdays and the holidays; None without the calendar."""
+    weather: Weather | None = None
+    """The weather where the producer is; None unless `.env` gives their place."""
+    promises: Promises | None = None
+    """What the producer promised each idol for a day (GLOSSARY.md「约定」)."""
+    web: "MeteredWebSearch | None" = None
+    """The web search the characters may use (GLOSSARY.md「联网」); None without a key."""
+    experiences: Experiences | None = None
+    """Her own doings, by character (GLOSSARY.md「她们的经历」); read and managed on its page.
+    A turn writes down and finds none yet: that comes with the page."""
     _closers: list[Closer] = field(default_factory=list, repr=False)
     _keeping_fresh: asyncio.Task[None] | None = field(default=None, repr=False)
     _probing: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -178,6 +191,8 @@ def build(
     catalog_transport: httpx.BaseTransport | None = None,
     backup_transport: httpx.AsyncBaseTransport | None = None,
     image_transport: httpx.AsyncBaseTransport | None = None,
+    weather_transport: httpx.AsyncBaseTransport | None = None,
+    web_transport: httpx.AsyncBaseTransport | None = None,
     random: Random | None = None,
     reach: Reach | None = None,
 ) -> Backend:
@@ -295,6 +310,31 @@ def build(
     # each question, and each call judges her emotions on the one it connected with.
     retrieval_judge = config.retrieval_judge()
 
+    promises = Promises(settings.database_path, clock, random or secure_random)
+    closers.append(promises.close)
+
+    # 她自己的经历：按角色存，和关于制作人的记忆分开
+    experiences = Experiences(settings.database_path, clock)
+    closers.append(experiences.close)
+
+    # 联网搜索用能配的那把钥匙（默认沿用聊天模型的）：换聊天模型不该把搜索一起换掉
+    search_key = settings.search_key or settings.chat_llm.api_key
+    web = (
+        MeteredWebSearch(
+            WebSearch(
+                search_key,
+                web_transport or routes.transport("web_search"),
+                clock,
+                settings.search_url,
+            ),
+            activity,
+            Origin("web_search", host(settings.search_url), "search"),
+        )
+        if search_key else None
+    )
+    if web is not None:
+        closers.append(web.aclose)
+
     retrieval = None
     if retrieval_judge is not None and embedder is not None and reranker is not None:
         retrieval = Retrieval(
@@ -308,7 +348,8 @@ def build(
         closers.append(retrieval.close)
         memories = Memories(
             settings.database_path, characters, clock, embedder=embedder, reranker=reranker,
-            min_relevance=lambda: config.rerank_thresholds.memories,
+            min_relevance=lambda: config.rerank_thresholds.memories, promises=promises,
+            experiences=experiences,
         )
     else:
         log.info(
@@ -317,7 +358,10 @@ def build(
             " SILICONFLOW_API_KEY for reranking, and the judge model's (JEV_API_KEY, or"
             " CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID with JUDGE_PROVIDER=cloudflare)"
         )
-        memories = Memories(settings.database_path, characters, clock)
+        memories = Memories(
+            settings.database_path, characters, clock, promises=promises,
+            experiences=experiences,
+        )
     closers.append(memories.aclose)  # closed before the clients, so what it writes down can finish
     titles = Titles(store, characters, gift_catalog)
     closers.append(titles.aclose)  # likewise, so what it is naming can finish
@@ -341,10 +385,17 @@ def build(
     closers.append(own_images.aclose)
     photos = Photos(store, config.image_generator, activity, usage, own_images.generator)
     closers.append(photos.aclose)  # closed before the store and usage, so no photo is still kept
+    weather = (
+        Weather(settings.weather.latitude, settings.weather.longitude, clock, weather_transport)
+        if settings.weather is not None else None
+    )
+    if weather is not None:
+        closers.append(weather.aclose)
     engine = ConversationEngine(
         store, characters, gift_catalog, memories, titles, clock, retrieval,
         lambda: config.history_turns, world, affinities, config.affinity_judge(), photos,
-        special_days,
+        special_days, weather, promises, config.promise_judge(), web, config.search_judge(),
+        experiences,
     )
     own_keys = OwnKeys(
         own_llm_service, config, activity, speech, exempting=lambda: config.exempting_keys,
@@ -354,14 +405,15 @@ def build(
         usage, activity, own_keys, cooldown_until=affinities.cooldown_until
     )
     calls = Calls(
-        settings, engine, admissions, own_keys, lambda: config.usage_limits, speech, clock, store
+        settings, engine, admissions, own_keys, lambda: config.usage_limits, speech, clock, store,
+        weather,
     )
     closers.append(calls.aclose)  # closed before memory, so no call is still taking turns
     affinities.on_cooldown(calls.cooled)
     engine.on_ended(calls.conversation_ended)
     gifts = Gifts(
         settings.database_path, clock, lambda: config.affinity_on, affinities, characters,
-        gift_catalog, random or secure_random, store,
+        gift_catalog, random or secure_random, store, promises,
     )
     closers.append(gifts.close)
     reach_outs = ReachOuts(
@@ -402,12 +454,17 @@ def build(
         photos=photos,
         service_status=service_status,
         data_packages=DataPackages(
-            settings.database_path, store, memories, characters, gift_catalog, clock
+            settings.database_path, store, memories, characters, gift_catalog, clock, promises,
+            experiences,
         ),
         reach_outs=reach_outs,
         letters=letters,
         appeals=Appeals(store, affinities, clock),
         world=world,
         special_days=special_days,
+        weather=weather,
+        promises=promises,
+        web=web,
+        experiences=experiences,
         _closers=closers,
     )

@@ -87,6 +87,9 @@ if TYPE_CHECKING:  # retrieval finds memories, which write down detached from tu
     from eidolon.affinity_judge import AffinityJudge
     from eidolon.ambience import AmbienceJudge, AmbienceKind, AmbienceMoment
     from eidolon.emotion import EmotionAnswer, EmotionJudge, SegmentToJudge
+    from eidolon.promise_judge import PromiseJudge
+    from eidolon.search_judge import SearchJudge
+    from eidolon.web_search import Found, Search
     from eidolon.retrieval import Need, RetrievalJudge
 from eidolon.store import Message
 
@@ -1263,6 +1266,55 @@ class MeteredJudge:
     ) -> "tuple[Need, Judged | None, bool]":
         return await timed(
             self._log, self._origin, self._judge.judge(character, history, text, affinity, photo)
+        )
+
+
+class MeteredWebSearch:
+    """The search, each request of it recorded as a service call."""
+
+    def __init__(self, search: "Search", log: ActivityLog, origin: Origin) -> None:
+        self._search = search
+        self._log = log
+        self._origin = origin
+
+    async def find(self, query: str) -> "list[Found]":
+        return await timed(self._log, self._origin, self._search.find(query))
+
+    async def aclose(self) -> None:
+        await self._search.aclose()
+
+
+class MeteredSearchJudge:
+    """The judge model as a turn asks it whether he asked her to look something up, recorded
+    as a service call."""
+
+    def __init__(self, judge: "SearchJudge", log: ActivityLog, origin: Origin) -> None:
+        self._judge = judge
+        self._log = log
+        self._origin = origin
+
+    async def asked(
+        self, character: Character, history: Sequence[Message], text: str
+    ) -> bool:
+        return await timed(
+            self._log, self._origin, self._judge.asked(character, history, text)
+        )
+
+
+class MeteredPromiseJudge:
+    """The judge model as a turn asks it whether a promise was kept, each question recorded as
+    a service call."""
+
+    def __init__(self, judge: "PromiseJudge", log: ActivityLog, origin: Origin) -> None:
+        self._judge = judge
+        self._log = log
+        self._origin = origin
+
+    async def kept(
+        self, character: Character, history: Sequence[Message], text: str, promised: str
+    ) -> bool:
+        return await timed(
+            self._log, self._origin, self._judge.kept(character, history, text, promised)
         )
 
 

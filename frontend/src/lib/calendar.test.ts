@@ -4,6 +4,8 @@ import { monthEvents, monthWeeks, shiftMonth, todayIn, type CalendarYear } from 
 
 const SAKURA = { name: "樱花季", note: "", icon: "🌸", start: { month: 3, day: 25 }, end: { month: 4, day: 10 } };
 const VALENTINE = { name: "情人节", note: "", icon: "", start: { month: 2, day: 14 }, end: null };
+const ANNIVERSARY = { character_id: "mano", month: 2, day: 24, label: "认识第 100 天" };
+const PROMISE = { id: 7, character_id: "chiyoko", month: 2, day: 24, text: "给她一块布丁" };
 
 const YEAR: CalendarYear = {
   birthdays: [
@@ -12,6 +14,8 @@ const YEAR: CalendarYear = {
     { character_id: "leap", month: 2, day: 29 },
   ],
   holidays: [VALENTINE, SAKURA],
+  anniversaries: [ANNIVERSARY],
+  promises: [PROMISE],
 };
 
 describe("月历的格子", () => {
@@ -35,7 +39,14 @@ describe("这个月有事的日子", () => {
   it("生日、制作人的生日、节日按日期排，同一天的偶像在前", () => {
     expect(monthEvents(2026, 2, YEAR, { month: 2, day: 14 })).toEqual([
       { day: 14, events: [{ kind: "producer" }, { kind: "holiday", holiday: VALENTINE }] },
-      { day: 24, events: [{ kind: "birthday", characterId: "chiyoko" }] },
+      {
+        day: 24,
+        events: [
+          { kind: "birthday", characterId: "chiyoko" },
+          { kind: "anniversary", characterId: "mano", label: "认识第 100 天" },
+          { kind: "promise", characterId: "chiyoko", promiseId: 7, text: "给她一块布丁" },
+        ],
+      },
       { day: 28, events: [{ kind: "birthday", characterId: "leap" }] },
     ]);
   });

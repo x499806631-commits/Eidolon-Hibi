@@ -564,10 +564,12 @@ async def test_a_proxy_out_of_reach_is_said_so_its_password_masked(provider: Fak
 
 def test_env_sets_the_proxy_and_the_services_through_it(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("EIDOLON_PROXY_URL", " socks5h://127.0.0.1:7891/ ")
-    monkeypatch.setenv("EIDOLON_PROXY_SERVICES", "chat_llm, tts, image, own_llm, own_image")
+    monkeypatch.setenv(
+        "EIDOLON_PROXY_SERVICES", "chat_llm, tts, image, web_search, own_llm, own_image"
+    )
     assert proxy_from_env() == ProxySettings(
         "socks5h://127.0.0.1:7891", True,
-        frozenset({"chat_llm", "tts", "image", "own_llm", "own_image"}),
+        frozenset({"chat_llm", "tts", "image", "web_search", "own_llm", "own_image"}),
     )
     monkeypatch.setenv("EIDOLON_PROXY_SERVICES", "all")
     assert proxy_from_env().services == frozenset(PROXIED_SERVICES)

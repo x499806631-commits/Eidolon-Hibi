@@ -83,7 +83,7 @@ async def test_the_calendar_page_reads_a_years_birthdays_and_holidays(
 ):
     without = make_client(FakeLLM())
     assert (await without.get("/api/calendar", params={"year": 2026})).json() == {
-        "birthdays": [], "holidays": [],
+        "birthdays": [], "holidays": [], "anniversaries": [], "promises": [],
     }
     characters.write(CALENDAR_FILE, CALENDAR)
     client = make_client(FakeLLM())

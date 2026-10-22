@@ -87,6 +87,7 @@ async def test_each_service_goes_by_the_share_of_its_calls_on_the_deployers_keys
             {"service": "memory_llm", "status": "unsteady"},
             {"service": "tts", "status": "down"},
             {"service": "stt", "status": "idle"},  # not tried yet
+            {"service": "web_search", "status": "idle"},  # 没试过，也没调用过
         ],
     }
     assert (await make_client(FakeLLM(), None).get(STATUS)).status_code == 401
@@ -121,7 +122,7 @@ async def test_a_service_without_calls_is_tried_twice_before_it_is_down_and_once
     await backend.service_status.probe_idle()
     again = await statuses(client)
 
-    working = {"judge": "ok", "embedding": "ok", "rerank": "down"}
+    working = {"judge": "ok", "embedding": "ok", "rerank": "down", "web_search": "idle"}
     assert first == {"chat_llm": "ok", "memory_llm": "ok", "tts": "down", "stt": "ok"} | working
     # The memory model had calls, and was not tried; once they were past, it was.
     assert again == {"chat_llm": "down", "memory_llm": "ok", "tts": "down", "stt": "ok"} | working
@@ -156,12 +157,14 @@ async def test_admins_choose_which_services_users_are_shown_and_over_how_long(
     await backend_of(client).service_status.probe_idle()
     before = await client.get(STATUS)
 
-    saved = await client.put(SERVICE_STATUS, json=SHOWN | {"window_minutes": 10, "chat_llm": False})
+    saved = await client.put(
+        SERVICE_STATUS, json=SHOWN | {"window_minutes": 10, "chat_llm": False, "web_search": False}
+    )
     after = await client.get(STATUS)
     refused = await client.put(SERVICE_STATUS, json=SHOWN | {"window_minutes": 15})
     hidden = await client.put(
         SERVICE_STATUS, json=SHOWN | {"window_minutes": 10} | dict.fromkeys(
-            ("chat_llm", "memory_llm", "tts", "stt"), False
+            ("chat_llm", "memory_llm", "tts", "stt", "web_search"), False
         )
     )
     none = await client.get(STATUS)

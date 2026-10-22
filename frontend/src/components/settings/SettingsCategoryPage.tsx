@@ -6,6 +6,7 @@ import { AppearanceSettings } from "@/components/AppearanceSettings";
 import { CallSettings } from "@/components/CallSettings";
 import { DataPackageSettings } from "@/components/DataPackageSettings";
 import { DeleteAccount } from "@/components/DeleteAccount";
+import { ExperiencesSettings } from "@/components/ExperiencesSettings";
 import { MemoriesSettings } from "@/components/MemoriesSettings";
 import { OwnKeysSettings } from "@/components/OwnKeysSettings";
 import { ProducerProfileSettings } from "@/components/ProducerProfileSettings";
@@ -17,7 +18,7 @@ import { StatsSettings } from "@/components/StatsSettings";
 import type { SettingsCategory } from "@/lib/settingsCategory";
 
 /** 各类二级页面的内容，按 spec「设置：二级」。记忆和统计自己带页首末端的「清空」「分享」，整页由它们画。 */
-const PANELS: Record<Exclude<SettingsCategory, "memories" | "stats">, ReactNode> = {
+const PANELS: Record<Exclude<SettingsCategory, "memories" | "experiences" | "stats">, ReactNode> = {
   profile: <ProducerProfileSettings />,
   call: <CallSettings />,
   "reach-outs": <ReachOutsSettings />,
@@ -38,6 +39,7 @@ const PANELS: Record<Exclude<SettingsCategory, "memories" | "stats">, ReactNode>
 /** 设置一类的二级页面。 */
 export function SettingsCategoryPage({ category }: { category: SettingsCategory }) {
   if (category === "memories") return <MemoriesSettings />;
+  if (category === "experiences") return <ExperiencesSettings />;
   if (category === "stats") return <StatsSettings />;
   return <SettingsPane category={category}>{PANELS[category]}</SettingsPane>;
 }

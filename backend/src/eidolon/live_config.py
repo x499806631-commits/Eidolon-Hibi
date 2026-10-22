@@ -53,6 +53,8 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from eidolon.activity import (
     ActivityLog,
     MeteredAffinityJudge,
+    MeteredPromiseJudge,
+    MeteredSearchJudge,
     MeteredAmbienceJudge,
     MeteredEmotionJudge,
     MeteredJudge,
@@ -121,6 +123,8 @@ from eidolon.llm.providers import check_chat_llm, check_chat_models
 from eidolon.own_keys import DeployerKeys, DeployerLease, KeyCheck, OwnKeyRejected
 from eidolon.proxy import ProxyRoutes, Unreachable, reach as reach_provider
 from eidolon.rerank import DEFAULT_THRESHOLDS, RerankThresholds, thresholds_for
+from eidolon.promise_judge import ModelPromiseJudge
+from eidolon.search_judge import ModelSearchJudge
 from eidolon.retrieval import ModelRetrievalJudge, Need
 from eidolon.service_clients import Lease, ServiceClients, Swappable
 from eidolon.store import Message
@@ -748,6 +752,7 @@ PROXY_LABELS: dict[ProxiedService, str] = {
     "tts": "语音合成",
     "stt": "语音识别",
     "image": "生图",
+    "web_search": "联网搜索",
     "own_llm": "自带的 LLM",
     "own_tts": "自带的语音合成",
     "own_stt": "自带的语音识别",
@@ -1044,6 +1049,11 @@ class LiveConfig:
                 return self.settings.rerank is not None
             case "image":
                 return self.image_settings is not None
+            case "web_search":
+                # 搜索用能单独配的钥匙，不配就用聊天模型那把
+                return self.settings.search_key is not None or bool(
+                    self.settings.chat_llm.api_key
+                )
 
     @asynccontextmanager
     async def trial_llm(self, service: Literal["chat_llm", "memory_llm"]) -> AsyncIterator[ChatLLM]:
@@ -1161,6 +1171,22 @@ class LiveConfig:
         if self._judge is None:
             return None
         return LiveAffinityJudge(self, self._judge, self._activity)
+
+    def promise_judge(self) -> "LivePromiseJudge | None":
+        """The judge model as a turn asks it whether what the producer said kept a promise she
+        asked about: the one in effect at each question, recorded as a service call; None
+        without one."""
+        if self._judge is None:
+            return None
+        return LivePromiseJudge(self, self._judge, self._activity)
+
+    def search_judge(self) -> "LiveSearchJudge | None":
+        """The judge model as a turn asks it whether the producer asked her to look something
+        up: the one in effect at that question, recorded as a service call; None without
+        one."""
+        if self._judge is None:
+            return None
+        return LiveSearchJudge(self, self._judge, self._activity)
 
     async def start(self) -> None:
         """Try every override as the server starts: one that fails falls back to `.env`,
@@ -1399,6 +1425,8 @@ class LiveConfig:
             targets["stt"] = PROVIDER_URLS[where]
         if (image := self.image_settings) is not None:
             targets["image"] = image.base_url
+        if self.has_service("web_search"):
+            targets["web_search"] = self.settings.search_url
         return targets
 
     async def _reach_changed(self, before: ProxySettings, after: ProxySettings) -> None:
@@ -1571,6 +1599,64 @@ class LiveRetrievalJudge:
                 judge_origin(lease.settings),
             )
             return await judge.judge(character, history, text, affinity, photo)
+        finally:
+            lease.release()
+
+
+class LivePromiseJudge:
+    """The judge model as a turn asks it whether a promise was kept: the one in effect then,
+    held while it answers, recorded as the model it is."""
+
+    def __init__(
+        self,
+        config: LiveConfig,
+        judge: Swappable[JudgeModel, JudgeSettings],
+        activity: ActivityLog,
+    ) -> None:
+        self._config = config
+        self._judge = judge
+        self._activity = activity
+
+    async def kept(
+        self, character: Character, history: Sequence[Message], text: str, promised: str
+    ) -> bool:
+        lease = self._judge.lease()
+        try:
+            judge = MeteredPromiseJudge(
+                ModelPromiseJudge(lease.client),
+                self._activity,
+                judge_origin(lease.settings),
+            )
+            return await judge.kept(character, history, text, promised)
+        finally:
+            lease.release()
+
+
+class LiveSearchJudge:
+    """The judge model as a turn asks it whether he asked her to look something up: the one in
+    effect then, held while it answers, recorded as the model it is."""
+
+    def __init__(
+        self,
+        config: LiveConfig,
+        judge: Swappable[JudgeModel, JudgeSettings],
+        activity: ActivityLog,
+    ) -> None:
+        self._config = config
+        self._judge = judge
+        self._activity = activity
+
+    async def asked(
+        self, character: Character, history: Sequence[Message], text: str
+    ) -> bool:
+        lease = self._judge.lease()
+        try:
+            judge = MeteredSearchJudge(
+                ModelSearchJudge(lease.client),
+                self._activity,
+                judge_origin(lease.settings),
+            )
+            return await judge.asked(character, history, text)
         finally:
             lease.release()
 

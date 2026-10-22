@@ -45,6 +45,7 @@ import {
 } from "@/lib/api";
 import { startCall } from "@/lib/call";
 import { loadCallPreferences, saveCallPreferences } from "@/lib/callPreferences";
+import { isWebOn } from "@/lib/webToggle";
 import type { Ambience } from "@/lib/ambience";
 import { CharacterVoice } from "@/lib/characterVoice";
 import { toFailure, type Failure } from "@/lib/failure";
@@ -325,7 +326,8 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
         onListChanged: refresh,
         startCall: (conversationId, preferences, handlers, asmr) =>
           startCall(conversationId, preferences, handlers, userId, asmr),
-        sendTurn: (conversationId, text) => sendTurn(conversationId, text, userId),
+        sendTurn: (conversationId, text) =>
+          sendTurn(conversationId, text, userId, isWebOn(characterId)),
         getPhoto,
         getAffinity,
         appeal,

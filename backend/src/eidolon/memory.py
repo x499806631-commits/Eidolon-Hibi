@@ -53,6 +53,9 @@ from eidolon.corpus import REEMBED_BATCH
 from eidolon.database import connect
 from eidolon.embedding import Document, Embedder, EmbeddingError, nearest, to_blob
 from eidolon.llm import ChatLLM, ChatMessage
+from eidolon.promises import Promises, parse_promises
+from eidolon.experiences import Experience, Experiences, parse_experiences, prompt_of
+from eidolon.web_search import Found
 from eidolon.rerank import DEFAULT_THRESHOLDS, Reranker, RerankError
 from eidolon.store import Conversation, Message
 
@@ -78,6 +81,10 @@ LATELY = timedelta(days=14)
 """How long ago what she reaches out with as his news may have been written down."""
 MAX_LATEST = 5
 """The most of his news she reaches out with, besides what is found."""
+MAX_EXPERIENCES = 2
+"""The most of her own doings a turn is told of."""
+EXPERIENCE_CANDIDATES = 8
+"""How many of her own doings are looked for before the reranker picks among them."""
 ANOTHER_IDOL = "事务所的另一位偶像"
 """Who a memory was told to, when that character has been removed from the configuration."""
 
@@ -203,11 +210,14 @@ class Memories:
         embedder: Embedder | None = None,
         reranker: Reranker | None = None,
         min_relevance: Callable[[], float] = lambda: DEFAULT_THRESHOLDS.memories,
+        promises: Promises | None = None,
+        experiences: Experiences | None = None,
     ) -> None:
         """Memories kept in the database at `path`, next to the users and conversations
         they belong to; off unless `embedder` and `reranker` are both given, though
         `embedder` alone is enough to embed them again. A memory the reranker scores below
-        what `min_relevance` says when it is found is not (see `rerank.KNOWN_THRESHOLDS`)."""
+        what `min_relevance` says when it is found is not (see `rerank.KNOWN_THRESHOLDS`).
+        The promises the same answer writes down go to `promises`, if there are any to keep."""
         self._db = connect(path)
         self._lock = threading.Lock()
         with self._lock, self._db:
@@ -217,6 +227,8 @@ class Memories:
                 self._db.execute("ALTER TABLE memories ADD COLUMN superseded_by INTEGER")
         self._characters = characters
         self._clock = clock
+        self._promises = promises
+        self._experiences = experiences
         self._embedder = embedder
         self._services = (
             _Services(embedder, reranker, min_relevance)
@@ -374,6 +386,39 @@ class Memories:
         character = self._characters[conversation.character_id]
         return _memories_prompt(found, character, timezone, _FOUND) if found else None
 
+    async def _her_own(
+        self,
+        conversation: Conversation,
+        query_text: str,
+        query_vector: Sequence[float] | None,
+    ) -> str | None:
+        """Her own doings that bear on `query_text`: hers only, nearest first, those the
+        reranker calls relevant; what the turn is told of counts as recalled."""
+        services, mine = self._services, self._experiences
+        if services is None or mine is None or query_vector is None:
+            return None
+        try:
+            candidates = await mine.nearest(
+                services.embedder, conversation.user_id, conversation.character_id,
+                query_vector, EXPERIENCE_CANDIDATES,
+            )
+            if not candidates:
+                return None
+            best = await services.reranker.rerank(
+                query_text, [e.text for e in candidates], len(candidates)
+            )
+        except (EmbeddingError, RerankError):
+            log.warning("finding her own doings failed; going on without them", exc_info=True)
+            return None
+        found = [
+            candidates[i] for i, score in best
+            if score >= services.min_relevance()
+        ][:MAX_EXPERIENCES]
+        if not found:
+            return None
+        await asyncio.to_thread(mine.remember_used, [e.id for e in found])
+        return prompt_of(found, self._characters[conversation.character_id].name)
+
     async def _relevant(self, query_text: str, candidates: Sequence[Memory]) -> list[Memory]:
         """As many as `MAX_FOUND` of the `candidates` relevant to `query_text`, most relevant
         first; none if memory is off or reranking failed."""
@@ -474,6 +519,7 @@ class Memories:
         text: str,
         reply: Message,
         query_vector: Sequence[float] | None,
+        found: Sequence[Found] = (),
     ) -> None:
         if (services := self._services) is None:
             return
@@ -481,7 +527,8 @@ class Memories:
         release = hold() if hold is not None else None
         task = asyncio.create_task(
             self._write(
-                services, llm, conversation, clearings, history, text, reply, query_vector, now
+                services, llm, conversation, clearings, history, text, reply, query_vector, now,
+                found,
             ),
             context=detached(),  # after the turn, not part of it (see `activity`)
         )
@@ -512,6 +559,7 @@ class Memories:
         reply: Message,
         query_vector: Sequence[float] | None,
         now: datetime,
+        found: Sequence[Found] = (),
     ) -> None:
         user_id = conversation.user_id
         try:
@@ -519,7 +567,11 @@ class Memories:
             shown = await self._shown(
                 services.embedder, user_id, memory_query(history, text), query_vector
             )
-            prompt = _extraction_prompt(character, history, text, reply, shown, now)
+            prompt = _extraction_prompt(
+                character, history, text, reply, shown, now, found,
+                self._experiences.recent(user_id, conversation.character_id)
+                if self._experiences is not None else (),
+            )
             answer = "".join([
                 chunk async for chunk in llm.stream(prompt)
                 if isinstance(chunk, str)
@@ -531,6 +583,21 @@ class Memories:
                     len(answer), conversation.id,
                 )
                 return
+            if self._promises is not None:
+                made = parse_promises(answer)
+                if made:
+                    self._promises.record(
+                        user_id, conversation.character_id, made, now
+                    )
+            if self._experiences is not None:
+                # 她自己说做过的，按角色单独存（不和她关于制作人的记忆混在一起）
+                written_experiences = parse_experiences(
+                    _array(answer, "experiences")
+                )
+                if written_experiences:
+                    self._experiences.record(
+                        user_id, conversation.character_id, written_experiences, now
+                    )
             if self._clearings.get(user_id, 0) != clearings:
                 return  # cleared since the turn began
             added = await asyncio.to_thread(self._add, conversation, written, shown, now)
@@ -715,19 +782,27 @@ class MemoryTurn:
         is off or reranking failed."""
         return await self._memories._find(self._conversation, self._timezone, query, candidates)
 
+    async def her_own(self, query: str, query_vector: Sequence[float] | None) -> str | None:
+        """The prompt section carrying her own doings this turn brings up (GLOSSARY.md
+        「她们的经历」), hers only, most relevant first, with what was looked up about them;
+        None where nothing does. Whatever it brings up counts as recalled (`remember_used`)."""
+        return await self._memories._her_own(self._conversation, query, query_vector)
+
     def write_down(
         self,
         history: Sequence[Message],
         text: str,
         reply: Message,
         query_vector: Sequence[float] | None = None,
+        found: Sequence[Found] = (),
     ) -> None:
         """Start writing down what the user revealed in this turn: `text`, said after
         `history` and answered with `reply`; `query_vector` is the turn's query embedded
-        already, if it was, so it is not embedded again."""
+        already, if it was, so it is not embedded again; `found` is what she looked up on the
+        web in it, for what she said she did to carry its source."""
         self._memories._write_down(
             self._conversation, self._timezone, self._clearings, self._llm, self._hold,
-            history, text, reply, query_vector,
+            history, text, reply, query_vector, found,
         )
 
 
@@ -753,8 +828,27 @@ _INSTRUCTIONS = """\
 现在狗去世了，就写「制作人的狗去世了，现在还养着那只猫」，取代原来那条。
 - 两件事可以同时成立的（例如喜欢喝咖啡，最近也开始喝茶），新的照常写，不取代旧的。
 
-只输出 JSON，格式为 {"memories": [{"text": "……", "supersedes": [编号]}]}，不取代任何记忆时 \
-supersedes 写 []；没有值得记住的就输出 {"memories": []}。"""
+只输出 JSON，格式为 {"memories": [{"text": "……", "supersedes": [编号]}], "promises": [], "experiences": []}，不取代任何记忆时 \
+supersedes 写 []；没有约定时 promises 写 []；没有经历时 experiences 写 []；三样都没有就输出 \
+{"memories": [], "promises": [], "experiences": []}。
+
+除了记忆，还要记下他的**约定**：制作人明确说了要在某一天为她做一件事时（给她一样东西、带她去某个地方、\
+那天要来找她），把这件事和那一天写进 promises。只认他明确说出口的日子，或者能从他说的「明天」「后天」\
+「下周六」和今天算出来的日子；「以后」「有机会再说」这种没有日子的不算。text 写他答应做什么，说明白是什么事，\
+像「给她一块布丁」「带她去吃拉面」这样，不要以「制作人」开头；due 写那一天，格式 YYYY-MM-DD。\
+一件已经过去的日子上的约定不写。
+
+# 她自己的经历
+这一段只看**偶像这一轮的回复**，不看制作人说了什么。记的是她**已经发生过的**亲历：去了哪、吃了什么、\
+练了什么、看了什么、玩了什么，写进 experiences。
+- 要记的：「去看过那个花道展」「今天一直在打新游戏」「刚练完舞」这种她自己做过的事。
+- 不要记的：她想去、下次想去、还没发生的事；她听说的、别人做的事；别的偶像做了什么；\
+原作剧情里的事；以及组合的变动、和别的偶像起冲突、家里的变故这类**大事**——它们会和原作设定冲突。
+- 一件事只写一条。她说过自己经历的会按编号列在下面：一样的不要再写，说得更完整时写更完整的那条。
+- text 以她自己的名字开头，一句能单独看懂的话，例如「甜花去看过那个花道展」；\
+summary 写当时查到的要点（一两句，没有就留空）；url 是她这一回合查到的那条网页地址（没有就写 null）。
+- 一回合最多写 2 条。
+- 制作人去的记进 memories，她去的记进 experiences；两个人一起去的，两边各记一条。"""
 
 
 def _extraction_prompt(
@@ -764,9 +858,23 @@ def _extraction_prompt(
     reply: Message,
     shown: Sequence[Memory],
     now: datetime,
+    found: Sequence[Found] = (),
+    told: Sequence[Experience] = (),
 ) -> list[ChatMessage]:
-    lines = [f"今天是 {_date(now)}（制作人所在时区）。", "", "# 已经记住的事"]
+    # 星期几也写上：约定（promises）里「下周六」这类说法要靠它算出是哪一天。
+    weekday = "一二三四五六日"[now.weekday()]
+    lines = [f"今天是 {_date(now)}，星期{weekday}（制作人所在时区）。", "", "# 已经记住的事"]
     lines += [f"{n}. {m.text}" for n, m in enumerate(shown, 1)] or ["（还没有）"]
+    if told:
+        # 她自己说过做过的：写新的之前先对照，同一件事不再记一条
+        lines += ["", f"# 她已经说过自己经历的事（{character.name}自己的）"]
+        lines += [f"{n}. {e.text}" for n, e in enumerate(told, 1)]
+    if found:
+        # 她这一回合查到的网页：她"亲自去过"的事要带上来源，以后回忆时才不靠编
+        lines += ["", "# 她这一回合在网上查到的（她要说成自己的经历时才用）"]
+        lines += [
+            f"- {item.title}｜{item.summary}｜{item.url}" for item in found
+        ]
     lines += ["", f"# 制作人和{character.name}的对话"]
     for message in history[-EXCHANGE_HISTORY:]:
         if message.role == "user":
@@ -814,6 +922,19 @@ class NewMemory:
     supersedes: tuple[int, ...] = ()
     """The numbers it was shown the memories this one supersedes under, counting from 1;
     any it was not shown are left for `Memories._add` to ignore."""
+
+
+def _array(answer: str, key: str) -> object:
+    """The array under `key` of the background model's answer, read on its own so that one
+    broken array costs only what it holds; None where the answer is not the JSON asked for."""
+    start, end = answer.find("{"), answer.rfind("}")
+    if start < 0:
+        return None
+    try:
+        written = json.loads(answer[start : end + 1])
+    except ValueError:
+        return None
+    return written.get(key) if isinstance(written, dict) else None
 
 
 def parse_memories(answer: str) -> list[NewMemory] | None:

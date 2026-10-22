@@ -18,6 +18,7 @@ import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
@@ -47,12 +48,14 @@ import { linesOf, type Line } from "@/lib/messageLines";
 import { pastDay } from "@/lib/pastConversations";
 import { photosUsedUpText } from "@/lib/photoFailure";
 import { cn } from "@/lib/utils";
+import { isWebOn, rememberWeb } from "@/lib/webToggle";
 import { herVars } from "@/theme/herVars";
 import {
   BackIcon,
   AsmrIcon,
   CooldownIcon,
   EndedIcon,
+  FocusIcon,
   GiftIcon,
   MoreIcon,
   NewConversationIcon,
@@ -61,11 +64,14 @@ import {
   PhoneIcon,
   PhotosUsedUpIcon,
   SendIcon,
+  WebIcon,
 } from "@/theme/icons";
 import { Ja } from "@/theme/Ja";
 
 import { AffinityBadge, CueArrowIcon } from "./AffinityBadge";
 import { CallBar } from "./CallBar";
+import { FocusSetup } from "./FocusSetup";
+import { FocusTimerBar } from "./FocusTimerBar";
 import { EVENT_ICONS, eventText } from "./EventIcon";
 import { LiveCallLayer } from "./CallLayer";
 import { OutfitPicker } from "./OutfitPicker";
@@ -121,6 +127,15 @@ export function ConversationView({
   const outfits = useStandOutfits(character);
   const [pickingOutfit, setPickingOutfit] = useState(false);
   const [pickingPast, setPickingPast] = useState(false);
+  // 番茄钟「一起专心」：先在 `FocusSetup` 里选专心多久，再在页首下方挂一条计时条。
+  const [settingUpFocus, setSettingUpFocus] = useState(false);
+  const [focusMinutes, setFocusMinutes] = useState<number | null>(null);
+  // 「联网」按角色记在这台设备上（GLOSSARY.md「联网」），拨开才把搜索工具给她
+  const [webOn, setWebOn] = useState(() => isWebOn(character.id));
+  const turnWeb = (on: boolean) => {
+    setWebOn(on);
+    rememberWeb(character.id, on);
+  };
   const { viewing, view, backToCurrent } = usePastConversation(character.id);
   const subtree = useRef<HTMLDivElement>(null);
   // 她现在对制作人的好感度；读不到（好感度关着、没配判断模型或请求失败）就不显示标识，也不出变化胶囊。
@@ -243,6 +258,16 @@ export function ConversationView({
             <AsmrIcon aria-hidden />
             {t.asmrCall}
           </DropdownMenuItem>
+          <DropdownMenuItem disabled={focusMinutes !== null} onClick={() => setSettingUpFocus(true)}>
+            <FocusIcon aria-hidden />
+            {t.focus.start}
+          </DropdownMenuItem>
+          {account?.web_search && (
+            <DropdownMenuCheckboxItem checked={webOn} onCheckedChange={turnWeb}>
+              <WebIcon aria-hidden />
+              {t.web}
+            </DropdownMenuCheckboxItem>
+          )}
           {outfits && (
             <DropdownMenuItem onClick={() => setPickingOutfit(true)}>
               <OutfitIcon aria-hidden />
@@ -359,6 +384,14 @@ export function ConversationView({
   return (
     <Frame character={character} subtree={subtree} header={header}>
       {barShown && <CallBar ref={focus.note} call={call} onExpand={() => live?.expand()} />}
+      {focusMinutes !== null && (
+        <FocusTimerBar
+          name={character.name}
+          minutes={focusMinutes}
+          onEnd={() => setFocusMinutes(null)}
+          inert={isCovered}
+        />
+      )}
       <div inert={isCovered} className="min-h-0 flex-1">
         {/* 历史对话：读到之前转圈；换一段时消息区重来，停在最底 */}
         {viewing ? (
@@ -424,6 +457,15 @@ export function ConversationView({
         }}
         onDeleted={(id) => {
           if (id === viewing?.id) backToCurrent();
+        }}
+      />
+      <FocusSetup
+        isOpen={settingUpFocus}
+        onOpenChange={setSettingUpFocus}
+        isWide={!isFullScreen}
+        start={(minutes) => {
+          setSettingUpFocus(false);
+          setFocusMinutes(minutes);
         }}
       />
       {live && (

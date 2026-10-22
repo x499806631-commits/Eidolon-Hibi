@@ -42,8 +42,20 @@ export { AudioLines as AmbienceIcon, Moon as AsmrIcon } from "lucide-react";
 // 信箱（来信）。
 export { Mail as LettersIcon } from "lucide-react";
 
-// 日历页（导航的「日历」、翻月、制作人自己的生日）。
-export { Cake as CakeIcon, CalendarDays as CalendarIcon } from "lucide-react";
+// 「一起专心」的番茄钟（对话页更多菜单里打开，页首下方那条计时条）：闹钟、暂停、继续；
+// 结束用已有的 CloseIcon。
+export { AlarmClock as FocusIcon, Pause as PauseFocusIcon, Play as ResumeFocusIcon } from "lucide-react";
+
+// 「联网」（对话页更多菜单里那一项，GLOSSARY.md「联网」）：一个地球。
+export { Globe as WebIcon } from "lucide-react";
+
+// 日历页（导航的「日历」、翻月、制作人自己的生日、和某位偶像的纪念日、答应她的事）。
+export {
+  Cake as CakeIcon,
+  CalendarDays as CalendarIcon,
+  CalendarHeart as AnniversaryIcon,
+  HeartHandshake as PromiseIcon,
+} from "lucide-react";
 
 // 对话列表页首的公告铃铛（GLOSSARY.md「公告」）；后台导航的公告用 Megaphone。
 export { Bell as AnnouncementsBellIcon } from "lucide-react";
@@ -81,6 +93,7 @@ export { Cookie as FoodIcon, CupSoda as DrinkIcon, Flower2 as FlowerIcon, Gem as
 // 设置一级的十类（档案、记忆、统计、通话用 PhoneIcon、搭话、外观、自带密钥、登录与数据、数据包、关于）和「关于」上面的「赞赏」；「关于」里新标签页打开的链接行尾的外链图标。
 export {
   BookHeart as MemoriesIcon,
+  NotebookPen as ExperiencesIcon,
   HandHeart as SponsorIcon,
   ChartColumn as StatsIcon,
   CircleUser as ProfileIcon,

@@ -295,6 +295,9 @@ class Retrieved:
     """The prompt section carrying the references or recalled episodes, if any."""
     memories_prompt: str | None = None
     """The prompt section carrying the user's memories relevant to the turn, if any."""
+    experiences_prompt: str | None = None
+    """The prompt section carrying her own doings the turn brings up (GLOSSARY.md「她们的经历」),
+    if any."""
     recalled: bool = False
     """Whether the recall-story tool already ran, so the chat model need not call it."""
     judged: Judged | None = None
@@ -422,12 +425,19 @@ class Retrieval:
         if found is None:
             return Retrieved(None)
         if need == "memories":
-            return Retrieved(None, await _find_memories(memory, query, found.memories))
-        references, memories = await asyncio.gather(
+            memories = await _find_memories(memory, query, found.memories)
+            return Retrieved(
+                None, memories, experiences_prompt=await _find_experiences(memory, query, found)
+            )
+        references, memories, own = await asyncio.gather(
             self._references(query, found.references or []),
             _find_memories(memory, query, found.memories),
+            _find_experiences(memory, query, found),
         )
-        return Retrieved(self._sources.prompt(references) if references else None, memories)
+        return Retrieved(
+            self._sources.prompt(references) if references else None, memories,
+            experiences_prompt=own,
+        )
 
     async def _references(self, query: str, candidates: Sequence[Reference]) -> list[Reference]:
         """Those of the `candidates` relevant to `query`, most relevant first."""
@@ -550,6 +560,15 @@ async def _find_memories(
     memory: MemoryTurn | None, query: str, candidates: Sequence[Memory]
 ) -> str | None:
     return await memory.find(query, candidates) if memory else None
+
+
+async def _find_experiences(
+    memory: MemoryTurn | None, query: str, found: "_Found | None"
+) -> str | None:
+    """Her own doings the turn brings up, as `her_own` finds them; None where nothing does."""
+    if memory is None or found is None:
+        return None
+    return await memory.her_own(query, found.query_vector)
 
 
 def _episodes(corpus: StoryCorpus, ids: Iterable[str]) -> list[Episode]:

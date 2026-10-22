@@ -354,6 +354,7 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
             "is_admin": is_admin(store, settings, user_id),
             "exempting_keys": [s for s in SERVICES if s in backend.config.exempting_keys],
             "reach_outs": backend.reach_outs.switch_of(user_id),
+            "web_search": backend.web is not None,
             "sponsor_version": backend.sponsor.state().version,
         }
 

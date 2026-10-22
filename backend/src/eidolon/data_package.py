@@ -23,9 +23,10 @@ from collections.abc import Callable, Container, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from functools import partial
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Literal, get_args
+from zoneinfo import ZoneInfo
 
 from PIL import Image
 from pydantic import (
@@ -57,6 +58,9 @@ from eidolon.producer import (
     ProducerProfile,
     is_day_of_the_year,
 )
+from eidolon.promises import MAX_TEXT, NewPromise, Promise, Promises
+from eidolon.experiences import Experience, Experiences, NewExperience
+from eidolon.producer import effective_timezone
 from eidolon.reply_format import Segment
 from eidolon.store import (
     ConnectedCall,
@@ -73,9 +77,10 @@ from eidolon.store import (
     write_profile,
 )
 
-FORMAT = 2
+FORMAT = 4
 """The newest format this version reads, and the one it exports. Changing the format adds
-one to it, and keeps reading the older ones: 2 added her reach-outs (`reach_outs`)."""
+one to it, and keeps reading the older ones: 2 added her reach-outs (`reach_outs`), 3 the
+promises still standing (`promises`), 4 her own doings (`experiences`)."""
 
 REACH_OUTS_SINCE = 2
 """The format whose conversations first held her reach-outs: before it, none may."""
@@ -473,12 +478,75 @@ class PackagedMemory(_Strict):
         )
 
 
+class PackagedPromise(_Strict):
+    """One promise the user still stands by (GLOSSARY.md「约定」): to which idol, what, and the
+    day it is for. What has come of it does not travel: a package carries what is still to do."""
+
+    character_id: str
+    text: Annotated[str, Field(min_length=1, max_length=MAX_TEXT)]
+    due: str
+    """The day it is for, as `YYYY-MM-DD`."""
+
+    @classmethod
+    def of(cls, promise: Promise) -> "PackagedPromise":
+        return cls(character_id=promise.character_id, text=promise.text, due=promise.due.isoformat())
+
+    def new(self) -> NewPromise | None:
+        """The promise to write down again here; None where its day cannot be read."""
+        try:
+            return NewPromise(self.text, date.fromisoformat(self.due))
+        except ValueError:
+            return None
+
+
+class PackagedExperience(_Strict):
+    """One of her own doings (GLOSSARY.md「她们的经历」): whose, what she did, what was looked up
+    about it, and when it was last recalled — a package does not make one young again, so one
+    already gone by its thirtieth day is not carried."""
+
+    character_id: str
+    text: Annotated[str, Field(min_length=1, max_length=200)]
+    summary: str = ""
+    url: str | None = None
+    pinned: bool = False
+    used_at: str | None = None
+    """When it was last recalled, as times are written; null where nothing has yet."""
+
+    @classmethod
+    def of(cls, experience: Experience) -> "PackagedExperience":
+        return cls(
+            character_id=experience.character_id,
+            text=experience.text,
+            summary=experience.summary,
+            url=experience.url,
+            pinned=experience.pinned,
+            used_at=_written(experience.last_used_at) if experience.last_used_at else None,
+        )
+
+    def new(self) -> NewExperience:
+        return NewExperience(self.text, self.summary, self.url)
+
+    def last_used(self) -> datetime | None:
+        """When it was last recalled, read back; None where it cannot be read, so that it is
+        counted from when it came in."""
+        if not self.used_at:
+            return None
+        try:
+            return datetime.fromisoformat(self.used_at)
+        except ValueError:
+            return None
+
+
 class PackageData(_Strict):
     """`data.json`: a key for each category the package holds, none for the others."""
 
     profile: PackagedProfile | None = None
     conversations: list[PackagedConversation] | None = None
     memories: list[PackagedMemory] | None = None
+    promises: list[PackagedPromise] | None = None
+    """The promises (GLOSSARY.md「约定」) still standing: they travel with the memories."""
+    experiences: list[PackagedExperience] | None = None
+    """Her own doings (GLOSSARY.md「她们的经历」): they travel with the memories too."""
 
     @model_validator(mode="after")
     def _memories_told_in_conversations(self) -> "PackageData":
@@ -545,6 +613,10 @@ class Imported:
     photos: int = 0
     """Only those sent, with their pictures: one not sent says only that she did not send it."""
     memories: int = 0
+    promises: int = 0
+    """The promises still standing when the package was read, and still to come."""
+    experiences: int = 0
+    """Her own doings still un-forgotten when the package was read."""
     profile: bool = False
     skipped: list[Skipped] = field(default_factory=list)
 
@@ -579,6 +651,8 @@ class DataPackages:
         characters: Mapping[str, Character],
         gift_catalog: Mapping[str, Gift],
         clock: Callable[[], datetime],
+        promises: Promises | None = None,
+        experiences: Experiences | None = None,
     ) -> None:
         self._database_path = database_path
         self._store = store
@@ -586,6 +660,8 @@ class DataPackages:
         self._characters = characters
         self._gift_catalog = gift_catalog
         self._clock = clock
+        self._promises = promises
+        self._experiences = experiences
         self._working: set[str] = set()
         self._working_lock = threading.Lock()
         db = connect(database_path)
@@ -651,6 +727,19 @@ class DataPackages:
                 for m in self._memories.kept(user_id)
             ]
             counts["memories"] = len(data.memories)
+            # 约定跟记忆一起走（GLOSSARY.md「约定」）：还没做到的那些
+            if self._promises is not None:
+                data.promises = [
+                    PackagedPromise.of(p) for p in self._promises.open_for(user_id)
+                ]
+            # 她自己的经历跟记忆一起走：已经忘掉的（三十天没被想起）不带走
+            if self._experiences is not None:
+                when = self._clock()
+                data.experiences = [
+                    PackagedExperience.of(e)
+                    for e in self._experiences.all_of(user_id)
+                    if (left := e.left(when)) is None or left > timedelta(0)
+                ]
         now = self._clock()
         manifest = Manifest(
             format=FORMAT, exported_at=_written(now), categories=categories, counts=counts
@@ -733,6 +822,10 @@ class DataPackages:
                         db, user_id, [m.carried(conversations) for m in data.memories]
                     )
                 now = self._clock()
+                if "memories" in categories and data.promises and self._promises is not None:
+                    imported.promises = self._add_promises(user_id, data.promises, now)
+                if "memories" in categories and data.experiences and self._experiences is not None:
+                    imported.experiences = self._add_experiences(user_id, data.experiences, now)
                 db.execute(
                     "DELETE FROM data_package_imports WHERE user_id = ? AND at < ?",
                     (user_id, _today_began(now)),
@@ -774,6 +867,49 @@ class DataPackages:
                 imported.photos += len(sent(conversation.photos()))
         imported.skipped = [Skipped(name, count) for name, count in skipped.items()]
         return here
+
+    def _add_promises(
+        self, user_id: str, packaged: list[PackagedPromise], now: datetime
+    ) -> int:
+        """Write the package's promises down again for `user_id`, in their own time zone;
+        those to an idol not here, and those for a day gone by, are left. How many came."""
+        assert self._promises is not None
+        zone = ZoneInfo(effective_timezone(self._store.get_profile(user_id), None))
+        added = 0
+        for entry in packaged:
+            promise = entry.new()
+            if promise is None or entry.character_id not in self._characters:
+                continue
+            self._promises.record(
+                user_id, entry.character_id, [promise], now.astimezone(zone)
+            )
+            added += 1
+        return added
+
+    def _add_experiences(
+        self, user_id: str, packaged: list[PackagedExperience], now: datetime
+    ) -> int:
+        """Keep her own doings the package carried, as old as they were there: those of an
+        idol not here, and those whose thirtieth day has gone by, are left. How many came."""
+        assert self._experiences is not None
+        added = 0
+        for entry in packaged:
+            if entry.character_id not in self._characters:
+                continue
+            used_at = entry.last_used()
+            carried = Experience(
+                id=0, user_id=user_id, character_id=entry.character_id, text=entry.text,
+                summary=entry.summary, url=entry.url,
+                created_at=used_at or now, last_used_at=used_at, pinned=entry.pinned,
+            )
+            left = carried.left(now)
+            if left is not None and left <= timedelta(0):
+                continue  # 三十天已经过去，不带过来
+            self._experiences.carry(
+                user_id, entry.character_id, entry.new(), now, used_at, entry.pinned
+            )
+            added += 1
+        return added
 
     def _name(self, character_id: str) -> str | None:
         character = self._characters.get(character_id)

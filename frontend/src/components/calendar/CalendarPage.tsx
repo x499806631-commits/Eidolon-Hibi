@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { copy } from "@/i18n";
 import { getProfile, type Birthday, type Character } from "@/lib/api";
 import {
+  fulfilPromise,
   getCalendar,
   monthEvents,
   monthWeeks,
@@ -24,7 +25,7 @@ import {
 import { toFailure, type Failure } from "@/lib/failure";
 import { cn } from "@/lib/utils";
 import { herVars } from "@/theme/herVars";
-import { BackIcon, CakeIcon, CalendarIcon, ForwardIcon } from "@/theme/icons";
+import { AnniversaryIcon, BackIcon, CakeIcon, CalendarIcon, ForwardIcon, PromiseIcon } from "@/theme/icons";
 
 const t = copy.calendar;
 
@@ -89,6 +90,19 @@ export function CalendarPage() {
     setShown(shiftMonth(year, month, step));
   }
 
+  // 说某个约定已经做到了：它就没了，这一年重读一遍
+  function fulfil(promiseId: number) {
+    void fulfilPromise(promiseId).then(
+      () =>
+        setYears((m) => {
+          const next = new Map(m);
+          next.delete(year);
+          return next;
+        }),
+      (e) => setFailure(toFailure(e)),
+    );
+  }
+
   return (
     <PageShell width="full" isInShell header={<h1 className="text-list-title">{t.title}</h1>}>
       <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-4 py-6">
@@ -129,6 +143,7 @@ export function CalendarPage() {
                       isToday={day === todayHere}
                       characters={byId}
                       onGo={(id) => go(`/conversation/${encodeURIComponent(id)}`)}
+                      onFulfil={fulfil}
                     />
                   )),
                 )}
@@ -148,6 +163,11 @@ function eventTitle(event: DayEvent, characters: Characters): string | null {
     const c = characters.get(event.characterId);
     return c ? t.birthdayOf(c.name) : null;
   }
+  if (event.kind === "anniversary") {
+    const c = characters.get(event.characterId);
+    return c ? t.anniversaryOf(c.name) : null;
+  }
+  if (event.kind === "promise") return event.text;
   return event.kind === "producer" ? t.producerBirthday : event.holiday.name;
 }
 
@@ -233,6 +253,8 @@ function DayCell({
   });
   const isProducers = events.some((e) => e.kind === "producer");
   const holidays = events.flatMap((e) => (e.kind === "holiday" ? [e.holiday] : []));
+  const milestones = events.flatMap((e) => (e.kind === "anniversary" ? [e] : []));
+  const hasPromise = events.some((e) => e.kind === "promise");
   const titles = events.flatMap((e) => eventTitle(e, characters) ?? []);
   const her = faces[0];
   return (
@@ -262,6 +284,10 @@ function DayCell({
         ))}
         {faces.length > MAX_FACES && <span className="text-meta text-muted-foreground">{t.more(faces.length - MAX_FACES)}</span>}
         {isProducers && <CakeIcon className="size-4 text-foreground md:size-5" />}
+        {milestones.map((a) => (
+          <AnniversaryIcon key={`${a.characterId}-${a.label}`} className="size-4 text-foreground md:size-5" />
+        ))}
+        {hasPromise && <PromiseIcon className="size-4 text-foreground md:size-5" />}
         {holidays.map((h) =>
           h.icon ? (
             <span key={h.name} className="text-sm leading-none md:text-base">
@@ -277,6 +303,15 @@ function DayCell({
           {h.name}
         </span>
       ))}
+      {milestones.map((a) => (
+        <span
+          key={`${a.characterId}-${a.label}`}
+          aria-hidden
+          className="w-full truncate text-center text-meta text-muted-foreground max-md:hidden"
+        >
+          {a.label}
+        </span>
+      ))}
     </div>
   );
 }
@@ -290,6 +325,7 @@ function EventRow({
   isToday,
   characters,
   onGo,
+  onFulfil,
 }: {
   year: number;
   month: number;
@@ -298,15 +334,26 @@ function EventRow({
   isToday: boolean;
   characters: Characters;
   onGo: (characterId: string) => void;
+  onFulfil: (promiseId: number) => void;
 }) {
   const title = eventTitle(event, characters);
   if (title === null) return null;
-  const character = event.kind === "birthday" ? characters.get(event.characterId) : undefined;
+  const character =
+    event.kind === "birthday" || event.kind === "anniversary" || event.kind === "promise"
+      ? characters.get(event.characterId)
+      : undefined;
   const holiday = event.kind === "holiday" ? event.holiday : null;
   const lasting =
     holiday?.end &&
     t.lasting(t.day(holiday.start.month, holiday.start.day), t.day(holiday.end.month, holiday.end.day));
-  const note = [lasting, holiday?.note].filter(Boolean).join("。");
+  const note = [
+    event.kind === "anniversary" ? event.label : null,
+    event.kind === "promise" ? t.promiseNote : null,
+    lasting,
+    holiday?.note,
+  ]
+    .filter(Boolean)
+    .join("。");
   return (
     <li className="flex items-center gap-3 border-b py-2.5 last:border-b-0">
       <span
@@ -334,7 +381,12 @@ function EventRow({
         <span className="truncate text-body">{title}</span>
         {note && <span className="text-subtitle text-muted-foreground">{note}</span>}
       </div>
-      {character && (
+      {character && event.kind === "promise" && (
+        <Button variant="outline" size="sm" onClick={() => onFulfil(event.promiseId)}>
+          {t.promiseDone}
+        </Button>
+      )}
+      {character && event.kind !== "promise" && (
         <Button variant="outline" size="sm" onClick={() => onGo(character.id)}>
           {t.goChat}
         </Button>

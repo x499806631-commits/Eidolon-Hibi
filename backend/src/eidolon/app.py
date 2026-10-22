@@ -57,6 +57,8 @@ from eidolon.gifts_api import add_gift_routes
 from eidolon.photos_api import add_photo_routes
 from eidolon.sessions import UserId, session_middleware
 from eidolon.letters_api import add_letter_routes
+from eidolon.experiences_api import add_experience_routes
+from eidolon.promises_api import add_promise_routes
 from eidolon.special_days_api import add_calendar_routes
 from eidolon.sponsor_api import add_sponsor_routes
 from eidolon.stats import add_stats_routes
@@ -89,6 +91,9 @@ class NewConversation(BaseModel):
 
 class TurnInput(BaseModel):
     text: str
+    web: bool = False
+    """Whether she may look things up on the web this turn (GLOSSARY.md「联网」): the user's
+    browser keeps it per character, and sends it with every turn."""
     own_keys: OwnKeysInput | None = None
     """The user's own keys, which their browser keeps, for the turn to run on; the shape
     calls bring too. A turn uses only the LLMs and image generation, voice keys brought
@@ -358,6 +363,8 @@ def create_app(backend: Backend) -> FastAPI:
     add_calendar_routes(app, backend)
     add_letter_routes(app, backend)
     add_appeal_routes(app, backend.appeals)
+    add_promise_routes(app, backend)
+    add_experience_routes(app, backend)
     add_photo_routes(app, backend)
     add_sponsor_routes(app, backend)
     add_data_package_routes(app, backend)
@@ -584,6 +591,7 @@ def create_app(backend: Backend) -> FastAPI:
             with outcome.running():
                 async with aclosing(engine.turn(
                     conversation, body.text, admission.llms, device_timezone,
+                    web=body.web,
                     own_image=brought.image,
                 )) as turn:
                     async for event in turn:

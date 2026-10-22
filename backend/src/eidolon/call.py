@@ -163,6 +163,7 @@ from eidolon.turn_taking import (
     Voice,
     WaitForFollowOn,
 )
+from eidolon.weather import Weather
 from eidolon import windows_udp
 
 log = logging.getLogger(__name__)
@@ -949,9 +950,11 @@ class Calls:
         speech: Speech,
         clock: Clock,
         store: Store,
+        weather: Weather | None = None,
     ) -> None:
         """Calls last as long, and take as many turns, as `limits` says as each starts.
-        Calls of users banned or deleted meanwhile, as `store` has them, are hung up."""
+        Calls of users banned or deleted meanwhile, as `store` has them, are hung up.
+        Without `weather`, the ambience of a call is picked without the weather there."""
         self._settings = settings
         self._engine = engine
         self._admissions = admissions
@@ -960,6 +963,7 @@ class Calls:
         self._speech = speech
         self._clock = clock
         self._store = store
+        self._weather = weather
         self._webrtc = SmallWebRTCRequestHandler(
             ice_servers=[RTCIceServer(**server) for server in settings.ice_servers]
         )
@@ -1044,7 +1048,7 @@ class Calls:
 
             live = _LiveCall(
                 connection, call, self._engine, self._store, self._speech, keys, outcome,
-                keys.emotions, keys.ambience,
+                keys.emotions, keys.ambience, self._weather,
             )
             self._live.add(live)
             live.start(on_done=self._live.discard)
@@ -1186,6 +1190,7 @@ class _LiveCall:
         outcome: CallOutcome,
         emotions: EmotionJudging | None,
         ambience: AmbiencePicking | None = None,
+        weather: Weather | None = None,
     ) -> None:
         self._connection = connection
         self._call = call
@@ -1201,7 +1206,7 @@ class _LiveCall:
         stt = hearing.stt
         self._stt_provider: SttProvider = keys.stt.provider
         self._turns = CallTurns(
-            engine, store, call, outcome, hearing.follow_on_timeout, emotions, ambience
+            engine, store, call, outcome, hearing.follow_on_timeout, emotions, ambience, weather
         )
         tts = speech.tts(
             keys.tts, keys.tts_model, call.character.voice_id, sample_rate, own="tts" in keys.own
@@ -1413,6 +1418,7 @@ class CallTurns(FrameProcessor):
         follow_on_timeout: float,
         emotions: EmotionJudging | None = None,
         ambience: AmbiencePicking | None = None,
+        weather: Weather | None = None,
     ) -> None:
         super().__init__()
         self._engine = engine
@@ -1423,6 +1429,7 @@ class CallTurns(FrameProcessor):
         self._emotions = emotions
         self._judging: set[asyncio.Task] = set()  # segments' emotions being judged
         self._ambience = ambience
+        self._weather = weather
         self._ambience_auto = False  # the browser asks for the ambience to be picked
         self._ambience_kind: AmbienceKind | None = None  # what it was last told to play
         self._picking: asyncio.Task | None = None  # the ambience being picked
@@ -1793,6 +1800,7 @@ class CallTurns(FrameProcessor):
             ambience.clock().astimezone(ZoneInfo(timezone)),
             self._call.asmr,
             self._store.list_messages(conversation.id),
+            await self._weather.now() if self._weather is not None else None,
         )
         kind = await ambience.pick(moment, self._ambience_kind)
         if kind is None or not self._ambience_auto:
