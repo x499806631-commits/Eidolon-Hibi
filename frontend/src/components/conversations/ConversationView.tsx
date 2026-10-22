@@ -46,6 +46,7 @@ import { giftsHref } from "@/lib/gifts";
 import { isLive, NOT_OPEN, type LiveConversation } from "@/lib/liveConversation";
 import { linesOf, type Line } from "@/lib/messageLines";
 import { pastDay } from "@/lib/pastConversations";
+import { scheduleText } from "@/lib/schedule";
 import { photosUsedUpText } from "@/lib/photoFailure";
 import { cn } from "@/lib/utils";
 import { isWebOn, rememberWeb } from "@/lib/webToggle";
@@ -81,6 +82,7 @@ import { useDirectory, useWide } from "./ConversationDirectory";
 import { useFocusBack } from "./useFocusBack";
 import { usePastConversation, type Viewing } from "./usePastConversation";
 import { useProducerTimezone } from "./useProducerTimezone";
+import { useScheduleNow } from "./useScheduleNow";
 import { useStandOutfits } from "./useStandOutfits";
 
 const t = copy.conversation;
@@ -125,6 +127,8 @@ export function ConversationView({
   const snapshot = useSyncExternalStore(live?.subscribe ?? noSubscription, live?.snapshot ?? notOpen, notOpen);
   const { conversation, entries, call, layer, hearing, draft, failure } = snapshot;
   const outfits = useStandOutfits(character);
+  // 她现在大概在干嘛（GLOSSARY.md「行程」）：页首名字下面一行，看历史对话时换成那段对话的日子。
+  const doing = scheduleText(useScheduleNow(character.id));
   const [pickingOutfit, setPickingOutfit] = useState(false);
   const [pickingPast, setPickingPast] = useState(false);
   // 番茄钟「一起专心」：先在 `FocusSetup` 里选专心多久，再在页首下方挂一条计时条。
@@ -223,8 +227,14 @@ export function ConversationView({
       )}
       <div className="flex min-w-0 flex-1 flex-col px-2">
         <h1 className="truncate text-header">{character.name}</h1>
-        {viewing?.status === "open" && (
+        {viewing?.status === "open" ? (
           <p className="truncate text-meta text-muted-foreground">{t.past.heading(pastDay(viewing.at, new Date()))}</p>
+        ) : (
+          doing && (
+            <p className="truncate text-meta text-muted-foreground" aria-label={t.schedule.label(doing)}>
+              {doing}
+            </p>
+          )
         )}
       </div>
       {phoneKey}

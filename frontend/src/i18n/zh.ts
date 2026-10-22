@@ -198,6 +198,14 @@ export const zh = {
       newConversation: "开个新对话",
     },
     /** 更多菜单里的「历史对话」、它打开的面板和历史对话的只读页（GLOSSARY.md「当前对话」「历史对话」）。 */
+    /** 页首她名字下面那一行：她现在大概在干嘛（GLOSSARY.md「行程」）。 */
+    schedule: {
+      doing: (what: string) => what,
+      doingAt: (what: string, where: string) => `${what} · ${where}`,
+      free: "现在有空",
+      /** 读屏读的：「她现在大概在：舞蹈课 · 事务所」。 */
+      label: (doing: string) => `她现在大概在：${doing}`,
+    },
     past: {
       open: "历史对话",
       title: "历史对话",

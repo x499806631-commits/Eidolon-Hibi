@@ -201,3 +201,21 @@ async def test_hers_is_hers_to_read(make_client: ClientFactory, settings: Settin
     yesterday = (today_at(6) - timedelta(days=1)).date().isoformat()
     res = await client.get("/api/characters/mano/schedule", params={"day": yesterday})
     assert res.json() is None
+
+
+async def test_what_she_is_up_to_now_is_told_for_the_line_under_her_name(
+    make_client: ClientFactory, settings: Settings
+):
+    client, _, clock = await talked(make_client, settings, [PLAN])
+    none_yet = (await client.get("/api/characters/mano/schedule/now")).json()
+    clock.now = today_at(6)
+    await backend_of(client).schedule_writer.run_due()
+
+    clock.now = today_at(10)
+    lesson = (await client.get("/api/characters/mano/schedule/now")).json()
+    clock.now = today_at(13)
+    free = (await client.get("/api/characters/mano/schedule/now")).json()
+
+    assert none_yet is None
+    assert lesson == {"what": "舞蹈课", "where": "事务所", "kind": "lesson", "until": "12:00"}
+    assert free == {"free": True}

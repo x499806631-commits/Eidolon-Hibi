@@ -1,6 +1,9 @@
 """Her schedule over HTTP (GLOSSARY.md「行程」), for users who agreed to the terms: hers for a
 day with the user (`/api/characters/{id}/schedule?day=YYYY-MM-DD`, today in the producer's time
-zone without `day`), null if she has none for it. Nothing in the app shows it yet.
+zone without `day`), null if she has none for it; and what she is up to now
+(`/api/characters/{id}/schedule/now`), for the line under her name on her conversation page:
+the slot she is in and when it ends, `{"free": true}` between slots, null without a schedule
+today.
 
 Under the development sign-in only (`EIDOLON_DEV_LOGIN=1`), `POST /api/schedules/write-now` has
 hers for today written at once, to try schedules out without waiting for the morning."""
@@ -32,6 +35,23 @@ def add_schedule_routes(app: FastAPI, backend: Backend) -> None:
             day = clock().astimezone(zone).date()
         found = schedules.of(user_id, character_id, day)
         return found.shown() if found else None
+
+    @app.get("/api/characters/{character_id}/schedule/now")
+    def read_now(user_id: UserId, character_id: str) -> dict | None:
+        if character_id not in backend.characters:
+            raise HTTPException(404, "没有这位角色")
+        zone = ZoneInfo(effective_timezone(store.get_profile(user_id), None))
+        local = clock().astimezone(zone)
+        found = schedules.of(user_id, character_id, local.date())
+        if found is None:
+            return None
+        slot = found.now(local.time())
+        if slot is None:
+            return {"free": True}
+        return {
+            "what": slot.what, "where": slot.where, "kind": slot.kind,
+            "until": slot.end.strftime("%H:%M"),
+        }
 
     if backend.settings.dev_login:
 
