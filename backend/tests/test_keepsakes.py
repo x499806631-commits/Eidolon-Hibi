@@ -64,6 +64,22 @@ def test_its_picture_is_the_thing_alone_square_and_all_ages():
     assert "no text" in prompt.positive and ", text," in prompt.negative
 
 
+def test_what_it_is_leads_and_her_sentence_describing_it_follows_the_tags():
+    draft = read_keepsake(
+        "<keepsake>\nname: 和纸鸽子\nwhat: bird figurine\ntags: washi paper, light blue, round\n"
+        "scene: A small round pigeon figurine, made of light blue washi paper, sits on a desk.\n"
+        "</keepsake><ja>はい</ja><zh>给</zh>"
+    )
+    prompt, _ = keepsake_prompt(draft.tags)
+
+    assert prompt.positive.startswith(
+        "background dataset, no humans, still life, object focus, bird figurine, washi paper,"
+    )
+    assert "round, A small round pigeon figurine made of light blue washi paper sits on a desk, " in (
+        prompt.positive
+    )
+
+
 def test_words_written_on_it_are_drawn_in_quotes_where_it_says_and_text_is_let_in():
     draft = read_keepsake(
         "<keepsake>\nname: 生日卡\ntags: birthday card, cake\nwords: 「おめでとう」{1.5::x::}\n"

@@ -316,13 +316,18 @@ def keepsake_prompt(tags: str, style: str = "") -> tuple[ImagePrompt, tuple[Cros
     it (`tags`, comma-separated), cleaned and stripped as a photo's are, `KEEPSAKE_TAGS` at
     most; and which part of the line each stripped crossed.
 
-    It starts with `background dataset`, NovelAI's tag for a scene with no one in it. The
-    words written on the thing, if any, are in `tags` as `keepsake_words` puts them, and go
-    into the prompt as a photo's do (`writing`), with `text` no longer kept out of it."""
+    It starts with `background dataset`, NovelAI's tag for a scene with no one in it, then
+    what the thing is (her first tag). Her sentence describing it, after `SCENE_MARK` in
+    `tags`, follows the tags, as a photo's scene does: V5 draws what a sentence says the
+    subject is more surely than it puts tags together. The words written on the thing, if
+    any, are in `tags` as `keepsake_words` puts them, and go into the prompt as a photo's
+    do (`writing`), with `text` no longer kept out of it."""
     seen = {*_FIXED, *_KEEPSAKE_START}
     stripped: list[Crossing] = []
     kept: list[str] = []
     words = ""
+    tags, _, described = tags.partition(SCENE_MARK)
+    scene = _sentence(described, stripped) if described else ""
     if found := _KEEPSAKE_WORDS.search(tags):
         words = writing(found.group(1), found.group(2) or "", stripped)
         tags = tags[: found.start()] + tags[found.end() :]
@@ -338,7 +343,7 @@ def keepsake_prompt(tags: str, style: str = "") -> tuple[ImagePrompt, tuple[Cros
         kept.append(tag)
     positive = (
         *_KEEPSAKE_START, *_styled(style), *(kept[:KEEPSAKE_TAGS] or ["gift box"]),
-        *_said("", words), *_finish(style, words),
+        *_said(scene, words), *_finish(style, words),
     )
     negative = KEEPSAKE_NEGATIVE if not words else KEEPSAKE_NEGATIVE.replace(", text,", ",")
     negative = _negative(negative, style, words)
@@ -346,6 +351,8 @@ def keepsake_prompt(tags: str, style: str = "") -> tuple[ImagePrompt, tuple[Cros
 
 
 _KEEPSAKE_START = ("background dataset", "no humans", "still life", "object focus")
+SCENE_MARK = " || "
+"""Between a keepsake's tags and her sentence describing it, as they are kept together."""
 _KEEPSAKE_WORDS = re.compile(r'"([^"]*)"(?:\s*@\s*([^,，、]*))?')
 
 

@@ -142,7 +142,7 @@ from eidolon.llm import ChatLLM, ChatMessage, Reasoning, Tool, ToolCall, TurnLLM
 from eidolon.memory import Memories, last_turn_query
 from eidolon.own_keys import OwnKeyFailed
 from eidolon.photos import CANNOT_SEND, NOT_RECEIVED, Eligibility, Photos, photo_turn
-from eidolon.photo_prompt import keepsake_words
+from eidolon.photo_prompt import SCENE_MARK, keepsake_words
 from eidolon.producer import Ties, effective_timezone, local_date, now_prompt, producer_prompt
 from eidolon.reply_format import (
     format_instructions,
@@ -661,7 +661,9 @@ KEEPSAKE_RULES = """# 送制作人一件东西
 name: 东西的名字，中文，十五个字以内，例如「手作的四叶草书签」
 look: 这件东西的样子，中文一两句
 emoji: 一个最能代表它的 emoji
-tags: 4–6 个英文 tag，只写这件东西本身：是什么、样子、材质、颜色，可以加一个放置的地方（例如 on wooden table）；不写人，不用比喻，颜色用纯颜色词
+what: 它是什么，一到三个英文单词的普通名词，画得出来的那种，例如 bird figurine、bookmark、strawberry daifuku
+tags: 3–5 个英文 tag，补充它的样子、材质、颜色，可以加一个放置的地方（例如 on wooden table）；不写人，不用比喻，颜色用纯颜色词
+scene: 一句英文，把这件东西完整地描述一遍：是什么、什么做的、什么颜色和形状、放在哪里，例如 A small round pigeon figurine made of light blue washi paper sits on a wooden desk。主语就是这件东西，不写否定，不用比喻
 words: （可以不写这一行）东西上写着的字，一个完整的词或短语，日语或英语都可以，越短越稳，最好四个字以内，例如 ありがとう、Thanks；卡片、包装、点心上真的会写字时才写
 words_on: 有 words 时写这段字在哪里，英文短语，例如 the card、the ribbon、the chocolate plate
 </keepsake>
@@ -706,7 +708,8 @@ def keepsake_rules(occasion: str, about: str, adult: bool, before: Sequence[str]
 @dataclass(frozen=True)
 class KeepsakeDraft:
     """A keepsake as she wrote it: its name, how it looks, its emoji, the English tags its
-    picture is drawn from, and what she said giving it, in segments."""
+    picture is drawn from (what it is first, the words on it, then her sentence describing
+    it after `SCENE_MARK`), and what she said giving it, in segments."""
 
     name: str
     look: str
@@ -738,9 +741,12 @@ def read_keepsake(answer: str) -> KeepsakeDraft:
     if not name or not said:
         raise EmptyReply("对话模型没有写出要送的东西")
     emoji = fields.get("emoji", "").strip()[:8] or "🎁"
-    tags = fields.get("tags", "")[:300]
+    what = fields.get("what", "").strip()[:60]
+    tags = ", ".join(t for t in (what, fields.get("tags", "")[:300]) if t)  # what it is first
     if words := keepsake_words(fields.get("words", ""), fields.get("words_on", "")):
         tags = f"{tags}, {words}"  # kept with the tags; `keepsake_prompt` reads it back
+    if scene := fields.get("scene", "").replace(SCENE_MARK.strip(), " ").strip()[:300]:
+        tags = f"{tags}{SCENE_MARK}{scene}"
     return KeepsakeDraft(name, fields.get("look", "")[:200], emoji, tags, said)
 
 DIARY_RULES = """# 写日记
