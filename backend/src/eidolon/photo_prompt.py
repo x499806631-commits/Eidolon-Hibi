@@ -114,14 +114,17 @@ class PhotoTag:
     outfit: tuple[str, ...]
     action: tuple[str, ...]
     others: tuple[str, ...] = ()
-    """In a group photo, what the others with her wear and do (`others`), cleaned; none if
-    she wrote none."""
+    """In a group photo, what the others with her wear and do (`others`), cleaned, for those
+    she wrote nothing of their own for; none if she wrote none."""
     scene: str = ""
     """Her sentence on how it is laid out, cleaned; empty if none, or it crossed the line."""
     writing: str = ""
     """The words written in it and where, as the prompt has them (`writing`); empty if none."""
     stripped: tuple[Crossing, ...] = ()
     """Which part of the line each tag stripped crossed, one for each."""
+    each: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    """In a group photo, what each of the others wears and does, by her id, as she wrote it
+    (`others: hiori: navy coat / meguru: waving`), cleaned."""
 
 
 @dataclass(frozen=True)
@@ -156,10 +159,25 @@ def read_tag(text: str) -> PhotoTag:
     place, outfit, action = (
         _field(fields.get(name, ""), name, seen, stripped) for name in DEFAULTS
     )
-    others = _field(fields.get("others", ""), "others", set(_FIXED), stripped, default=())
+    shared: list[str] = []
+    each: list[tuple[str, tuple[str, ...]]] = []
+    for part in re.split(r"[/;；]", fields.get("others", "")):
+        if found := _ONE_OF_THEM.match(part):
+            tags = _field(found.group(2), "others", set(_FIXED), stripped, default=())
+            if tags:
+                each.append((found.group(1).lower(), tags))
+        elif part.strip():
+            shared.append(part)
+    others = _field(",".join(shared), "others", set(_FIXED), stripped, default=())
     scene = _sentence(fields.get("scene", ""), stripped)
     words = writing(fields.get("words", ""), fields.get("words_on", ""), stripped)
-    return PhotoTag(shot, framing, place, outfit, action, others, scene, words, tuple(stripped))
+    return PhotoTag(
+        shot, framing, place, outfit, action, others, scene, words, tuple(stripped), tuple(each)
+    )
+
+
+_ONE_OF_THEM = re.compile(r"^\s*([A-Za-z][A-Za-z_-]*)\s*[:：]\s*(.*)$")
+"""One of the others in a group photo, by her id, and what she wears and does."""
 
 
 def image_prompt(character: Character, tag: PhotoTag, style: str = "") -> ImagePrompt:
@@ -196,8 +214,8 @@ def group_prompt(
     the work, the style, how it is taken, as close as `group_framing` lets it be, where, her
     sentence and the words), and each a
     character prompt of her own (V5's), `girl` and who she is, her looks, then what she
-    wears and does: hers from `tag`'s outfit and action, the others' from its `others`, or
-    hers where it says nothing. With one, it is `image_prompt`'s."""
+    wears and does: hers from `tag`'s outfit and action, each other's from what it says of
+    her by her id (`each`), else from its `others`, or hers where it says nothing. With one, it is `image_prompt`'s."""
     characters = list(characters)[:MAX_IN_GROUP]
     if len(characters) == 1:
         return image_prompt(characters[0], tag, style)
@@ -214,9 +232,10 @@ def group_prompt(
         *_said(tag.scene, tag.writing), *_finish(style, tag.writing),
     )
     others = tag.others or (*tag.outfit, *tag.action)
+    theirs = dict(tag.each)
     each = [
         ", ".join(("girl", c.photo_tag or "", c.photo_appearance or "", *(
-            (*tag.outfit, *action) if i == 0 else others
+            (*tag.outfit, *action) if i == 0 else theirs.get(c.id.lower(), others)
         )))
         for i, c in enumerate(characters)
     ]

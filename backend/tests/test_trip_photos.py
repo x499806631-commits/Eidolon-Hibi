@@ -166,7 +166,7 @@ async def test_sent_now_with_others_named_it_may_be_of_them_all(
     })
 
     assert sent.status_code == 201, sent.text
-    assert "和你一起来的有月岡恋鐘，这次拍一张和她们的合照" in str(llm.prompts[-1])
+    assert "和你一起来的有月岡恋鐘（kogane），这次拍一张和她们的合照" in str(llm.prompts[-1])
     assert image.requests[0]["body"]["input"].startswith("2girls")
     assert nobody.status_code == 404
 
@@ -238,3 +238,23 @@ def test_a_photo_of_them_together_is_never_so_far_off_their_faces_blur():
     assert group_framing("full body", 3) == "upper body"
     assert group_framing("cowboy shot", 4) == "upper body"
     assert group_framing("portrait", 3) == "portrait"
+
+
+def test_each_of_the_others_wears_and_does_what_she_wrote_for_her():
+    mano = Character("mano", "櫻木真乃", "", "v", "", None, "#ffbad6",
+                     photo_tag="sakuragi mano", photo_appearance="brown hair")
+    hiori = Character("hiori", "風野灯織", "", "v", "", None, "#000000",
+                      photo_tag="kazano hiori", photo_appearance="black hair")
+    meguru = Character("meguru", "八宮めぐる", "", "v", "", None, "#000000",
+                       photo_tag="hachimiya meguru", photo_appearance="blonde hair")
+    tag = read_tag(
+        "shot: other\nplace: kyoto\noutfit: cardigan\naction: smile\n"
+        "others: hiori: navy coat, holding camera / meguru: yellow hoodie, waving"
+    )
+
+    prompt = group_prompt([mano, hiori, meguru], tag)
+    unnamed = group_prompt([mano, hiori], read_tag("shot: other\nothers: scarf, smile"))
+
+    assert prompt.characters[1] == "girl, kazano hiori, black hair, navy coat, holding camera"
+    assert prompt.characters[2] == "girl, hachimiya meguru, blonde hair, yellow hoodie, waving"
+    assert unnamed.characters[1] == "girl, kazano hiori, black hair, scarf, smile"

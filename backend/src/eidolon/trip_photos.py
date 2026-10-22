@@ -371,7 +371,7 @@ class TripPhotos:
         try:
             with recording.current():
                 said, tag = await self._engine.send_trip_photo(
-                    conversation, lease.keys.chat_llm, place, [c.name for c in others],
+                    conversation, lease.keys.chat_llm, place, [f"{c.name}（{c.id}）" for c in others],
                     all_together and bool(others),
                 )
         except Exception as e:

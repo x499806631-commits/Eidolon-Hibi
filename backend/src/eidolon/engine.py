@@ -568,7 +568,7 @@ TRIP_PHOTO_TOGETHER = "和你一起来的有{names}，照片可以是你一个�
 TRIP_PHOTO_ALL_TOGETHER = "和你一起来的有{names}，这次拍一张和她们的合照（group 写 yes）。"
 
 TRIP_PHOTO_OTHERS = """group: 和她们的合照写 yes，只拍你自己写 no
-others: 合照时 1–4 个英文 tag，写她们穿什么、在做什么
+others: 合照时每个人分开写，用括号里的英文名开头、斜杠隔开，各 2–4 个英文 tag，写她穿什么、在做什么，大家的衣服和动作要不一样，例如 hiori: navy coat, holding camera / meguru: yellow hoodie, waving
 合照要拍得近一点，大家的脸才看得清：两个人 framing 最远写 cowboy shot，三个人以上写 upper body，不要拍全身远景；scene 里写大家挨着站、凑在一起
 """
 """What she is told of the others on the trip with her."""
