@@ -155,6 +155,20 @@ def test_local_voices_are_read_from_their_file_paths_resolved_beside_it(tmp_path
         load_local_voices(path)
 
 
+def test_in_a_container_paths_are_sent_as_the_server_sees_them(tmp_path: Path):
+    path = tmp_path / "voices.toml"
+    path.write_text(
+        'server_dir = "C:/Users/me/eidolon-sc/local-voices/"\n'
+        '[mano]\nref_audio = "mano/ref.wav"\nref_text = "ほわっ"\n'
+        'gpt_weights = "D:\\\\GPT-SoVITS\\\\mano.ckpt"\n', encoding="utf-8",
+    )
+
+    voice = load_local_voices(path)["mano"]
+
+    assert voice.ref_audio == "C:/Users/me/eidolon-sc/local-voices/mano/ref.wav"
+    assert voice.gpt_weights == "D:\\GPT-SoVITS\\mano.ckpt"
+
+
 async def test_gpt_sovits_switches_weights_only_when_the_voice_needs_others(tmp_path: Path):
     asked: list[str] = []
 

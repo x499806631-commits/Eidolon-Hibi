@@ -210,6 +210,22 @@ sovits_weights = "D:/GPT-SoVITS/SoVITS_weights_v2/mano_e8_s200.pth"
 
 3. 在 `.env` 或后台把通话、念消息改成 GPT-SoVITS。后台保存前会试着连一下这个地址。
 
+**用 docker compose 跑时**（`启动.bat`、`重建.bat` 就是）：
+
+- 后端在容器里，要连本机的 GPT-SoVITS，地址填 `http://host.docker.internal:9880`（`.env` 的 `GPT_SOVITS_URL` 或后台都行）。连不上时，把 GPT-SoVITS 改成 `python api_v2.py -a 0.0.0.0 -p 9880` 启动，并在 Windows 防火墙里只允许「专用网络」，别对外开放这个端口。
+- `local-voices/` 会挂进容器（`/local-voices`），但参考音频和权重是交给本机的 GPT-SoVITS 去读的，它看到的是 Windows 上的路径。所以在 `voices.toml` 最上面写一行这个文件夹在本机的位置，相对路径就会按它来拼；权重写 Windows 的绝对路径：
+
+```toml
+server_dir = "C:/Users/你的用户名/eidolon-sc/local-voices"
+
+[mano]
+ref_audio = "mano/ref.wav"        # 交给 GPT-SoVITS 的是 C:/Users/…/local-voices/mano/ref.wav
+ref_text = "ほわっ……プロデューサーさん、おはようございます"
+sovits_weights = "D:/GPT-SoVITS/SoVITS_weights_v2/mano_e8_s200.pth"
+```
+
+- 改了 `voices.toml` 要重启后端才读到（`docker compose restart backend`）。
+
 - 没在 `voices.toml` 里配声音的偶像仍用 Fish Audio 说话（要有 Fish Audio 的 key；没有 key 时她的通话接不通、消息念不了）。
 - GPT-SoVITS 一次只载入一套权重：换到另一位偶像时先换权重，所以同一时间只合成一段，几个人同时用时会排队。
 - 语气提示（`[shyly]` 这类）不会念出来，只念台词；情绪跟着参考音频走。

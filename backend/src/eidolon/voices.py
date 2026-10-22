@@ -27,6 +27,7 @@ the words."""
 
 import asyncio
 import logging
+import re
 import tomllib
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
@@ -71,13 +72,23 @@ def local_voices_path(raw: str | None) -> Path:
 
 def load_local_voices(path: Path) -> dict[str, LocalVoice]:
     """The voices in the file at `path`, by character; none if there is no such file.
-    Raises LocalVoicesError if it is broken."""
+    Raises LocalVoicesError if it is broken.
+
+    A relative path in it is of a file beside it, sent to the server as the server sees
+    that folder: `server_dir`, at the top of the file, where the backend sees it in a
+    container and the server elsewhere (`C:/Users/me/eidolon-sc/local-voices`); without
+    it, as the backend sees it. A Windows path (`D:/...`) is absolute, wherever the
+    backend runs."""
     if not path.exists():
         return {}
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as e:
         raise LocalVoicesError(f"{path} 读不了：{e}") from None
+    server_dir = data.pop("server_dir", None)
+    if server_dir is not None and (not isinstance(server_dir, str) or not server_dir.strip()):
+        raise LocalVoicesError(f"{path} 的 server_dir 应该是一个路径")
+    base = server_dir.strip().rstrip("/\\") if server_dir else str(path.parent.resolve())
     voices: dict[str, LocalVoice] = {}
     for character_id, entry in data.items():
         if not isinstance(entry, dict):
@@ -91,24 +102,35 @@ def load_local_voices(path: Path) -> dict[str, LocalVoice]:
         if lang not in LANGUAGES:
             raise LocalVoicesError(f"{path} 里 [{character_id}] 的 ref_lang 只能是 {'、'.join(LANGUAGES)}")
         voices[character_id] = LocalVoice(
-            _resolved(path, ref_audio), ref_text.strip(), lang,
-            _optional_path(path, entry.get("gpt_weights"), character_id, "gpt_weights"),
-            _optional_path(path, entry.get("sovits_weights"), character_id, "sovits_weights"),
+            _resolved(base, ref_audio), ref_text.strip(), lang,
+            _optional_path(base, path, entry.get("gpt_weights"), character_id, "gpt_weights"),
+            _optional_path(base, path, entry.get("sovits_weights"), character_id, "sovits_weights"),
         )
     return voices
 
 
-def _resolved(path: Path, given: str) -> str:
-    p = Path(given)
-    return str(p if p.is_absolute() else (path.parent / p).resolve())
+_WINDOWS_ABSOLUTE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
 
 
-def _optional_path(path: Path, given: object, character_id: str, field: str) -> str | None:
+def _resolved(base: str, given: str) -> str:
+    """`given` as the server is to find it: as it is if absolute, else in `base`."""
+    given = given.strip()
+    if _WINDOWS_ABSOLUTE.match(given) or given.startswith("/"):
+        return given
+    separator = "\\" if "\\" in base and "/" not in base else "/"
+    given = given.replace("\\", "/")
+    given = given[2:] if given.startswith("./") else given
+    return base + separator + given
+
+
+def _optional_path(
+    base: str, path: Path, given: object, character_id: str, field: str
+) -> str | None:
     if given is None:
         return None
     if not isinstance(given, str) or not given.strip():
         raise LocalVoicesError(f"{path} 里 [{character_id}] 的 {field} 应该是一个路径")
-    return _resolved(path, given)
+    return _resolved(base, given)
 
 
 def spoken(text: str) -> str:

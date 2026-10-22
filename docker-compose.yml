@@ -7,6 +7,10 @@ services:
       - ./characters:/characters:ro
       - ./corpus:/corpus:ro
       - ./deploy:/deploy:ro # 活动名对照表 event-names.toml（同步时读取）
+      - ./local-voices:/local-voices:ro # 本地语音（GPT-SoVITS）每位偶像的声音配置，不进仓库
+    # 容器里用 http://host.docker.internal:9880 连到本机跑的 GPT-SoVITS
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   frontend:
