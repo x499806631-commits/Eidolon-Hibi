@@ -45,6 +45,7 @@ from eidolon.config import (
     checked_extra_body,
     effort_problem,
 )
+from eidolon.features import FEATURES, Feature
 from eidolon.identity import PROVIDER_NAMES, IdentityError
 from eidolon.own_keys import NO_PHOTOS, BroughtKeys, OwnKeyRejected, named_services
 from eidolon.price_catalog import describe_thinking
@@ -215,6 +216,33 @@ class ReachOutSwitch(BaseModel):
     on: StrictBool
 
 
+class FeatureSwitch(BaseModel):
+    """The user's own switch for one of the fork's features (GLOSSARY.md「玩法开关」)."""
+
+    on: StrictBool
+
+
+def available_features(backend: Backend) -> list[Feature]:
+    """The features the deployment has, which a user may switch off, in the order they are
+    shown: her scenes where affinity is on, her diary, letters and schedule (with her sleep
+    and her bath) where `.env` turns them on, the special days with the calendar, the weather
+    with the producer's place, and always the anniversaries and the promises."""
+    settings = backend.settings
+    has: dict[Feature, bool] = {
+        "scenes": backend.config.affinity_on,
+        "diary": settings.diary,
+        "letters": settings.letters,
+        "schedules": settings.schedules,
+        "sleep": settings.schedules,
+        "bath": settings.schedules,
+        "anniversaries": True,
+        "special_days": backend.special_days is not None,
+        "promises": True,
+        "weather": backend.weather is not None,
+    }
+    return [f for f in FEATURES if has[f]]
+
+
 class Consent(BaseModel):
     """Agreeing to the privacy policy and terms of use, and saying they are 13 or older."""
 
@@ -342,8 +370,10 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
         identities they sign in with, whether they are an admin, who may enter the admin
         console, the exempting keys now (GLOSSARY.md「免限额密钥」), in a fixed order, and
         whether they have their own switch for reach-outs on (GLOSSARY.md「搭话」), None where
-        the deployer has reach-outs off, and the version of the sponsor code (GLOSSARY.md
-        「赞赏」) while users are shown it, else None."""
+        the deployer has reach-outs off, the user's own switches for the features the
+        deployment has (GLOSSARY.md「玩法开关」), and the version of the sponsor code
+        (GLOSSARY.md「赞赏」) while users are shown it, else None."""
+        switches = backend.features.of(user_id)
         return {
             "id": user_id,
             "name": store.get_user(user_id).name,
@@ -354,6 +384,7 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
             "is_admin": is_admin(store, settings, user_id),
             "exempting_keys": [s for s in SERVICES if s in backend.config.exempting_keys],
             "reach_outs": backend.reach_outs.switch_of(user_id),
+            "features": {f: switches[f] for f in available_features(backend)},
             "web_search": backend.web is not None,
             "sponsor_version": backend.sponsor.state().version,
         }
@@ -366,6 +397,16 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
             backend.reach_outs.switch(user_id, body.on)
         except ReachOutsOff:
             raise HTTPException(409, "搭话没有开放") from None
+
+    @app.put("/api/account/features/{feature}", status_code=204)
+    def switch_feature(feature: str, body: FeatureSwitch, user_id: UserId) -> None:
+        """Turn the user's own switch for `feature` on or off, for all the characters
+        (GLOSSARY.md「玩法开关」); 404 for one the deployment does not have."""
+        for known in available_features(backend):
+            if known == feature:
+                backend.features.switch(user_id, known, body.on)
+                return
+        raise HTTPException(404, "没有这个玩法")
 
     @app.delete("/api/account/sign-in-methods/{provider}", status_code=204)
     def unlink(provider: str, user_id: UserId) -> None:

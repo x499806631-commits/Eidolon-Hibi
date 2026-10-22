@@ -88,6 +88,7 @@ export function SettingsValuesProvider({ children }: { children: ReactNode }) {
         // 外观和角色一起由外壳读出；登录的用户读到之前还是默认值，不算读到。
         appearance: account ? appearance : null,
         reachOuts: account?.reach_outs ?? null,
+        features: account?.features ?? null,
         ownServices: ownedServices,
         signInMethods: account?.sign_in_methods.map((method) => method.provider) ?? null,
       }),

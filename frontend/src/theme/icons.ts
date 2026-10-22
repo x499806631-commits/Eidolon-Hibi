@@ -110,6 +110,7 @@ export {
   LogIn as SignInIcon,
   MessageCircleHeart as ReachOutsIcon,
   Package as DataPackageIcon,
+  ToggleRight as FeaturesIcon,
 } from "lucide-react";
 
 // 对话页首的好感度标识（GLOSSARY.md「好感度」「冷却」）：五档心形和冷却中的沙漏；

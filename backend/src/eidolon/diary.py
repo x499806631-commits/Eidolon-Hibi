@@ -40,6 +40,7 @@ from eidolon.affinity import Affinities, Change, Status, Tier
 from eidolon.characters import Character
 from eidolon.clock import Clock
 from eidolon.database import connect
+from eidolon.features import AllOn, Switches
 from eidolon.engine import ConversationEngine
 from eidolon.live_config import LiveConfig
 from eidolon.producer import effective_timezone, is_birthday
@@ -196,7 +197,9 @@ class Diary:
         clock: Clock,
         enabled: bool,
         special_days: SpecialDays | None = None,
+        features: Switches = AllOn(),
     ) -> None:
+        self._features = features
         self._store = store
         self._engine = engine
         self._characters = characters
@@ -413,6 +416,8 @@ class Diary:
         due = []
         for user_id, character_id, day_text, tries, last_at in rows:
             if character_id not in self._characters:
+                continue
+            if not self._features.on(user_id, "diary"):  # GLOSSARY.md「玩法开关」
                 continue
             day = date.fromisoformat(day_text)
             today = now.astimezone(self._zone(user_id)).date()

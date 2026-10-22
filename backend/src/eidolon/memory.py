@@ -53,7 +53,7 @@ from eidolon.corpus import REEMBED_BATCH
 from eidolon.database import connect
 from eidolon.embedding import Document, Embedder, EmbeddingError, nearest, to_blob
 from eidolon.llm import ChatLLM, ChatMessage
-from eidolon.promises import Promises, parse_promises
+from eidolon.promises import Promise, Promises, parse_promise_changes, parse_promises
 from eidolon.experiences import Experience, Experiences, parse_experiences, prompt_of
 from eidolon.web_search import Found
 from eidolon.rerank import DEFAULT_THRESHOLDS, Reranker, RerankError
@@ -574,10 +574,15 @@ class Memories:
             shown = await self._shown(
                 services.embedder, user_id, memory_query(history, text), query_vector
             )
+            standing = (
+                self._promises.standing(user_id, conversation.character_id)
+                if self._promises is not None else []
+            )
             prompt = _extraction_prompt(
                 character, history, text, reply, shown, now, found,
                 self._experiences.recent(user_id, conversation.character_id)
                 if self._experiences is not None else (),
+                standing,
             )
             answer = "".join([
                 chunk async for chunk in llm.stream(prompt)
@@ -591,6 +596,9 @@ class Memories:
                 )
                 return
             if self._promises is not None:
+                changes = parse_promise_changes(answer, standing)
+                if changes:
+                    self._promises.change(user_id, changes, now)
                 made = parse_promises(answer)
                 if made:
                     self._promises.record(
@@ -842,15 +850,20 @@ _INSTRUCTIONS = """\
 现在狗去世了，就写「制作人的狗去世了，现在还养着那只猫」，取代原来那条。
 - 两件事可以同时成立的（例如喜欢喝咖啡，最近也开始喝茶），新的照常写，不取代旧的。
 
-只输出 JSON，格式为 {"memories": [{"text": "……", "supersedes": [编号]}], "promises": [], "experiences": [], "moment": null}，\
-不取代任何记忆时 supersedes 写 []；没有约定时 promises 写 []；没有经历时 experiences 写 []；没有值得写进日记的事时 \
-moment 写 null；都没有就输出 {"memories": [], "promises": [], "experiences": [], "moment": null}。
+只输出 JSON，格式为 {"memories": [{"text": "……", "supersedes": [编号]}], "promises": [], "promise_changes": [], \
+"experiences": [], "moment": null}，不取代任何记忆时 supersedes 写 []；没有约定时 promises 写 []；没有改期或取消的约定时 \
+promise_changes 写 []；没有经历时 experiences 写 []；没有值得写进日记的事时 moment 写 null；都没有就输出 \
+{"memories": [], "promises": [], "promise_changes": [], "experiences": [], "moment": null}。
 
 除了记忆，还要记下制作人的**约定**：制作人明确说了要在某一天为她做一件事时（给她一样东西、带她去某个地方、\
 那天要来找她），把这件事和那一天写进 promises。只认制作人明确说出口的日子，或者能从制作人说的「明天」「后天」\
 「下周六」和今天算出来的日子；「以后」「有机会再说」这种没有日子的不算。text 写制作人答应做什么，说明白是什么事，\
 像「给她一块布丁」「带她去吃拉面」这样，不要以「制作人」开头；due 写那一天，格式 YYYY-MM-DD。\
+「这周末」「月底前」这种在一段日子里做的，due 写最后那天，from 写最早那天（从今天起就写今天）；只有一天的不写 from。\
 一件已经过去的日子上的约定不写。
+「# 已经记着的约定」按编号列着已经记下的约定：同一件事不要再写进 promises，换个说法也是同一件。\
+制作人明确说其中哪一件改到别的日子，写进 promise_changes：{"id": 编号, "due": "YYYY-MM-DD"}；\
+明确说不做了、取消了，写 {"id": 编号, "cancel": true}。只是没提起、还没做，都不算改期或取消。
 
 # 她自己的经历
 这一段只看**偶像这一轮的回复**，不看制作人说了什么。记的是她**已经发生过的**亲历：去了哪、吃了什么、\
@@ -880,11 +893,14 @@ def _extraction_prompt(
     now: datetime,
     found: Sequence[Found] = (),
     told: Sequence[Experience] = (),
+    promised: Sequence[Promise] = (),
 ) -> list[ChatMessage]:
     # 星期几也写上：约定（promises）里「下周六」这类说法要靠它算出是哪一天。
     weekday = "一二三四五六日"[now.weekday()]
     lines = [f"今天是 {_date(now)}，星期{weekday}（制作人所在时区）。", "", "# 已经记住的事"]
     lines += [f"{n}. {m.text}" for n, m in enumerate(shown, 1)] or ["（还没有）"]
+    lines += ["", "# 已经记着的约定"]
+    lines += [f"{n}. {p.due.isoformat()}：{p.text}" for n, p in enumerate(promised, 1)] or ["（还没有）"]
     if told:
         # 她自己说过做过的：写新的之前先对照，同一件事不再记一条
         lines += ["", f"# 她已经说过自己经历的事（{character.name}自己的）"]

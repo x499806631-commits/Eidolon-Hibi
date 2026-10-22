@@ -7,6 +7,7 @@ import { CallSettings } from "@/components/CallSettings";
 import { DataPackageSettings } from "@/components/DataPackageSettings";
 import { DeleteAccount } from "@/components/DeleteAccount";
 import { ExperiencesSettings } from "@/components/ExperiencesSettings";
+import { FeaturesSettings } from "@/components/FeaturesSettings";
 import { MemoriesSettings } from "@/components/MemoriesSettings";
 import { OwnKeysSettings } from "@/components/OwnKeysSettings";
 import { ProducerProfileSettings } from "@/components/ProducerProfileSettings";
@@ -22,6 +23,7 @@ const PANELS: Record<Exclude<SettingsCategory, "memories" | "experiences" | "sta
   profile: <ProducerProfileSettings />,
   call: <CallSettings />,
   "reach-outs": <ReachOutsSettings />,
+  features: <FeaturesSettings />,
   appearance: <AppearanceSettings />,
   "own-keys": <OwnKeysSettings />,
   "sign-in": (

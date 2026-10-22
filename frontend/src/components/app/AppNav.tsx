@@ -7,6 +7,7 @@ import { useEffect, useState, useSyncExternalStore, type MouseEvent } from "reac
 import { opensNewTab, useDirectory } from "@/components/conversations/ConversationDirectory";
 import { Button } from "@/components/ui/button";
 import { copy } from "@/i18n";
+import type { Account } from "@/lib/api";
 import { hasUnseen } from "@/lib/conversationList";
 import { unreadDiary } from "@/lib/diary";
 import { unreadLetters } from "@/lib/letters";
@@ -87,7 +88,7 @@ export function NavDock({ isInert }: { isInert: boolean }) {
  */
 function NavLinks({ className }: { className: string }) {
   const pathname = usePathname();
-  const { guard, held, characters, latest, preferences, onScreen } = useDirectory();
+  const { guard, held, characters, latest, preferences, onScreen, account } = useDirectory();
   const current = currentNavItem(pathname);
   const unseen = characters !== null && hasUnseen(characters, latest, { preferences, onScreen });
   const unread = useSyncExternalStore(unreadLetters.subscribe, unreadLetters.snapshot, () => 0) > 0;
@@ -97,7 +98,9 @@ function NavLinks({ className }: { className: string }) {
     ...(unread ? { letters: copy.nav.lettersUnread } : {}),
     ...(unreadEntries ? { diary: copy.nav.diaryUnread } : {}),
   };
-  return NAV_ITEMS.map((item) => {
+  // 关掉了日记、来信的（GLOSSARY.md「玩法开关」）不显示那一项。
+  const shown = NAV_ITEMS.filter((item) => !hiddenBySwitch(item, account?.features));
+  return shown.map((item) => {
     const Icon = ICONS[item];
     const isCurrent = item === current;
     const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
@@ -136,6 +139,11 @@ function NavLinks({ className }: { className: string }) {
       </NextLink>
     );
   });
+}
+
+/** 用户自己关掉了的玩法，导航里不显示它那一项（GLOSSARY.md「玩法开关」）。 */
+export function hiddenBySwitch(item: NavItem, features: Account["features"] | undefined): boolean {
+  return (item === "diary" || item === "letters") && features?.[item] === false;
 }
 
 /** 手机上在打字（焦点在输入框里），大致就是键盘弹起来了。失去焦点那一刻焦点还没落下，等它落下再看。 */

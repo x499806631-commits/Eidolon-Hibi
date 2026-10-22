@@ -43,6 +43,12 @@ first time it would, affinity is held just below (`DOOR_GAP`) and her scene ther
 turns at the door after are of it (`Affinities.scene`, `scene_prompt`), and the last of
 `SCENE_TURNS` opens the door for good. There is no failing it: away from the door it waits.
 
+Promises (GLOSSARY.md「约定」) move it too, by how each ends up (`PROMISE_STEPS`): kept on
+time raises it a little, kept only after she complained less; put off ahead of its day, the
+first time, nothing; put off at the last minute or once more, called off, or broken lowers it,
+the later the more. Like gifts, no day's limit holds them; unlike turns, none of them begins a
+cooldown (`PROMISE_FLOOR`), and in one they change nothing.
+
 The judge model can be wrong: the user may say they did not mean it so (GLOSSARY.md
 「我不是这个意思」, `appeals`), a few times a day, and what that turn took off is given back
 (`Affinities.give_back`), and she is told of it as she replies next (`EXPLAINED`).
@@ -62,6 +68,7 @@ from zoneinfo import ZoneInfo
 
 from eidolon.clock import Clock
 from eidolon.database import connect
+from eidolon.features import AllOn, Switches
 from eidolon.gift_catalog import Rarity
 
 if TYPE_CHECKING:  # hearts know the tiers
@@ -134,6 +141,20 @@ and the rarest she likes raises it more than a day's turns can."""
 
 LIKED_GIFT_STEP = 3.0
 """How much more a gift she likes raises it, whatever its rarity."""
+
+PROMISE_STEPS: dict[str, float] = {
+    "kept": 2.0,
+    "kept_late": 1.0,
+    "put_off": 0.0,
+    "put_off_late": -1.0,
+    "called_off": -1.0,
+    "called_off_late": -2.0,
+    "broken": -3.0,
+}
+"""How much a promise changes it, by how it ends up (`promises.Settled`)."""
+
+PROMISE_FLOOR = THAW
+"""How low a promise alone can bring it: never into a cooldown."""
 
 COOLDOWN_GIFT_STEP = 3.0
 """How much a gift raises it at most while she is in a cooldown, whatever its rarity and
@@ -574,8 +595,13 @@ class Affinities:
     """Every user's affinity with every character, kept in the database at `path`, next to
     the users it belongs to."""
 
-    def __init__(self, path: Path, clock: Clock, is_on: Callable[[], bool]) -> None:
-        """`is_on` tells whether affinity is on now (the live configuration's)."""
+    def __init__(
+        self, path: Path, clock: Clock, is_on: Callable[[], bool], features: Switches = AllOn()
+    ) -> None:
+        """`is_on` tells whether affinity is on now (the live configuration's); `features`,
+        whether a user has her scenes on (GLOSSARY.md「玩法开关」): with them off, no door
+        holds her."""
+        self._features = features
         self._db = connect(path)
         self._lock = threading.Lock()
         self._clock = clock
@@ -762,6 +788,34 @@ class Affinities:
                 self._begin_scene(user_id, character_id, door, now)
         return recorded, Status(after.tier, after.cooldown_until)
 
+    def promise_settled(self, user_id: str, character_id: str, settled: str) -> Status | None:
+        """Change the user's affinity with the character as a promise to her ended up
+        (`PROMISE_STEPS`), now: never below `PROMISE_FLOOR`, never in a cooldown, no day's
+        limit; held at a closed door as anything is. Nothing is told of it: no change to show,
+        no listener. None while affinity is off, or where it changes nothing."""
+        step = PROMISE_STEPS.get(settled, 0.0)
+        if not self._is_on() or step == 0.0:
+            return None
+        with self._lock:
+            now = self._clock()
+            before = self._row(user_id, character_id, now)[0]
+            if before.cooling:
+                return None
+            value = before.value + step
+            if step < 0:
+                value = max(value, min(before.value, PROMISE_FLOOR))
+            after = Affinity(min(value, HIGHEST), now, False)
+            after, door = self._held(before, after, self._scene_rows(user_id, character_id))
+            with self._db:
+                self._db.execute(
+                    "INSERT INTO affinities (user_id, character_id, value, updated_at, cooling)"
+                    " VALUES (?, ?, ?, ?, 0) ON CONFLICT (user_id, character_id) DO UPDATE SET"
+                    " value = excluded.value, updated_at = excluded.updated_at",
+                    (user_id, character_id, after.value, now.isoformat()),
+                )
+                self._begin_scene(user_id, character_id, door, now)
+        return Status(after.tier, after.cooldown_until)
+
     def reset(self, user_id: str, character_ids: Iterable[str]) -> list[str]:
         """Bring each of the characters below trust with the user now, having recovered, back
         to the normal value, out of any cooldown, as a reset card does (GLOSSARY.md「重置卡」);
@@ -787,6 +841,13 @@ class Affinities:
             self._db.close()
 
     def _scene_rows(self, user_id: str, character_id: str) -> dict[Tier, tuple[int, bool]]:
+        """Her scenes as they count for the user: every one as though played through where they
+        have them off. Called holding the lock."""
+        if not self._features.on(user_id, "scenes"):  # as though every one were played through
+            return {tier: (0, True) for tier in SCENE_TIERS}
+        return self._kept_scenes(user_id, character_id)
+
+    def _kept_scenes(self, user_id: str, character_id: str) -> dict[Tier, tuple[int, bool]]:
         """Her scenes begun with the user: turns taken, and whether played through, by tier.
         Called holding the lock."""
         rows = self._db.execute(

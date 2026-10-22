@@ -5,7 +5,8 @@ zone without `day`), null if she has none for it; and what she is up to now
 the slot she is in and when it ends, `{"free": true}` between slots, either with `bedtime` near
 her bedtime; `{"asleep": true}` asleep, `woken` if the user and she were in touch within
 `engine.WOKEN_FOR`; in the bath (GLOSSARY.md「洗澡」), till they are in touch, `{"bath": true}`;
-null without a schedule today.
+null without a schedule today, or where the user has her schedule off (GLOSSARY.md「玩法开关」),
+and nothing of her sleep or her bath where they have that off.
 
 Under the development sign-in only (`EIDOLON_DEV_LOGIN=1`), `POST /api/schedules/write-now` has
 hers for today written at once, to try schedules out without waiting for the morning."""
@@ -28,7 +29,9 @@ class WriteNow(BaseModel):
 
 
 def add_schedule_routes(app: FastAPI, backend: Backend) -> None:
-    schedules, store, clock = backend.schedules, backend.store, backend.clock
+    schedules, store, clock, features = (
+        backend.schedules, backend.store, backend.clock, backend.features
+    )
 
     @app.get("/api/characters/{character_id}/schedule")
     def read_schedule(user_id: UserId, character_id: str, day: date | None = None) -> dict | None:
@@ -44,12 +47,18 @@ def add_schedule_routes(app: FastAPI, backend: Backend) -> None:
     def read_now(user_id: UserId, character_id: str) -> dict | None:
         if character_id not in backend.characters:
             raise HTTPException(404, "没有这位角色")
+        if not features.on(user_id, "schedules"):
+            return None
         zone = ZoneInfo(effective_timezone(store.get_profile(user_id), None))
         now = clock()
         local = now.astimezone(zone)
         found = schedules.of(user_id, character_id, local.date())
         yesterday = schedules.of(user_id, character_id, local.date() - timedelta(days=1))
         resting = rest(found, yesterday, local)
+        if (resting == "bath" and not features.on(user_id, "bath")) or (
+            resting in ("asleep", "bedtime") and not features.on(user_id, "sleep")
+        ):
+            resting = None
         if resting == "bath":
             began = bath_began(found, yesterday, local)
             contact = store.last_contact(user_id, character_id)

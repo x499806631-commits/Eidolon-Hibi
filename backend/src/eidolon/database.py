@@ -40,6 +40,7 @@ USER_DATA = [
     ("usage", "user_id = ?"),
     ("user_limits", "user_id = ?"),
     ("reach_outs_off", "user_id = ?"),
+    ("features_off", "user_id = ?"),
     ("letters", "user_id = ?"),
     ("letter_days", "user_id = ?"),
     ("promises", "user_id = ?"),

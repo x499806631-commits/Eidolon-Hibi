@@ -28,14 +28,14 @@ describe("路径和类别互转", () => {
 });
 
 describe("一级列表有哪几类", () => {
-  it("搭话放在通话和外观之间", () => {
-    expect(settingsGroups(false)[1]).toEqual(["call", "reach-outs", "appearance", "own-keys"]);
+  it("搭话放在通话和外观之间，玩法紧跟在搭话后面", () => {
+    expect(settingsGroups(false)[1]).toEqual(["call", "reach-outs", "features", "appearance", "own-keys"]);
   });
 
   it("账号里没有搭话（部署者没开）时没有这一类，别的照旧", () => {
     expect(settingsGroups(null)).toEqual([
       ["profile", "memories", "experiences", "stats"],
-      ["call", "appearance", "own-keys"],
+      ["call", "features", "appearance", "own-keys"],
       ["sign-in", "data-package"],
       ["about"],
     ]);
@@ -73,6 +73,7 @@ describe("一级列表上的摘要", () => {
     call: null,
     appearance: null,
     reachOuts: null,
+    features: null,
     ownServices: null,
     signInMethods: null,
   };
@@ -114,6 +115,13 @@ describe("一级列表上的摘要", () => {
   it("外观是 SCSP 头像开／关", () => {
     expect(settingsSummaries({ ...loading, appearance: { scspAvatars: true } }).appearance).toBe("SCSP 头像开");
     expect(settingsSummaries({ ...loading, appearance: { scspAvatars: false } }).appearance).toBe("SCSP 头像关");
+  });
+
+  it("玩法全开时写全部开着，关了几项写几项（GLOSSARY.md「玩法开关」）", () => {
+    expect(settingsSummaries({ ...loading, features: { diary: true, promises: true } }).features).toBe("全部开着");
+    expect(settingsSummaries({ ...loading, features: { diary: false, scenes: false, promises: true } }).features).toBe(
+      "关了 2 项",
+    );
   });
 
   it("搭话是开／关", () => {

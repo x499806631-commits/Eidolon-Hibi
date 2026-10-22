@@ -11,13 +11,14 @@ import { copy } from "@/i18n";
 import type { Appearance } from "@/lib/appearance";
 import type { CallPreferences } from "@/lib/callPreferences";
 import { OWN_SERVICES, type OwnService } from "@/lib/localOwnKeys";
+import type { Feature } from "@/lib/api";
 import { sameDraft, type Draft } from "@/lib/producerProfile";
 import { PROVIDER_LABELS, type Provider } from "@/lib/signIn";
 
 /** The first level's groups, top to bottom, with a separator between each two. */
 const SETTINGS_GROUPS = [
   ["profile", "memories", "experiences", "stats"],
-  ["call", "reach-outs", "appearance", "own-keys"],
+  ["call", "reach-outs", "features", "appearance", "own-keys"],
   ["sign-in", "data-package"],
   ["about"],
 ] as const;
@@ -87,6 +88,8 @@ export type SettingsValues = {
   appearance: Appearance | null;
   /** The user's own switch for reach-outs (null where the deployer has them off). */
   reachOuts: boolean | null;
+  /** The user's own switches for the fork's features the deployment has (GLOSSARY.md「玩法开关」). */
+  features: Partial<Record<Feature, boolean>> | null;
   /** The services this browser keeps the user's own key for. */
   ownServices: OwnService[] | null;
   signInMethods: Provider[] | null;
@@ -96,7 +99,7 @@ export type SettingsValues = {
  * or「关于」) shows its name alone. */
 export function settingsSummaries(values: SettingsValues): Partial<Record<SettingsCategory, string>> {
   const t = copy.settings.summaries;
-  const { profile, memoryCount, daysKnown, call, appearance, reachOuts, ownServices, signInMethods } = values;
+  const { profile, memoryCount, daysKnown, call, appearance, reachOuts, features, ownServices, signInMethods } = values;
   const summaries: Partial<Record<SettingsCategory, string>> = {};
   if (profile) {
     const { saved, draft } = profile;
@@ -110,6 +113,10 @@ export function settingsSummaries(values: SettingsValues): Partial<Record<Settin
   if (call) summaries.call = `${copy.settings.call.qualities[call.quality]} · ${call.phoneTexture ? t.phoneTextureOn : t.phoneTextureOff}`;
   if (appearance) summaries.appearance = appearance.scspAvatars ? t.scspAvatarsOn : t.scspAvatarsOff;
   if (reachOuts !== null) summaries["reach-outs"] = reachOuts ? t.reachOutsOn : t.reachOutsOff;
+  if (features) {
+    const off = Object.values(features).filter((on) => !on).length;
+    summaries.features = off === 0 ? t.featuresAllOn : t.featuresOff(off);
+  }
   if (ownServices) {
     const owned = OWN_SERVICES.filter((service) => ownServices.includes(service));
     summaries["own-keys"] =

@@ -23,6 +23,7 @@ from eidolon.activity import ActivityLog
 from eidolon.characters import Character
 from eidolon.clock import Clock
 from eidolon.engine import ConversationEngine
+from eidolon.features import AllOn, Switches
 from eidolon.live_config import LiveConfig
 from eidolon.producer import effective_timezone
 from eidolon.randomness import Random
@@ -60,7 +61,9 @@ class ScheduleWriter:
         clock: Clock,
         random: Random,
         enabled: bool,
+        features: Switches = AllOn(),
     ) -> None:
+        self._features = features
         self._schedules = schedules
         self._store = store
         self._engine = engine
@@ -117,6 +120,8 @@ class ScheduleWriter:
             if conversation.character_id not in self._characters or current.ended:
                 continue
             if not current.has_turns or contact is None or now - contact > WINDOW:
+                continue
+            if not self._features.on(conversation.user_id, "schedules"):  # GLOSSARY.md「玩法开关」
                 continue
             zone = ZoneInfo(effective_timezone(self._store.get_profile(conversation.user_id), None))
             local = now.astimezone(zone)

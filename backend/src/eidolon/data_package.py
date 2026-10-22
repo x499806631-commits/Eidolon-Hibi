@@ -79,11 +79,11 @@ from eidolon.store import (
     write_profile,
 )
 
-FORMAT = 5
+FORMAT = 6
 """The newest format this version reads, and the one it exports. Changing the format adds
 one to it, and keeps reading the older ones: 2 added her reach-outs (`reach_outs`), 3 the
 promises still standing (`promises`), 4 her own doings (`experiences`), 5 her diary
-(`diary`)."""
+(`diary`), 6 the first day of a promise for a stretch of days (`PackagedPromise.from_day`)."""
 
 REACH_OUTS_SINCE = 2
 """The format whose conversations first held her reach-outs: before it, none may."""
@@ -488,16 +488,22 @@ class PackagedPromise(_Strict):
     character_id: str
     text: Annotated[str, Field(min_length=1, max_length=MAX_TEXT)]
     due: str
-    """The day it is for, as `YYYY-MM-DD`."""
+    """The day it is for, as `YYYY-MM-DD`; for a stretch of days, the last."""
+    from_day: str | None = None
+    """For a stretch of days, the first, as `YYYY-MM-DD`; None for one day."""
 
     @classmethod
     def of(cls, promise: Promise) -> "PackagedPromise":
-        return cls(character_id=promise.character_id, text=promise.text, due=promise.due.isoformat())
+        return cls(
+            character_id=promise.character_id, text=promise.text, due=promise.due.isoformat(),
+            from_day=promise.starts.isoformat() if promise.starts else None,
+        )
 
     def new(self) -> NewPromise | None:
-        """The promise to write down again here; None where its day cannot be read."""
+        """The promise to write down again here; None where its days cannot be read."""
         try:
-            return NewPromise(self.text, date.fromisoformat(self.due))
+            starts = date.fromisoformat(self.from_day) if self.from_day else None
+            return NewPromise(self.text, date.fromisoformat(self.due), starts)
         except ValueError:
             return None
 

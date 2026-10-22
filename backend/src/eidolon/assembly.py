@@ -26,6 +26,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import httpx
 
@@ -47,6 +48,7 @@ from eidolon.config import DEFAULT_BAILIAN_STT_MODEL, Settings
 from eidolon.data_package import DataPackages
 from eidolon.embedding import EMBEDDING_TIMEOUT, Embedder, open_embedder
 from eidolon.engine import ConversationEngine
+from eidolon.features import Features
 from eidolon.identity import IdentityProvider, ProviderName, open_identity_providers
 from eidolon.image_generation import GENERATION_TIMEOUT
 from eidolon.live_config import LiveConfig, Reach
@@ -79,7 +81,7 @@ from eidolon.titles import Titles
 from eidolon.usage import UsageLimiter
 from eidolon.special_days import SpecialDays, load_special_days, special_days_path
 from eidolon.hearts import hearts_path, load_hearts, with_hearts
-from eidolon.promises import Promises
+from eidolon.promises import Promise, Promises, Settled
 from eidolon.experiences import Experiences
 from eidolon.weather import Weather
 from eidolon.web_search import WebSearch
@@ -146,6 +148,8 @@ class Backend:
     """Her schedule for each day (GLOSSARY.md「行程」)."""
     schedule_writer: ScheduleWriter
     """Has her schedule for each day written, ahead of the turns."""
+    features: Features
+    """Each user's own switches for the fork's features (GLOSSARY.md「玩法开关」)."""
     world: World | None = None
     """The world setting; None without its data file."""
     special_days: SpecialDays | None = None
@@ -326,7 +330,9 @@ def build(
     # each question, and each call judges her emotions on the one it connected with.
     retrieval_judge = config.retrieval_judge()
 
-    promises = Promises(settings.database_path, clock, random or secure_random)
+    features = Features(settings.database_path)
+    closers.append(features.close)
+    promises = Promises(settings.database_path, clock, random or secure_random, features)
     closers.append(promises.close)
 
     # 她自己的经历：按角色存，和关于制作人的记忆分开
@@ -382,7 +388,7 @@ def build(
     titles = Titles(store, characters, gift_catalog)
     closers.append(titles.aclose)  # likewise, so what it is naming can finish
 
-    affinities = Affinities(settings.database_path, clock, lambda: config.affinity_on)
+    affinities = Affinities(settings.database_path, clock, lambda: config.affinity_on, features)
     closers.append(affinities.close)
     unphotographed = [c.id for c in characters.values() if not c.photographed]
     if config.image_settings is not None and unphotographed:
@@ -413,7 +419,7 @@ def build(
         store, characters, gift_catalog, memories, titles, clock, retrieval,
         lambda: config.history_turns, world, affinities, config.affinity_judge(), photos,
         special_days, weather, promises, config.promise_judge(), web, config.search_judge(),
-        experiences, schedules=schedules,
+        experiences, schedules=schedules, features=features,
     )
     own_keys = OwnKeys(
         own_llm_service, config, activity, speech, exempting=lambda: config.exempting_keys,
@@ -436,22 +442,22 @@ def build(
     closers.append(gifts.close)
     reach_outs = ReachOuts(
         settings.database_path, store, engine, characters, config, affinities, activity, usage,
-        calls.in_call, clock, random or secure_random, special_days,
+        calls.in_call, clock, random or secure_random, special_days, features,
     )
     closers.append(reach_outs.close)
     letters = Letters(
         settings.database_path, store, engine, characters, config, affinities, activity,
-        clock, random or secure_random, settings.letters, special_days,
+        clock, random or secure_random, settings.letters, special_days, features,
     )
     closers.append(letters.close)
     diary = Diary(
         settings.database_path, store, engine, characters, config, affinities, activity,
-        clock, settings.diary, special_days,
+        clock, settings.diary, special_days, features,
     )
     closers.append(diary.close)
     schedule_writer = ScheduleWriter(
         schedules, store, engine, characters, config, activity, clock,
-        random or secure_random, settings.schedules,
+        random or secure_random, settings.schedules, features,
     )
     engine.on_recorded(diary.turn_recorded)
     affinities.on_scene_done(diary.scene_played)
@@ -459,6 +465,11 @@ def build(
     memories.on_moment(diary.moment)
     promises.on_kept(diary.promise_kept)
     promises.on_broken(diary.promise_broken)
+
+    def promise_settled(promise: Promise, settled: Settled, _: datetime) -> None:
+        affinities.promise_settled(promise.user_id, promise.character_id, settled)
+
+    promises.on_settled(promise_settled)
     config.on_change(gifts.notice)
     return Backend(
         settings=settings,
@@ -495,6 +506,7 @@ def build(
         appeals=Appeals(store, affinities, clock),
         diary=diary,
         schedules=schedules,
+        features=features,
         schedule_writer=schedule_writer,
         world=world,
         special_days=special_days,

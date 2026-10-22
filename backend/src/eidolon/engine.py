@@ -169,6 +169,7 @@ from eidolon.store import (
     timestamp,
 )
 from eidolon.titles import Titles
+from eidolon.features import AllOn, Feature, Switches
 from eidolon.schedules import Schedules, bath_began
 from eidolon.schedules import lines as schedule_lines
 from eidolon.schedules import rest as schedule_rest
@@ -632,11 +633,12 @@ in the tub, an adult who soaks, she answers first from there; in the bath otherw
 not answer (GLOSSARY.md「洗澡」)."""
 
 
-def habit_lines(character: Character) -> list[str]:
-    """Her daily habits, by her heart: when she sleeps and how she bathes (GLOSSARY.md「她的心」);
-    nothing without them."""
+def habit_lines(character: Character, sleep: bool = True, bath: bool = True) -> list[str]:
+    """Her daily habits, by her heart: when she sleeps and how she bathes (GLOSSARY.md「她的心」),
+    each if it is on; nothing without them."""
     heart = character.heart
-    habits = [h.rstrip("。") for h in (heart.sleep, heart.bath_habit) if h] if heart else []
+    kept = [(heart.sleep, sleep), (heart.bath_habit, bath)] if heart else []
+    habits = [h.rstrip("。") for h, on in kept if h and on]
     return [f"你的生活习惯：{'；'.join(habits)}。"] if habits else []
 
 
@@ -716,11 +718,13 @@ def _answering(record: Sequence[Recorded]) -> list[Message]:
 @dataclass(frozen=True)
 class _PromisesDue:
     """What she is told of the promises to her this time (`lines`): the one she asks about
-    (`ask`) and the one she complains of (`complain`), if any, marked once it is kept."""
+    (`ask`), the one she complains of (`complain`) and the one she reminds the producer of
+    (`remind`), if any, marked once it is kept."""
 
     lines: list[str]
     ask: Promise | None
     complain: Promise | None
+    remind: Promise | None = None
 
 
 class ConversationEngine:
@@ -747,6 +751,7 @@ class ConversationEngine:
         experiences: "Experiences | None" = None,
         random: Random = secure_random,
         schedules: "Schedules | None" = None,
+        features: Switches = AllOn(),
     ) -> None:
         """Without `retrieval`, turns carry no story or character facts and find no
         memories. Each turn reads only the conversation's latest turns, as many as
@@ -779,13 +784,18 @@ class ConversationEngine:
         self._experiences = experiences
         self._random = random
         self._schedules = schedules
+        self._features = features
         self._ended_listeners: list[Callable[[str, EndsFor], None]] = []
         self._recorded_listeners: list[Callable[[Conversation, Message, datetime, str], None]] = []
 
-    def _special_lines(self, character: Character, today: date) -> list[str]:
+    def _on(self, user_id: str, feature: Feature) -> bool:
+        """Whether the user has `feature` on (GLOSSARY.md「玩法开关」)."""
+        return self._features.on(user_id, feature)
+
+    def _special_lines(self, character: Character, today: date, user_id: str) -> list[str]:
         """What `today`, the producer's local date, is besides their birthday, as `character`
-        is told it (`special_days`)."""
-        if self._special_days is None:
+        is told it (`special_days`); nothing where the user has special days off."""
+        if self._special_days is None or not self._on(user_id, "special_days"):
             return []
         names = {c.id: c.name for c in self._characters.values()}
         return self._special_days.prompt_lines(character.id, names, today)
@@ -808,11 +818,14 @@ class ConversationEngine:
             letter for letter in self._store.letters(user_id, character.id, now)
             if datetime.fromisoformat(letter.created_at) >= since
         ]
-        weather = await self._weather.now() if self._weather is not None else None
+        weather = (
+            await self._weather.now()
+            if self._weather is not None and self._on(user_id, "weather") else None
+        )
         today = local_date(now, timezone)
         lines = [
-            *habit_lines(character),
-            *self._special_lines(character, today),
+            *habit_lines(character, self._on(user_id, "sleep"), self._on(user_id, "bath")),
+            *self._special_lines(character, today, user_id),
             *letter_lines(letters, timezone),
             *self._anniversary_lines(character, user_id, today, timezone),
             *promised,
@@ -822,24 +835,23 @@ class ConversationEngine:
         return list(dict.fromkeys(lines))
 
     def _judge_promise(
-        self, conversation: Conversation, history: Sequence[Message], text: str
+        self, conversation: Conversation, history: Sequence[Message], text: str, timezone: str
     ) -> None:
-        """Have the judge model say whether what the producer just said kept the promise she
-        asked about, and take it away if it did (`promise_judge`): after the turn, so the reply
-        never waits for it. Nothing where she asked about none lately, or where there is no
-        judge model to ask."""
+        """Have the judge model say whether what the producer just said kept each promise of
+        these days (`Promises.awaiting`), and take away those it did (`promise_judge`): after
+        the turn, so the reply never waits for it, each in a request of its own. Nothing where
+        there is none, or no judge model to ask."""
         promises, judge = self._promises, self._promise_judge
         if promises is None or judge is None:
             return
-        awaited = promises.awaiting(
-            conversation.user_id, conversation.character_id, self._clock()
-        )
-        if awaited is None:
-            return
-        asyncio.create_task(
-            self._kept(conversation, self._characters[conversation.character_id], history, text, awaited),
-            context=detached(),  # after the turn, not part of it (see `activity`)
-        )
+        character = self._characters[conversation.character_id]
+        for awaited in promises.awaiting(
+            conversation.user_id, conversation.character_id, self._clock(), timezone
+        ):
+            asyncio.create_task(
+                self._kept(conversation, character, history, text, awaited),
+                context=detached(),  # after the turn, not part of it (see `activity`)
+            )
 
     async def _kept(
         self,
@@ -879,15 +891,18 @@ class ConversationEngine:
         """What she is told of her schedule for the day it is now (GLOSSARY.md「行程」), read
         only: where she is now, or, asleep, that the user woke her, unless they have been in
         touch within `WOKEN_FOR` (`last_contact`) or are on the phone (`in_call`); in the
-        bath, if she is for this (`in_bath`, `_in_bath`), that she is; nothing without one."""
-        if self._schedules is None:
+        bath, if she is for this (`in_bath`, `_in_bath`), that she is; nothing without one, or
+        where the user has her schedule off; nothing of her sleep where they have it off."""
+        if self._schedules is None or not self._on(user_id, "schedules"):
             return []
         local = now.astimezone(ZoneInfo(timezone))
         today = self._schedules.of(user_id, character.id, local.date())
         yesterday = self._schedules.of(user_id, character.id, local.date() - timedelta(days=1))
         woken = last_contact is None or now - last_contact > WOKEN_FOR
         resting = schedule_rest(today, yesterday, local)
-        if resting == "bath" and not in_bath:
+        if (resting == "bath" and not in_bath) or (
+            resting in ("asleep", "bedtime") and not self._on(user_id, "sleep")
+        ):
             resting = None
         return schedule_lines(today, local, self._names(), resting, woken, in_call)
 
@@ -905,7 +920,7 @@ class ConversationEngine:
         since it began (`last_contact`): the first message she reads as she comes out."""
         if in_call is not None:
             return in_call.bath
-        if self._schedules is None:
+        if self._schedules is None or not self._on(user_id, "bath"):
             return False
         local = now.astimezone(ZoneInfo(timezone))
         began = bath_began(
@@ -919,7 +934,7 @@ class ConversationEngine:
         """How a call now finds her by her schedule (`Phone`; GLOSSARY.md「行程」「洗澡」); None
         as any other time. Out of the bath once they have been in touch since it began. Only
         an adult who soaks, by her heart, answers in the bath; an idol without a heart is not
-        known to be one."""
+        known to be one. Nothing of what the user has off (GLOSSARY.md「玩法开关」)."""
         if self._schedules is None:
             return None
         profile = self._store.get_profile(conversation.user_id)
@@ -929,8 +944,8 @@ class ConversationEngine:
         yesterday = self._schedules.of(user_id, character_id, local.date() - timedelta(days=1))
         resting = schedule_rest(today, yesterday, local)
         if resting == "asleep":
-            return "asleep"
-        if resting != "bath":
+            return "asleep" if self._on(user_id, "sleep") else None
+        if resting != "bath" or not self._on(user_id, "bath"):
             return None
         began = bath_began(today, yesterday, local)
         contact = self._store.last_contact(user_id, character_id)
@@ -940,8 +955,9 @@ class ConversationEngine:
         return "in_the_tub" if heart is not None and heart.adult and heart.bath == "tub" else "away"
 
     def bath_ends(self, conversation: Conversation) -> datetime | None:
-        """When her bath under way now ends (GLOSSARY.md「洗澡」); None if she is in none."""
-        if self._schedules is None:
+        """When her bath under way now ends (GLOSSARY.md「洗澡」); None if she is in none, or the
+        user has her bath off."""
+        if self._schedules is None or not self._on(conversation.user_id, "bath"):
             return None
         profile = self._store.get_profile(conversation.user_id)
         local = self._clock().astimezone(ZoneInfo(effective_timezone(profile, None)))
@@ -983,7 +999,7 @@ class ConversationEngine:
         character = self._characters[conversation.character_id]
         user_id = conversation.user_id
         told: list[str] = [f"今天是 {day.isoformat()}，星期{'一二三四五六日'[day.weekday()]}。"]
-        told += self._special_lines(character, day)
+        told += self._special_lines(character, day, user_id)
         if self._world is not None:
             for live, days in self._world.lives_of(character.name):
                 told += [
@@ -999,7 +1015,10 @@ class ConversationEngine:
         if yesterday:
             told.append(f"你昨天的安排：{yesterday}")
         reference = []
-        weather = await self._weather.now() if self._weather is not None else None
+        weather = (
+            await self._weather.now()
+            if self._weather is not None and self._on(user_id, "weather") else None
+        )
         if weather:
             reference.append(weather)
         if self._experiences is not None:
@@ -1030,7 +1049,9 @@ class ConversationEngine:
         self, character: Character, user_id: str, today: date, timezone: str
     ) -> list[str]:
         """What `today` is of how long the producer and `character` have known each other, as
-        she is told it (`anniversaries`)."""
+        she is told it (`anniversaries`); nothing where the user has anniversaries off."""
+        if not self._on(user_id, "anniversaries"):
+            return []
         first = self._store.first_records(user_id).get(character.id)
         if first is None:
             return []
@@ -1041,11 +1062,12 @@ class ConversationEngine:
     ) -> "_PromisesDue":
         """What she is told of the promises to her (`promises`): the one today is for, which
         she asks about once its minute has come, and the one she complains of for a day gone
-        by without it being kept — both in her own words, once a day. Nothing is marked here:
+        by without it being kept — both in her own words, once a day; and the one whose first
+        day is tomorrow, which she reminds the producer of, once. Nothing is marked here:
         `_promises_told` marks them once what she said is kept, so a turn that fails or a
         reach-out not sent uses up neither. Letters are told of none."""
         if self._promises is None:
-            return _PromisesDue([], None, None)
+            return _PromisesDue([], None, None, None)
         self._promises.sweep(now)
         if self._experiences is not None:
             # 她自己的经历：三十天没被想起的，这时候忘掉（和约定一样顺手做）
@@ -1063,7 +1085,13 @@ class ConversationEngine:
                 f"制作人答应过「{late.text}」，那天已经过去了，制作人没有做到。按你的性格为这件事"
                 "说一句不满或失望，这一次说完就过，不要一直提。"
             )
-        return _PromisesDue(lines, today, late)
+        tomorrow = self._promises.to_remind(user_id, character.id, now, timezone)
+        if tomorrow is not None:
+            lines.append(
+                f"制作人答应过「{tomorrow.text}」，明天就是那天了。合适的时候可以顺口提一句，"
+                "让他别忘了；不要每句都提。"
+            )
+        return _PromisesDue(lines, today, late, tomorrow)
 
     def _promises_told(self, due: "_PromisesDue", now: datetime, timezone: str) -> None:
         """What she was told of the promises (`_promises_due`) is in what was kept: she has
@@ -1074,6 +1102,8 @@ class ConversationEngine:
             self._promises.asked(due.ask.id, now)
         if due.complain is not None:
             self._promises.complained(due.complain.id, now, timezone)
+        if due.remind is not None:
+            self._promises.reminded(due.remind.id, now, timezone)
 
     def on_recorded(
         self, listener: Callable[[Conversation, Message, datetime, str], None]
@@ -1373,6 +1403,12 @@ class ConversationEngine:
             photo.recorded = True
             self._photos.recorded(photo.id)
         self._promises_told(promises_due, now, timezone)
+        if self._promises is not None:
+            # 说好来找她、给她打电话的约定：这一回合（通话里就是打了电话）就算做到了
+            self._promises.by_action(
+                conversation.user_id, conversation.character_id, in_call is not None, now,
+                timezone,
+            )
         for recorded in self._recorded_listeners:
             try:
                 recorded(conversation, reply, now, timezone)
@@ -1380,7 +1416,7 @@ class ConversationEngine:
                 log.exception("telling of a turn recorded in %s failed", conversation.id)
         if not opening:
             memory.write_down(history, text, reply, retrieved.query_vector, found)
-            self._judge_promise(conversation, history, text)
+            self._judge_promise(conversation, history, text, timezone)
         turn = sum(m.role == "user" for m in messages) + 1
         self._titles.after_turn(conversation, turn, llms.background, llms.hold_background)
         ended = self._store.ended(conversation.id) if ends_conversation else None

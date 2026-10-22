@@ -57,6 +57,7 @@ from eidolon.affinity import Affinities, Tier
 from eidolon.characters import Character
 from eidolon.clock import Clock
 from eidolon.database import connect
+from eidolon.features import AllOn, Switches
 from eidolon.engine import ConversationEngine
 from eidolon.live_config import LiveConfig
 from eidolon.producer import ProducerProfile, effective_timezone, is_birthday
@@ -153,7 +154,9 @@ class ReachOuts:
         clock: Clock,
         random: Random,
         special_days: SpecialDays | None = None,
+        features: Switches = AllOn(),
     ) -> None:
+        self._features = features
         self._store = store
         self._engine = engine
         self._characters = characters
@@ -301,6 +304,8 @@ class ReachOuts:
         """When in the morning she comes on the producer's today, if it is a special day for
         her and they have not been in touch yet today; None if not, or if it is night now."""
         if _at_night(now, zone):
+            return None
+        if not self._features.on(conversation.user_id, "special_days"):  # GLOSSARY.md「玩法开关」
             return None
         today = now.astimezone(zone).date()
         if contact >= datetime.combine(today, time(), zone):

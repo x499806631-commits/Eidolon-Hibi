@@ -40,6 +40,7 @@ from eidolon.affinity import Affinities, Tier
 from eidolon.characters import Character
 from eidolon.clock import Clock
 from eidolon.database import connect
+from eidolon.features import AllOn, Switches
 from eidolon.engine import ConversationEngine
 from eidolon.live_config import LiveConfig
 from eidolon.producer import ProducerProfile, effective_timezone, is_birthday
@@ -147,7 +148,9 @@ class Letters:
         random: Random,
         enabled: bool,
         special_days: SpecialDays | None = None,
+        features: Switches = AllOn(),
     ) -> None:
+        self._features = features
         self._store = store
         self._engine = engine
         self._characters = characters
@@ -217,6 +220,8 @@ class Letters:
         if conversation.character_id not in self._characters or current.ended:
             return []
         if not current.has_turns or contact is None or now - contact > WINDOW:
+            return []
+        if not self._features.on(conversation.user_id, "letters"):  # GLOSSARY.md「玩法开关」
             return []
         tier = self._tier(conversation)
         if tier is None:

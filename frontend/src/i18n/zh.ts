@@ -605,6 +605,7 @@ export const zh = {
       stats: "统计",
       call: "通话",
       "reach-outs": "搭话",
+      features: "玩法",
       appearance: "外观",
       "own-keys": "自带密钥",
       "sign-in": "登录与数据",
@@ -624,6 +625,8 @@ export const zh = {
       scspAvatarsOff: "SCSP 头像关",
       reachOutsOn: "开",
       reachOutsOff: "关",
+      featuresAllOn: "全部开着",
+      featuresOff: (count: number) => `关了 ${count} 项`,
       ownKeysNone: "全部用部署者的服务",
       ownKeys: (services: string) => `已填 ${services}`,
     },
@@ -724,6 +727,23 @@ export const zh = {
     },
     reachOuts: {
       on: "她们会主动搭话",
+    },
+    /** 玩法开关（GLOSSARY.md「玩法开关」）：每一项的名字和关掉以后会怎样。只影响自己，所有偶像一起。 */
+    features: {
+      intro: "不喜欢的玩法可以关掉。只影响你自己，所有偶像一起生效。",
+      within: "跟着「行程」一起关着",
+      items: {
+        scenes: { label: "重要的一幕", hint: "好感度走到「亲近」「亲密」门口时，先停下来和她好好聊一次。关掉后直接跨过去。" },
+        diary: { label: "偶像日记", hint: "她会把重要的日子写进日记。关掉后不再写，导航里也不显示日记。" },
+        letters: { label: "偶像来信", hint: "她会偶尔、在生日和节日给你写信。关掉后不再来信，导航里也不显示信箱。" },
+        schedules: { label: "行程", hint: "她每天有大概的安排，名字下面写着她在干嘛。作息和洗澡都在行程里，关掉会一起关。" },
+        sleep: { label: "作息", hint: "她夜里会睡着，被吵醒时迷迷糊糊的。关掉后她随时都醒着。" },
+        bath: { label: "洗澡", hint: "她睡前会洗澡，洗完才回消息，有时不接电话。关掉后随时都能接。" },
+        anniversaries: { label: "纪念日", hint: "认识第 100 天、每满一年时，她会提起。" },
+        special_days: { label: "节日和生日", hint: "她会提起今天是什么日子，当天早上还会先来找你。" },
+        promises: { label: "约定", hint: "她会记住你答应的事，到了那天会问起。" },
+        weather: { label: "天气", hint: "她知道你那边的天气。" },
+      },
     },
     appearance: {
       scspAvatars: "SCSP 头像",
