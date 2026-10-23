@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { Outfit } from "@/lib/api";
 import type { StandDirection } from "@/lib/standAnimations";
+import { isPestering, type TouchPart } from "@/lib/standTouch";
 import { cn } from "@/lib/utils";
 
 import { loadSpineRuntime } from "./spineRuntime";
@@ -27,6 +28,11 @@ type Props = {
   maxPixelRatio?: number;
   /** 静帧：只画一帧就停（落地页的「减少动态效果」档）。挂载时定下，之后不变。 */
   isStill?: boolean;
+  /**
+   * 能摸她（FORK.md「立绘触摸」）：点在头、脸颊、手、肩膀上她马上有反应，再告诉用的地方点了哪儿、
+   * 是不是一直在戳她。不给就点不到，同原来一样。
+   */
+  onTouch?: (part: TouchPart, pestered: boolean) => void;
 };
 
 /**
@@ -46,7 +52,9 @@ export function Stand({
   onTried,
   maxPixelRatio,
   isStill = false,
+  onTouch,
 }: Props) {
+  const taps = useRef<number[]>([]);
   // 按衣装的值而不是数组来载入：角色列表或衣装清单重新拉取时，同样的衣装不会让立绘重新载入。
   const wanted = JSON.stringify(outfits.map(({ id, url }) => ({ id, url })));
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -132,11 +140,35 @@ export function Stand({
   const shown = phase === "shown";
   // 画布铺满外框。到了之后 0.3 秒淡入（spec「通话层」）；手机上同时从下方 12% 处升起，
   // 曲线和时长与通话层的滑动一样（410ms、ease-call）。
+  const partAt = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return engine.current?.touchedAt(e.clientX - rect.left, e.clientY - rect.top) ?? null;
+  };
   return (
     <canvas
       ref={canvas}
       aria-hidden
+      onPointerDown={
+        onTouch &&
+        ((e) => {
+          const part = partAt(e);
+          if (!part) return;
+          const now = Date.now();
+          taps.current = [...taps.current.filter((t) => now - t < 10_000), now];
+          const pestered = isPestering(taps.current, now);
+          if (pestered) taps.current = [];
+          engine.current?.react(part, pestered);
+          onTouch(part, pestered);
+        })
+      }
+      onPointerMove={
+        onTouch &&
+        ((e) => {
+          e.currentTarget.style.cursor = partAt(e) ? "pointer" : "";
+        })
+      }
       className={cn(
+        onTouch && shown && "pointer-events-auto touch-manipulation",
         "block size-full [transition:opacity_300ms_linear,translate_410ms_cubic-bezier(0.24,1,0.4,1)]",
         shown ? "opacity-100" : "opacity-0",
         entrance === "rise" && !shown ? "translate-y-[12%]" : "translate-y-0",

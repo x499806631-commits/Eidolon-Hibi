@@ -114,8 +114,13 @@ export type Slot = {
   setAttachment(attachment: Attachment | null): void;
 };
 
+/** 一根骨骼：名字和这一帧在世界坐标里的位置。 */
+export type Bone = { data: { name: string }; worldX: number; worldY: number };
+
 export type Skeleton = {
   slots: Slot[];
+  bones: Bone[];
+  findBone(name: string): Bone | null;
   drawOrder: Slot[];
   setSkinByName(name: string): void;
   setToSetupPose(): void;

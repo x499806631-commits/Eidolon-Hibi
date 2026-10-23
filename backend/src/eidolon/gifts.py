@@ -93,6 +93,14 @@ CREATE TABLE IF NOT EXISTS gifts_opened (
     opened_at TEXT
 );
 -- How many of each gift each user has; a row of none is as good as no row.
+-- This fork: one row per user, character and day (`affinity.day_of`) she was given a gift:
+-- each character takes one gift a day (GLOSSARY.md「礼物」).
+CREATE TABLE IF NOT EXISTS gift_days (
+    user_id TEXT NOT NULL REFERENCES users(id),
+    character_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    PRIMARY KEY (user_id, character_id, day)
+);
 CREATE TABLE IF NOT EXISTS gift_backpacks (
     user_id TEXT NOT NULL REFERENCES users(id),
     gift_id TEXT NOT NULL,
@@ -149,6 +157,17 @@ class NoneLeft(Exception):
 
     def __init__(self) -> None:
         super().__init__("已经没有了")
+
+
+ONE_A_DAY = True
+"""This fork: each character takes one gift a day from the user (GLOSSARY.md「礼物」)."""
+
+
+class GivenToday(Exception):
+    """She has had a gift from the user today already (this fork: one a day each)."""
+
+    def __init__(self) -> None:
+        super().__init__("今天已经送过她礼物了，明天再送吧")
 
 
 class NoResetCards(Exception):
@@ -418,7 +437,14 @@ class Gifts:
         her affinity, and recorded where `store.add_gift` places it, all or none of it, so
         two giving the last one at once give it once. Gifts are to be open
         (`refuse_unless_open`), and the gift and the character to be there
-        (`refuse_unknown`). Raises NoneLeft if the user has none of it."""
+        (`refuse_unknown`). Raises NoneLeft if the user has none of it, GivenToday if she
+        has had one from them today."""
+        today = day_of(self._clock()).isoformat()
+        if ONE_A_DAY and db.execute(
+            "INSERT OR IGNORE INTO gift_days (user_id, character_id, day) VALUES (?, ?, ?)",
+            (user_id, character_id, today),
+        ).rowcount == 0:
+            raise GivenToday()
         taken = db.execute(
             "UPDATE gift_backpacks SET count = count - 1"
             " WHERE user_id = ? AND gift_id = ? AND count > 0 RETURNING count",

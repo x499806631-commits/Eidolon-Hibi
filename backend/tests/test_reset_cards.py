@@ -127,7 +127,7 @@ async def test_with_no_one_below_trust_as_it_is_used_it_is_refused_and_the_card_
     keep(settings.database_path, "producer", 35, clock.now)
     assert [c["id"] for c in (await state(client))["resettable"]] == ["mano"]
 
-    clock.advance(hours=12)  # she recovers into trust as the confirmation is open
+    keep(settings.database_path, "producer", 41, clock.now)  # back in trust as the confirmation is open
     res = await client.post(USE)
 
     assert res.status_code == 409

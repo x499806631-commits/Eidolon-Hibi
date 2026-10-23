@@ -70,24 +70,23 @@ async def test_with_no_turns_yet_she_trusts_the_producer(make_client: ClientFact
     assert res.json() == {"tier": "trust", "cooldown_until": None}
 
 
-async def test_below_the_normal_value_it_recovers_as_time_goes_by_up_to_it(
+async def test_cold_it_recovers_as_time_goes_by_up_to_distant_and_no_further(
     make_client: ClientFactory, settings: Settings
 ):
+    """This fork (GLOSSARY.md「好感度」): cold comes back to distant on its own, no further."""
     clock = FakeClock()
     client = make_client(FakeLLM(), clock=clock)
-    keep(settings.database_path, "producer", 15, START)
+    keep(settings.database_path, "producer", 5, START)
 
     tiers = [(await status(client)).json()["tier"]]
-    clock.advance(hours=12)  # 20
+    clock.advance(hours=35)  # 19.6
     tiers.append((await status(client)).json()["tier"])
-    clock.advance(days=1.99)  # 39.9
+    clock.advance(hours=1)  # 20
     tiers.append((await status(client)).json()["tier"])
-    clock.advance(hours=1)  # 40.3
-    tiers.append((await status(client)).json()["tier"])
-    clock.advance(days=20)  # 50, no higher
+    clock.advance(days=20)  # 20, no higher
     tiers.append((await status(client)).json()["tier"])
 
-    assert tiers == ["cold", "distant", "distant", "trust", "trust"]
+    assert tiers == ["cold", "cold", "distant", "distant"]
 
 
 async def test_above_the_normal_value_it_never_falls_back(

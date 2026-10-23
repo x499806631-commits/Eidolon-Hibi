@@ -90,13 +90,21 @@ BELOW_TRUST: frozenset[Tier] = frozenset(
 """The tiers a reset card brings back from: distant and cold, in a cooldown or not."""
 
 NORMAL = 50.0
-"""Where everyone starts, in trust, and what it recovers to."""
+"""Where everyone starts, in trust, and what a reset card brings back to."""
 
 THAW = 10.0
 """Where a cooldown ends as it recovers: still cold."""
 
 RECOVERY_PER_DAY = 10.0
-"""How much it recovers a day below the normal value, evenly."""
+"""How much it recovers a day below `RECOVERS_TO`, evenly."""
+
+COLD_KEEPS_AWAY = True
+"""This fork: cold, she takes no calls, is not run into and goes on no days out
+(`Affinities.too_cold`); in a cooldown she never does."""
+
+RECOVERS_TO = 20.0
+"""What it recovers to on its own (this fork: cold only back to distant, GLOSSARY.md「隔阂」);
+above it, only what the user does brings it back."""
 
 LOWEST, HIGHEST = 0.0, 100.0
 """What it is held between; falling to the lowest begins a cooldown."""
@@ -263,9 +271,9 @@ class Affinity:
         """As it is at `now`, having recovered since `at`: a cooldown it has recovered out
         of is over."""
         value = self.value
-        if value < NORMAL:
+        if value < RECOVERS_TO:
             days = max((now - self.at).total_seconds(), 0) / 86400
-            value = min(NORMAL, value + RECOVERY_PER_DAY * days)
+            value = min(RECOVERS_TO, value + RECOVERY_PER_DAY * days)
         return Affinity(value, now, self.cooling and value < THAW)
 
     def stepped(self, step: float) -> "Affinity":
@@ -661,6 +669,12 @@ class Affinities:
         order given, on or off: whoever shows them is to show them only while affinity is
         on."""
         return await self._db.read(self._tiers, user_id, character_ids)
+
+    async def too_cold(self, user_id: str, character_id: str) -> bool:
+        """Whether she is cold with the user or in a cooldown (this fork, GLOSSARY.md「好感度」):
+        no calls, no running into her, no days out. False while affinity is off."""
+        status = await self.status(user_id, character_id)
+        return status is not None and (status.cooling or (COLD_KEEPS_AWAY and status.tier == "cold"))
 
     async def cooldown_until(self, user_id: str, character_id: str) -> datetime | None:
         """When the cooldown the character is in with the user ends; None if she is in none,

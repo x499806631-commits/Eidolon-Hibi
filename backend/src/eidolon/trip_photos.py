@@ -579,6 +579,8 @@ class TripPhotos:
         today = self._clock().astimezone(zone).date()
         if not 1 <= (day - today).days <= MAX_DAYS_AHEAD:
             raise DateTaken("只能约明天到一周以内")
+        if await self._affinities.too_cold(user_id, character_id):
+            raise DateTaken("她现在对你很冷淡，不想和你约会")
         spot = spot_of(what)
         if spot is not None and await self._dates.spot_taken(user_id, character_id, day, spot):
             raise DateTaken("那天那个地方已经约了别人")
@@ -623,6 +625,10 @@ class TripPhotos:
         if self._played is not None and self._closes is not None:
             # 约会要当面去（GLOSSARY.md「约会」）：去过的不再讲；到了截止时间还没去，她说他没来
             if await self._played(user_id, character_id, day):
+                await self._dates.told(user_id, character_id, day)
+                return
+            if await self._affinities.too_cold(user_id, character_id):
+                # 冷淡下来了（GLOSSARY.md「好感度」）：她不去等，约会悄悄作罢，也不算失约
                 await self._dates.told(user_id, character_id, day)
                 return
             zone = await self._zone(user_id)

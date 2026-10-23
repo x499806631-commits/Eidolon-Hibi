@@ -21,6 +21,7 @@ from eidolon.assembly import Backend
 from eidolon.gifts import (
     GiftsClosed,
     NoDraws,
+    GivenToday,
     NoneLeft,
     NoOneToReset,
     NoResetCards,
@@ -48,6 +49,7 @@ def add_gift_routes(app: FastAPI, backend: Backend) -> None:
 
     @app.exception_handler(NoDraws)
     @app.exception_handler(NoneLeft)
+    @app.exception_handler(GivenToday)
     @app.exception_handler(NoResetCards)
     @app.exception_handler(NoOneToReset)
     async def none_to_use(_: Request, e: Exception) -> JSONResponse:

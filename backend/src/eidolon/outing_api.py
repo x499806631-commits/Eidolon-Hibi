@@ -29,6 +29,7 @@ from eidolon.outing import (
     NoSuchOuting,
     NotYet,
     OutingOver,
+    TooColdToMeet,
     TooLate,
 )
 from eidolon.map_api import place_now
@@ -70,6 +71,7 @@ def add_outing_routes(app: FastAPI, backend: Backend) -> None:
     @app.exception_handler(OutingOver)
     @app.exception_handler(NoMorePhotos)
     @app.exception_handler(CannotDraw)
+    @app.exception_handler(TooColdToMeet)
     async def refused(_: Request, e: Exception) -> JSONResponse:
         return JSONResponse({"detail": str(e)}, status_code=409)
 

@@ -26,6 +26,7 @@ import {
   type OutingToday,
 } from "@/lib/outing";
 import { CALM, type StandDirection } from "@/lib/standAnimations";
+import { PESTER_ACTION, TOUCH_ACTIONS, type TouchPart } from "@/lib/standTouch";
 
 import { cn } from "@/lib/utils";
 import {
@@ -45,6 +46,8 @@ const t = copy.outing;
 /** 一段台词至少说多久（毫秒），长的按字数加。 */
 const LINE_MS = 1400;
 const PER_CHAR_MS = 120;
+/** 摸她以后多久里再摸只有反应，不再发给她（毫秒）。 */
+const TOUCH_SEND_MS = 4000;
 
 /**
  * 约会的画面（GLOSSARY.md「约会」）：盖住她的对话页。背景是这一站（画好的图，没有就用代码画的插画），
@@ -162,6 +165,16 @@ export function OutingLayer({
     void talk.send(text);
   };
 
+  // 摸摸她（FORK.md「立绘触摸」）：她马上有反应；当面的，也算一个动作发给她，她用台词回应。
+  // 她还在回上一句、或者刚发过一次，就只有反应，不再发。
+  const lastTouchSent = useRef(0);
+  const touched = (part: TouchPart, pestered: boolean) => {
+    const now = Date.now();
+    if (busy || now - lastTouchSent.current < TOUCH_SEND_MS) return;
+    lastTouchSent.current = now;
+    void talk.send(actionText(pestered ? PESTER_ACTION : TOUCH_ACTIONS[part]));
+  };
+
   const isEncounter = outing?.kind === "encounter";
   const isLast = outing ? outing.stop >= outing.stops.length - 1 : false;
   const time = timeOfDay(now);
@@ -194,6 +207,7 @@ export function OutingLayer({
             entrance={isFullScreen && !isReducedMotion ? "rise" : "fade"}
             direction={direction}
             isReducedMotion={isReducedMotion}
+            onTouch={outing.ended_at === null ? touched : undefined}
           />
         </div>
       )}
@@ -248,7 +262,7 @@ export function OutingLayer({
         </Button>
       </header>
 
-      <div className="relative flex-1" />
+      <div className="pointer-events-none relative flex-1" />
 
       <div className="relative flex flex-col gap-2 px-3 pb-3">
         {(failure ?? talk.failure) && <FailureNotice failure={(failure ?? talk.failure)!} />}

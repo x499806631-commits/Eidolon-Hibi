@@ -1,9 +1,11 @@
 import type { Outfit } from "@/lib/api";
 import { CALM, pickAnimations, type Emotion, type StandDirection } from "@/lib/standAnimations";
 import { FrameGate, MAX_PIXEL_RATIO, pixelRatio } from "@/lib/standFrames";
+import { partAt, reactionTo, type Body, type TouchPart } from "@/lib/standTouch";
 
 import type {
   AnimationState,
+  Bone,
   AssetManager,
   ClippingAttachment,
   SceneRenderer,
@@ -29,8 +31,14 @@ const MIN_WIDTH = 0.7;
 /** 头顶上方留的空（全身时四周留的空），占身体高度的比例。 */
 const HEADROOM = 0.03;
 
-/** 轨道照原作 ADV：0 身体、1 表情、2 点头、3 视线、5 口型（4 脸红暂不使用）。 */
-const TRACK = { body: 0, face: 1, nod: 2, eye: 3, mouth: 5 } as const;
+/** 轨道照原作 ADV：0 身体、1 表情、2 点头、3 视线、4 脸红（只有被摸时用）、5 口型。 */
+const TRACK = { body: 0, face: 1, nod: 2, eye: 3, blush: 4, mouth: 5 } as const;
+/** 被摸以后的表情和脸红留多久（毫秒），之后回到立绘指令要的样子。 */
+const TOUCH_FACE_MS = 2600;
+/** 头的半径占整个人高度的比例（找不到头的骨骼时按这个从头顶往下估）。 */
+const HEAD_RADIUS = 0.08;
+/** 当成头的骨骼，按这个顺序找；都没有就找名字里带 head 的。 */
+const HEAD_BONES = ["head2", "head", "face_control", "face"];
 /** 同一条轨道上换动画时的混合时间（秒）。 */
 const MIX_SECONDS = 0.3;
 /** 开嘴、闭嘴的混合时间（秒）。 */
@@ -102,6 +110,9 @@ export class StandEngine {
   private wanted: string | null = null;
   /** 正在下载的衣装，按素材目录。 */
   private readonly fetching = new Map<string, Promise<void>>();
+  /** 上一帧的镜头：中心和看到的宽高（世界坐标），摸的时候据此把点换算到她身上。 */
+  private view: { x: number; y: number; width: number; height: number } | null = null;
+  private touchTimer = 0;
 
   /**
    * 在 `canvas` 上准备好绘制；浏览器不支持 WebGL 时抛出 `StandUnavailable`。
@@ -289,11 +300,76 @@ export class StandEngine {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    clearTimeout(this.touchTimer);
     this.stop();
     this.listeners.abort();
     this.pose = null;
     this.assets.dispose();
     this.renderer.dispose();
+  }
+
+  /**
+   * 点在画布上 (`x`, `y`)（CSS 像素，相对画布左上角）碰到了她的哪儿（FORK.md「立绘触摸」）；
+   * 还没画出来、没碰到她时是 null。
+   */
+  touchedAt(x: number, y: number): TouchPart | null {
+    const pose = this.pose;
+    const view = this.view;
+    const { clientWidth, clientHeight } = this.canvas;
+    if (!pose || !view || !clientWidth || !clientHeight) return null;
+    const at = {
+      x: view.x + (x / clientWidth - 0.5) * view.width,
+      y: view.y + (0.5 - y / clientHeight) * view.height,
+    };
+    return partAt(at, this.bodyOf(pose));
+  }
+
+  /** 她身上能摸的几处，这一帧在哪儿。 */
+  private bodyOf({ skeleton, bounds }: Pose): Body {
+    const radius = bounds.height * HEAD_RADIUS;
+    const top = bounds.y + bounds.height;
+    const named = (bone: Bone) => bone.data.name.toLowerCase();
+    const headBone =
+      HEAD_BONES.map((name) => skeleton.findBone(name)).find((b): b is Bone => b !== null) ??
+      skeleton.bones.find((b) => named(b).includes("head")) ??
+      null;
+    // 头的骨骼多在脖子上，只取它的左右；上下从头顶往下一个半径。
+    const head = { x: headBone?.worldX ?? bounds.x + bounds.width / 2, y: top - radius * 1.1 };
+    const hands = skeleton.bones.filter((b) => /hand|te_[lr]/.test(named(b))).map((b) => ({ x: b.worldX, y: b.worldY }));
+    return { head, radius, hands };
+  }
+
+  /**
+   * 被摸了一下（FORK.md「立绘触摸」）：马上换上反应的动作和表情，脸红一下；`pestered` 是一直在戳她，
+   * 换成生气。过一会儿回到立绘指令要的样子。减少动态效果时只换表情，不做身体动作。
+   */
+  react(part: TouchPart, pestered: boolean): void {
+    const pose = this.pose;
+    if (!pose) return;
+    const { state, animations, shown } = pose;
+    const reaction = reactionTo(part, pestered, (name) => animations.has(name));
+    if (reaction.body && !this.reducedMotion) {
+      const entry = state.setAnimation(TRACK.body, reaction.body, false);
+      entry.listener = {
+        complete: () => {
+          // 做完了：回到心情要的身体动作。
+          shown.mood = null;
+          if (this.pose === pose) this.follow(pose);
+        },
+      };
+    }
+    if (reaction.face) {
+      state.setAnimation(TRACK.face, reaction.face, true);
+      shown.face = reaction.face;
+    }
+    if (reaction.blush) state.setAnimation(TRACK.blush, "cheek_red", false);
+    clearTimeout(this.touchTimer);
+    this.touchTimer = window.setTimeout(() => {
+      if (this.pose !== pose) return;
+      shown.face = null;
+      state.setEmptyAnimation(TRACK.blush, MIX_SECONDS);
+      this.follow(pose);
+    }, TOUCH_FACE_MS);
   }
 
   /**
@@ -431,6 +507,7 @@ export class StandEngine {
       camera.position.x = bounds.x + bounds.width / 2;
       camera.position.y = bounds.y + bounds.height / 2;
       camera.setViewport(viewHeight * aspect, viewHeight);
+      this.view = { x: camera.position.x, y: camera.position.y, width: viewHeight * aspect, height: viewHeight };
       return;
     }
     const viewHeight = Math.max(bounds.height * FRAMING_HEIGHT[this.framing], (bounds.width * MIN_WIDTH) / aspect);
@@ -438,6 +515,7 @@ export class StandEngine {
     camera.position.x = bounds.x + bounds.width / 2;
     camera.position.y = top - viewHeight / 2;
     camera.setViewport(viewHeight * aspect, viewHeight);
+    this.view = { x: camera.position.x, y: camera.position.y, width: viewHeight * aspect, height: viewHeight };
   }
 
   /**

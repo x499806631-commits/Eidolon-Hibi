@@ -131,6 +131,13 @@ class CannotMeetThere(Exception):
     """She is somewhere the producer cannot run into her: at home, away, asleep, in the bath."""
 
 
+class TooColdToMeet(Exception):
+    """She is cold with the user (GLOSSARY.md「好感度」): she does not want to see them."""
+
+    def __init__(self) -> None:
+        super().__init__("她现在对你很冷淡，不想见你")
+
+
 class NoMoreEncounters(Exception):
     def __init__(self, a_day: int) -> None:
         super().__init__(f"今天的偶遇用完了（一天 {a_day} 次）")
@@ -266,6 +273,8 @@ class Outings:
             raise NotYet()
         if now.time() >= CLOSES:
             raise TooLate()
+        if self._affinities is not None and await self._affinities.too_cold(user_id, character_id):
+            raise TooColdToMeet()
         home = await self._conversation(user_id, character_id)
         best_until = datetime.combine(now.date(), BEST[1], zone)
         late = max(0, int((now - best_until).total_seconds() // 60))
@@ -302,6 +311,8 @@ class Outings:
             raise NoMoreEncounters(await self.encounters_a_day(user_id))
         if place not in ENCOUNTER_PLACES:
             raise CannotMeetThere()
+        if self._affinities is not None and await self._affinities.too_cold(user_id, character_id):
+            raise TooColdToMeet()
         where = STOPS[place][0].name
         home = await self._conversation(user_id, character_id)
         character = self._characters.get(character_id)

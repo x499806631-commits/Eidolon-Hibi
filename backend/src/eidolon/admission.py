@@ -54,6 +54,14 @@ class CoolingDown(Exception):
         self.cooldown_until = cooldown_until
 
 
+class TooCold(Exception):
+    """She is cold with the user (this fork, GLOSSARY.md「好感度」): no calls, no running into
+    her, no days out until she warms up again."""
+
+    def __init__(self) -> None:
+        super().__init__("她现在对你很冷淡，不想见你，也不想接你的电话")
+
+
 class Admission(Generic[K]):
     """One turn or call let begin, held until it is settled."""
 
@@ -123,6 +131,7 @@ class Admissions:
         self._activity = activity
         self._own_keys = own_keys
         self._cooldown_until = cooldown_until
+        self._too_cold: Callable[[str, str], Awaitable[bool]] | None = None
         self._settling: set[asyncio.Future[Any]] = set()
         """What was let in as no one waited for it any more, till it is settled."""
 
@@ -132,6 +141,16 @@ class Admissions:
         until = await self._cooldown_until(user_id, character_id)
         if until is not None:
             raise CoolingDown(until)
+
+    def with_too_cold(self, too_cold: Callable[[str, str], Awaitable[bool]]) -> None:
+        """Have calls refused while `too_cold` says she is too cold with the user."""
+        self._too_cold = too_cold
+
+    async def refuse_call_while_cold(self, user_id: str, character_id: str) -> None:
+        """Raise CoolingDown in a cooldown, TooCold while she is cold with the user."""
+        await self.refuse_while_cooling(user_id, character_id)
+        if self._too_cold is not None and await self._too_cold(user_id, character_id):
+            raise TooCold()
 
     async def turn(
         self, user_id: str, character_id: str, brought: BroughtKeys
@@ -151,7 +170,7 @@ class Admissions:
         before it begins, it is recorded and takes no use of the limit. Raises
         CallsUnavailable, recording nothing, when the deployment has no keys for calls and
         neither does the call bring them; CoolingDown as a turn does."""
-        await self.refuse_while_cooling(user_id, character_id)
+        await self.refuse_call_while_cold(user_id, character_id)
         return await self._admit("call", user_id, character_id, self._own_keys.for_call(brought))
 
     async def admitted(

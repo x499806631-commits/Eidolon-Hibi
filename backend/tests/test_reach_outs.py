@@ -310,7 +310,8 @@ async def test_her_tier_now_is_what_she_goes_by(make_client: ClientFactory, sett
     await reach_out.run_due()
     distant = reach_outs(await record(client, conversation))
 
-    clock.advance(hours=3)  # recovered to trust, 20 hours and more since the last contact
+    clock.advance(hours=3)  # 20 hours and more since the last contact, back in trust
+    keep(database, "producer", 41, clock.now)
     await reach_out.run_due()
 
     assert (len(distant), len(reach_outs(await record(client, conversation)))) == (0, 1)

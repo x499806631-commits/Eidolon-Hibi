@@ -308,11 +308,11 @@ export const zh = {
     ownLLMExempts: "带上自己的 LLM，文字对话就不受限额。",
     /** 页首的好感度标识和它点开的说明（GLOSSARY.md「好感度」「冷却」）。只说档位，不说数值。 */
     affinity: {
-      tiers: { cold: "冷淡", distant: "疏远", trust: "信任", close: "亲近", intimate: "亲密" },
+      tiers: { cold: "冷淡", distant: "隔阂", trust: "信任", close: "亲近", intimate: "亲密" },
       /** 每一档的大意，写在说明里档名下面。 */
       notes: {
-        cold: "她对你明显冷淡，话很少。",
-        distant: "她有点生气或失望，比平时冷一些。",
+        cold: "她对你明显冷淡，话很少；不接你的电话，也不想见面。",
+        distant: "你们之间有了隔阂，她有点生气或失望，不会主动来找你。",
         trust: "你们一直以来的关系。",
         close: "她比平时更放松，更愿意和你说心里话。",
         intimate: "她非常信赖你，会说平时不轻易说的心事。",

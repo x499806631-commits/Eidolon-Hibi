@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from starlette.types import Receive, Scope, Send
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from eidolon.admission import CoolingDown
+from eidolon.admission import CoolingDown, TooCold
 from eidolon.appeals_api import add_appeal_routes
 from eidolon.assembly import Backend
 from eidolon.call import (
@@ -343,6 +343,10 @@ def create_app(backend: Backend) -> FastAPI:
         return JSONResponse(
             {"detail": str(e), "cooldown_until": e.cooldown_until.isoformat()}, status_code=409
         )
+
+    @app.exception_handler(TooCold)
+    async def too_cold(_: Request, e: TooCold) -> JSONResponse:
+        return JSONResponse({"detail": str(e), "too_cold": True}, status_code=409)
 
     @app.exception_handler(CallsUnavailable)
     async def calls_unavailable(_: Request, e: CallsUnavailable) -> JSONResponse:

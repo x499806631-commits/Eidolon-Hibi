@@ -505,6 +505,7 @@ def build(
     admissions = Admissions(
         usage, activity, own_keys, cooldown_until=affinities.cooldown_until
     )
+    admissions.with_too_cold(affinities.too_cold)
     closers.append(admissions.aclose)  # closed after the calls, which may leave some to settle
     calls = Calls(
         settings, engine, admissions, own_keys, lambda: config.usage_limits, speech, clock, store,

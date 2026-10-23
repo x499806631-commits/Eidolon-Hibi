@@ -449,3 +449,21 @@ async def make_client(
         await client.aclose()
     for backend in backends:  # the test transport runs no lifespan to close it
         await backend.aclose()
+
+
+@pytest.fixture(autouse=True)
+def any_number_of_gifts_a_day(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The original's rule, for its tests: as many gifts a day as the user likes. This fork's
+    one a day each (`gifts.ONE_A_DAY`) is tested on its own (test_fork_affinity)."""
+    import eidolon.gifts
+
+    monkeypatch.setattr(eidolon.gifts, "ONE_A_DAY", False)
+
+
+@pytest.fixture(autouse=True)
+def calls_while_cold(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The original's rule, for its tests: cold, she takes calls all the same. This fork's
+    (`affinity.COLD_KEEPS_AWAY`) is tested on its own (test_fork_affinity)."""
+    import eidolon.affinity
+
+    monkeypatch.setattr(eidolon.affinity, "COLD_KEEPS_AWAY", False)

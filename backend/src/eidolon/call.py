@@ -1235,7 +1235,7 @@ class Calls:
         `start` would, and CallsUnavailable, as `OwnKeys.call_exempt` does, before anything
         is spent on a call that could not start."""
         if character_id is not None:
-            await self._admissions.refuse_while_cooling(user_id, character_id)
+            await self._admissions.refuse_call_while_cold(user_id, character_id)
         self._refuse_unless_room(user_id)
         exempt = self._own_keys.call_exempt(own)
         servers: list[IceServer] = list(self._settings.ice_servers)

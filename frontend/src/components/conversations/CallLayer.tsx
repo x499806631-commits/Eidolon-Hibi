@@ -309,7 +309,8 @@ export function CallLayer(props: Props) {
       <div
         className={cn(
           "relative flex min-h-0 flex-1 flex-col items-center gap-3 overflow-y-auto px-5",
-          ended ? "justify-center py-6" : "justify-end pb-5",
+          // 通话中让开立绘，点得到她（FORK.md「立绘触摸」）；台词卡、照片照样能点
+          ended ? "justify-center py-6" : "pointer-events-none justify-end pb-5 *:pointer-events-auto",
         )}
       >
         {call.phase === "ended" ? (
@@ -369,6 +370,9 @@ function Backdrop({ character }: { character: Character }) {
  * - 电脑：铺满头部以下的整层，取景到腰，原地淡入。
  * 底部 50% 压一层到 call.deep 的渐变，台词卡和底栏落在衣服上也看得清。结束后立绘降到 40%。
  */
+/** 通话里摸她：只有立绘上的反应。 */
+function reactOnly(): void {}
+
 function StandStage(props: Props) {
   const { call, isCollapsed, isFullScreen, isReducedMotion, standOutfits, standDirection } = props;
   return (
@@ -390,6 +394,8 @@ function StandStage(props: Props) {
           entrance={isFullScreen && !isReducedMotion ? "rise" : "fade"}
           direction={standDirection}
           isReducedMotion={isReducedMotion}
+          // 隔着电话碰不到她：摸了只有立绘上的反应，不进对话（FORK.md「立绘触摸」）
+          onTouch={call.phase === "ended" ? undefined : reactOnly}
         />
       </div>
       <div
