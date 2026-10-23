@@ -225,6 +225,8 @@ export const zh = {
       missed_call: (name: string) => `${name}没接到你的电话`,
       /** 她送了一件纪念品（GLOSSARY.md「纪念品」）：下面是礼物卡。 */
       keepsake: (name: string) => `${name}送了你一件礼物`,
+      /** 约会结束了（GLOSSARY.md「约会」）：下面是约会卡。 */
+      outing: (name: string) => `和${name}的约会结束了`,
     },
     /** 她结束了对话（GLOSSARY.md「已结束的对话」）时换掉输入栏的结束卡：那句话同对话事件（`events.ended`），不写原因；
      * 她在冷却中时换成 `cooling`，写上解除时刻。 */
@@ -2017,6 +2019,39 @@ export const zh = {
       /** 一张照片读屏读的：「真乃发来的照片，10月3日」。 */
       photoLabel: (name: string, month: number, day: number) => `${name}发来的照片，${month}月${day}日`,
     },
+  },
+  /** 约会（GLOSSARY.md「约会」）：约好的那天当面去赴约。 */
+  outing: {
+    label: (name: string) => `和${name}的约会`,
+    title: (name: string) => `和${name}的约会`,
+    stopTitle: (stop: string) => stop,
+    progress: (at: number, of: number) => `第 ${at} 站 / 共 ${of} 站`,
+    /** 对话页页首下面那条：今天约好了。 */
+    banner: (name: string, what: string) => `今天和${name}约好了：${what}`,
+    bannerOn: (name: string) => `正在和${name}约会`,
+    go: "去赴约",
+    resume: "回到约会",
+    meetPrompt: (name: string, what: string) => `今天和${name}约好了：${what}。她已经在等你了。`,
+    noDate: "今天没有约会。",
+    window: (from: string, until: string, closes: string) => `约好的是 ${from}–${until}，${closes} 以前都还来得及`,
+    meet: "见面",
+    photo: (left: number) => `合照（还能拍 ${left} 张）`,
+    wishPlaceholder: "想拍成什么样？比如：一起比心（可以不写）",
+    shoot: "拍",
+    other: "其它…",
+    otherPlaceholder: "写一个动作，比如：偷偷买了她刚才多看了两眼的钥匙扣",
+    doIt: "做",
+    placeholder: "和她说点什么",
+    next: (stop: string) => `下一站：${stop}`,
+    end: "结束约会",
+    endEarly: "提前结束",
+    over: (name: string) => `和${name}的约会结束了`,
+    backToChat: "回到对话",
+    fold: "收起",
+    redraw: "重画这一站",
+    /** 对话里的约会卡。 */
+    card: (month: number, day: number, place: string) => `${month}月${day}日 · ${place}`,
+    cardOpen: "打开约会",
   },
   /** 地图（GLOSSARY.md「地图」）：从家里出门看看。 */
   map: {

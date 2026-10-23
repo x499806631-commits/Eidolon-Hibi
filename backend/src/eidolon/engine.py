@@ -98,6 +98,7 @@ the judge model read those the user answers, after the last turn, as her latest 
 """
 
 import asyncio
+import json
 import logging
 import re
 import sqlite3
@@ -475,6 +476,9 @@ def _narration(event: ConversationEvent, gift_catalog: Mapping[str, Gift]) -> st
         return "（制作人打来电话，你那会儿在洗澡，没接到。）"
     if event.kind == "keepsake":
         return f"（你送给了制作人「{event.note}」。）"
+    if event.kind == "outing":
+        recap = json.loads(event.note or "{}").get("recap", "")
+        return f"（你们的约会结束了。{recap}）"
     assert event.gift_id is not None
     liked = "这是你喜欢的东西。" if event.liked else ""
     return f"（制作人送给你一份{gift_catalog[event.gift_id].name}。{liked}）"
@@ -634,6 +638,8 @@ WANTS_TO_ANSWER_DATE = "（制作人刚刚约你出去。）"
 DATE_AFTER_SITUATION = "今天下午你和制作人一起{what}，刚刚分开回到家。"
 """What she is told, back from it (GLOSSARY.md「邀约」)."""
 
+WANTS_TO_TAKE_OUTING_PHOTO = "（制作人举起手机，说要和你拍一张合照。）"
+WANTS_TO_TALK_MISSED_DATE = "（今天约好的约会，制作人一直没有来。你想给他发几句。）"
 WANTS_TO_TALK_AFTER_DATE = "（今天和制作人一起出去回来了。制作人这会儿没在和你说话。你想先给他发几句。）"
 
 CALLING_BACK = "制作人刚才给你打过电话，你在洗澡没接到；现在洗完了，先跟他说一声，问问他有什么事。"
@@ -1041,6 +1047,7 @@ class ConversationEngine:
         self._ended_listeners: list[Callable[[str, EndsFor], None]] = []
         self._ties_of: Callable[[str, str], Awaitable[Ties | None]] | None = None
         self._relations: "Relations | None" = None
+        self._outing_of: Callable[[Conversation], Awaitable[str | None]] | None = None
         self._recorded_listeners: list[
             Callable[[Conversation, Message, datetime, str], Awaitable[None]]
         ] = []
@@ -1404,6 +1411,44 @@ class ConversationEngine:
         `ties` saying it for a user and a character."""
         self._ties_of = ties
 
+    def with_outings(self, outing_of: Callable[[Conversation], Awaitable[str | None]]) -> None:
+        """Have her text turns told, while she is out with the producer, where they are and
+        how to be there (GLOSSARY.md「约会」), as `outing_of` says for the conversation."""
+        self._outing_of = outing_of
+
+    async def outing_photo(
+        self, conversation: Conversation, llm: ChatLLM, where: str, place_tags: str, wish: str
+    ) -> tuple[list[Segment], str | None]:
+        """A photo of her and the producer taken out together now (GLOSSARY.md「约会」), at
+        `where`, drawn with `place_tags`, as the user wished it (`wish`, may be empty): what
+        she says as it is taken, and its tag, by what they were doing as the history has it.
+        Raises EmptyReply if she says nothing or writes no photo tag."""
+        rules = photo_rules(
+            "约会中的合照",
+            f"你和制作人正在约会，现在在{where}。制作人拿出手机，要和你拍一张合照。"
+            "照片里你们在做的事、你的表情，照最近这几句里你们正在做的事来写。"
+            + (f"制作人想要的样子：{wish}。" if wish else ""),
+            "拍完照随口说的一两句。",
+            place=f"（这里是：{place_tags}）",
+            you=WITH_YOU_THIS_TIME,
+            nobody="照片里只有你和制作人，没有别的人。",
+        )
+        said, tag = await self._reaching_out(conversation, llm, rules, WANTS_TO_TAKE_OUTING_PHOTO)
+        if tag is None:
+            raise EmptyReply("对话模型没有写照片标签")
+        return said, tag
+
+    async def missed_date(self, conversation: Conversation, llm: ChatLLM, what: str) -> list[Segment]:
+        """What she says first when the producer never came to the day out they had planned
+        for today (`what`, GLOSSARY.md「约会」). Raises EmptyReply if she says nothing."""
+        rules = (
+            f"# 约会落空了\n今天你和制作人约好了一起{what}，你等了很久，他一直没来，也没有消息。"
+            "\n- 用 <ja><zh> 写一到三段，照你的性格：失落、委屈或生气，也可以问他怎么了。"
+            "\n- 不发照片，也不说要给他打电话。"
+        )
+        said, _ = await self._reaching_out(conversation, llm, rules, WANTS_TO_TALK_MISSED_DATE)
+        return said
+
     def with_relations(self, relations: "Relations") -> None:
         """Have her prompt tell how she stands with the others (GLOSSARY.md「关系表」), and
         what she heard of them (GLOSSARY.md「传话」)."""
@@ -1577,6 +1622,10 @@ class ConversationEngine:
             else []
         )
         scene = await self._scene(conversation) if judging else None
+        outing = (
+            await self._outing_of(conversation)
+            if self._outing_of is not None and in_call is None else None
+        )
         world_prompt = (
             self._world.prompt(character.name, local_date(now, timezone)) if self._world else None
         )
@@ -1620,6 +1669,7 @@ class ConversationEngine:
                     ),
                 ),
                 *([scene_prompt(scene, character.heart, profile.gender == "female")] if scene else []),
+                *([outing] if outing else []),
                 *([EXPLAINED] if _appealed(messages) else []),
                 *([about_photo] if about_photo else []),
                 *([asmr_rules(voiced_by)] if in_call is not None and in_call.asmr else []),

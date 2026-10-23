@@ -168,3 +168,14 @@ export {
 
 // 地图（GLOSSARY.md「地图」）：家里「出门看看」，地图上「回家」。
 export { MapPinned as MapIcon, ArrowLeft as BackHomeIcon } from "lucide-react";
+
+// 约会（GLOSSARY.md「约会」）：对话里的约会卡、去赴约、下一站、合照、结束约会、小动作的「其它」。
+export {
+  Heart as OutingIcon,
+  Footprints as NextStopIcon,
+  Camera as OutingPhotoIcon,
+  Flag as EndOutingIcon,
+  Pencil as OtherActionIcon,
+  ChevronDown as FoldOutingIcon,
+  RefreshCw as RedrawStopIcon,
+} from "lucide-react";

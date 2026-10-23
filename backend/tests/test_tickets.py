@@ -4,6 +4,7 @@ once, given back should using it fail: a gift she likes, a letter from her, a di
 opened, a photo in an outfit, a day out together that she answers, has in her schedule and
 tells the producer about after, with a photo."""
 
+import asyncio
 import json
 from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
@@ -13,7 +14,7 @@ import pytest
 
 from eidolon.config import Settings
 from eidolon.engine import (
-    WANTS_TO_ANSWER_DATE, WANTS_TO_SEND_ASKED_PHOTO, WANTS_TO_TALK_AFTER_DATE, WITH_YOU,
+    WANTS_TO_ANSWER_DATE, WANTS_TO_SEND_ASKED_PHOTO, WANTS_TO_TALK_MISSED_DATE, WITH_YOU_THIS_TIME,
 )
 from eidolon.outfit_tags import OutfitTags, VisionSettings, cleaned
 from eidolon.schedules import DATE_TWIST
@@ -195,11 +196,11 @@ async def test_an_outfit_is_read_once_from_its_thumbnail_and_kept(tmp_path):
     assert cleaned("a, a, b") == "a, b"
 
 
-async def test_a_date_ticket_she_answers_has_in_her_schedule_and_tells_of_after_with_a_photo(
+async def test_a_date_ticket_she_answers_has_in_her_schedule_and_never_met_she_says_so(
     make_client: ClientFactory, settings: Settings
 ):
     clock = FakeClock(NOON)
-    after = [f"<photo>{TAG}</photo><ja>楽しかった！</ja><zh>好开心！</zh>"]
+    after = ["<ja>来なかったね……</ja><zh>你没来呢……</zh>"]
     client, llm, conversation = await talked(
         make_client, ["<ja>行きたい！</ja><zh>想去！</zh>"], [PLAN], after,
         numbers=(0, 1, 0, 1), clock=clock,
@@ -214,18 +215,21 @@ async def test_a_date_ticket_she_answers_has_in_her_schedule_and_tells_of_after_
     backend = backend_of(client)
     await backend.schedule_writer.run_due()
     clock.now = datetime.combine(tomorrow, time(17, 31), UTC)
+    await backend.trip_photos.run_due()  # 还能去赴约：她先不说什么
+    waiting = reach_outs(await record(client, conversation))
+    clock.now = datetime.combine(tomorrow, time(22, 30), UTC)
     await backend.trip_photos.run_due()
     told = reach_outs(await record(client, conversation))
 
     assert used.status_code == 200, used.text
     assert llm.prompts[1][-1].content == WANTS_TO_ANSWER_DATE
     assert DATE_TWIST.format(what="去看电影") in str(llm.prompts[2])
-    assert llm.prompts[3][-1].content.endswith(WANTS_TO_TALK_AFTER_DATE)
-    assert [r["segments"][0]["zh"] for r in told] == ["想去！", "好开心！"]
-    assert "photo" not in told[0] and told[1]["photo"]["status"] == "ready"
+    assert len(waiting) == 1
+    assert llm.prompts[3][-1].content.endswith(WANTS_TO_TALK_MISSED_DATE)
+    assert [r["segments"][0]["zh"] for r in told] == ["想去！", "你没来呢……"]
 
 
-async def test_on_a_date_she_may_have_the_producer_in_her_photo_as_their_profile_has_them(
+async def test_out_together_their_photo_has_the_producer_in_it_as_their_profile_has_them(
     make_client: ClientFactory, settings: Settings
 ):
     clock = FakeClock(NOON)
@@ -246,10 +250,14 @@ async def test_on_a_date_she_may_have_the_producer_in_her_photo_as_their_profile
     clock.now = datetime.combine(tomorrow, time(6), UTC)
     backend = backend_of(client)
     await backend.schedule_writer.run_due()
-    clock.now = datetime.combine(tomorrow, time(17, 31), UTC)
-    await backend.trip_photos.run_due()
+    clock.now = datetime.combine(tomorrow, time(6), UTC)  # 档案只剩性别：北京时间下午两点
+    met = (await client.post("/api/outings", json={"character_id": "mano"})).json()
+    taken = await client.post(f"/api/outings/{met['id']}/photo", json={"wish": "牵着手"})
+    await asyncio.gather(*backend.trip_photos._drawing)  # pyright: ignore[reportPrivateUsage]
 
-    assert any(WITH_YOU.strip() in m.content for m in llm.prompts[3])
+    assert taken.status_code == 200, taken.text
+    assert any(WITH_YOU_THIS_TIME.strip() in m.content for m in llm.prompts[3])
+    assert "牵着手" in str(llm.prompts[3])
     [request] = image.requests
     sent = json.dumps(request["body"], ensure_ascii=False)
     assert "p-head producer" in sent and "genderswap (mtf)" in sent and "holding hands" in sent

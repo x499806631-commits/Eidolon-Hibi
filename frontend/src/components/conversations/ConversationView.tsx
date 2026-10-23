@@ -16,6 +16,8 @@ import { UnseenDot } from "@/components/app/AchievementLine";
 import { FailureNotice, SignInButton } from "@/components/app/FailureNotice";
 import { MarkedAvatar } from "@/components/app/MarkedAvatar";
 import { KeepsakeCard } from "@/components/keepsakes/KeepsakeParts";
+import { OutingBanner, OutingCardView } from "@/components/outing/OutingParts";
+import { OutingLayer } from "@/components/outing/OutingLayer";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Button } from "@/components/ui/button";
 import {
@@ -49,6 +51,7 @@ import { giftsHref } from "@/lib/gifts";
 import { isLive, NOT_OPEN, type LiveConversation, type Trophy } from "@/lib/liveConversation";
 import { linesOf, type Line } from "@/lib/messageLines";
 import { pastDay } from "@/lib/pastConversations";
+import { getOutingToday, type OutingToday } from "@/lib/outing";
 import { scheduleText } from "@/lib/schedule";
 import { photosUsedUpText } from "@/lib/photoFailure";
 import { cn } from "@/lib/utils";
@@ -151,6 +154,19 @@ export function ConversationView({
     rememberWeb(character.id, on);
   };
   const { viewing, view, backToCurrent } = usePastConversation(character.id);
+  // 约会（GLOSSARY.md「约会」）：今天和她约好了就在页首下面挂一条，点了打开约会的画面。
+  const [outingToday, setOutingToday] = useState<OutingToday | null>(null);
+  const [isOutingOpen, setOutingOpen] = useState(false);
+  useEffect(() => {
+    let current = true;
+    getOutingToday(character.id).then(
+      (today) => current && setOutingToday(today),
+      () => {}, // 读不到就不挂
+    );
+    return () => {
+      current = false;
+    };
+  }, [character.id]);
   const subtree = useRef<HTMLDivElement>(null);
   // 她现在对制作人的好感度；读不到（好感度关着、没配判断模型或请求失败）就不显示标识，也不出变化胶囊。
   const { affinity, affinityCue, cooling, ended, trophy } = snapshot;
@@ -427,6 +443,14 @@ export function ConversationView({
   return (
     <Frame character={character} subtree={subtree} header={header}>
       {barShown && <CallBar ref={focus.note} call={call} onExpand={() => live?.expand()} />}
+      {outingToday?.date && !outingToday.outing?.ended_at && !viewing && !isCovered && (
+        <OutingBanner
+          name={character.name}
+          what={outingToday.date.what}
+          isOn={outingToday.outing !== null}
+          onOpen={() => setOutingOpen(true)}
+        />
+      )}
       {focusMinutes !== null && (
         <FocusTimerBar
           name={character.name}
@@ -521,6 +545,19 @@ export function ConversationView({
         her={achievements.her}
         unseen={achievements.unseenRows}
       />
+      {live && isOutingOpen && outingToday && (
+        <OutingLayer
+          live={live}
+          snapshot={snapshot}
+          character={character}
+          standOutfits={outfits?.toTry ?? []}
+          today={outingToday}
+          isFullScreen={isFullScreen}
+          isReducedMotion={isReducedMotion}
+          onClose={() => setOutingOpen(false)}
+          onChanged={(outing) => setOutingToday((t) => t && { ...t, outing })}
+        />
+      )}
       {live && (
         <LiveCallLayer
           live={live}
@@ -726,6 +763,11 @@ function Messages({
               ) : line.entry.kind === "event" ? (
                 <MessageScrollerItem key={line.entry.key} messageId={line.entry.key} className="my-3">
                   <EventLine entry={line.entry} name={character.name} />
+                  {line.entry.outing && (
+                    <div className="mt-2 flex justify-center px-2">
+                      <OutingCardView card={line.entry.outing} her={character} />
+                    </div>
+                  )}
                   {line.entry.keepsakeId !== null && (
                     <div className="mt-2 flex justify-center px-2">
                       {/* 她送的纪念品：在她的颜色里的一张小卡，点开是详情（GLOSSARY.md「纪念品」） */}

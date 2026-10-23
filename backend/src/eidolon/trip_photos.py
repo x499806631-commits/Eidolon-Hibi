@@ -263,6 +263,8 @@ class TripPhotos:
         self._drawing: set[asyncio.Task] = set()
         self._dates = dates if dates is not None else Dates(db)
         self._invited: list[Callable[[str, str, date, str], Awaitable[None]]] = []
+        self._played: Callable[[str, str, str], Awaitable[bool]] | None = None
+        self._closes: Callable[[date, ZoneInfo], datetime] | None = None
         self._db = db
         db.prepare(_open)
 
@@ -447,6 +449,21 @@ class TripPhotos:
             conversation, said, tag, others, recording, producer_there=producer_there
         )
 
+    async def send_outing_photo(self, conversation: Conversation, said: list, tag: str, recording) -> None:
+        """What she said as a photo of her and the producer was taken out together
+        (GLOSSARY.md「约会」), the photo drawn in the background."""
+        await self._sent_with_photo(conversation, said, tag, [], recording, background=True, producer_there=True)
+
+    async def date_met(self, user_id: str, character_id: str, day: str) -> None:
+        """The day out of `day` was met (GLOSSARY.md「约会」): she tells of it no more."""
+        await self._dates.told(user_id, character_id, day)
+
+    def with_outings(self, played: Callable[[str, str, str], Awaitable[bool]], closes: Callable[[date, ZoneInfo], datetime]) -> None:
+        """Have a day out, met or not, told of as `played` says: one met, not at all; one not
+        met by `closes`, that the producer never came."""
+        self._played = played
+        self._closes = closes
+
     async def _sent_with_photo(
         self, conversation: Conversation, said: list, tag: str, others: list[Character],
         recording, outfit_tags: str | None = None, background: bool = False,
@@ -589,6 +606,16 @@ class TripPhotos:
             return
         if self._store.is_taking_turn(conversation.id) or self._in_call(conversation.id):
             return
+        if self._played is not None and self._closes is not None:
+            # 约会要当面去（GLOSSARY.md「约会」）：去过的不再讲；到了截止时间还没去，她说他没来
+            if await self._played(user_id, character_id, day):
+                await self._dates.told(user_id, character_id, day)
+                return
+            zone = await self._zone(user_id)
+            if now < self._closes(date.fromisoformat(day), zone):
+                return
+            await self._tell_missed(conversation, row, now)
+            return
         character = self._characters.get(character_id)
         with_photo = (
             self._config.image_generator() is not None
@@ -616,6 +643,24 @@ class TripPhotos:
             await recording.finish("success")
             return
         await self._sent_with_photo(conversation, said, tag, [], recording, producer_there=True)
+
+    async def _tell_missed(self, conversation: Conversation, row: sqlite3.Row, now: datetime) -> None:
+        user_id, character_id, day = row["user_id"], row["character_id"], row["day"]
+        recording = self._activity.begin("trip_photo", user_id, character_id, own_llm=False, exempt=False)
+        lease = self._config.lease()
+        try:
+            with recording.current():
+                said = await self._engine.missed_date(conversation, lease.keys.chat_llm, row["what"])
+        except Exception as e:
+            log.warning("telling of a day out missed failed: %s", type(e).__name__)
+            await recording.finish("failed")
+            await self._dates.tried(user_id, character_id, day, now)
+            return
+        finally:
+            lease.release()
+        await self._dates.told(user_id, character_id, day)
+        await self._store.add_photo_reach_out(conversation.id, said, None)
+        await recording.finish("success")
 
     async def _current(self, user_id: str, character_id: str) -> Conversation | None:
         return next(

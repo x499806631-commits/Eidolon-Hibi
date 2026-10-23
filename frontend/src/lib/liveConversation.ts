@@ -449,6 +449,14 @@ export class LiveConversation {
     this.rereadIfFree();
   }
 
+  /** Read her conversation again once nothing is under way: something was recorded in it that no
+   * turn of this page brought, a photo she sent on a day out, the card of one over
+   * (GLOSSARY.md「约会」). */
+  reread(): void {
+    this.stale = true;
+    this.rereadIfFree();
+  }
+
   /** Her current conversation is off the screen: her page is left, the call going on in the shell,
    * or shows one of her past conversations instead. What the list showed newer is not read once
    * nothing is under way, as the user would not see it. */

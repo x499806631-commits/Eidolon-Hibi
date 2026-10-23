@@ -2,7 +2,7 @@
 // the same turn events whether the turn is typed or spoken in a call.
 
 import type { AffinityChange } from "@/lib/affinity";
-import type { ConversationEvent, EventKind, Photo, PhotoStatus, Recorded, Segment, TurnEvent } from "@/lib/api";
+import type { ConversationEvent, EventKind, OutingCard, Photo, PhotoStatus, Recorded, Segment, TurnEvent } from "@/lib/api";
 
 /** One message or conversation event shown, or her reach-out, shown as her reply is but marked
  * `reachOut` (GLOSSARY.md「搭话」). `at` (ISO) is when it was recorded; for the turn
@@ -22,6 +22,8 @@ export type Entry =
       /** The keepsake she gave, for a keepsake's (GLOSSARY.md「纪念品」); null for the others. */
       keepsakeId: number | null;
       affinity: AffinityChange | null;
+      /** A day out over, its card (GLOSSARY.md「约会」); null for the others. */
+      outing?: OutingCard | null;
     }
   | {
       kind: "character";
@@ -218,6 +220,7 @@ function toEntry(message: Recorded): Entry {
       gift: message.gift_name ?? null,
       keepsakeId: message.keepsake_id ?? null,
       affinity: message.affinity,
+      ...(message.outing ? { outing: message.outing } : {}),
     };
   }
   return message.role === "user"

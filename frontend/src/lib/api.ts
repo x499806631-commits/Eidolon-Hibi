@@ -163,7 +163,7 @@ export async function getPhoto(id: string): Promise<PhotoStatus> {
 
 /** The kinds of conversation event (GLOSSARY.md「对话事件」): she hung up on the user; the user
  * gave her a gift; she ended the conversation, which can then only be read (GLOSSARY.md「已结束的对话」). */
-export type EventKind = "hung_up" | "gift" | "ended" | "missed_call" | "keepsake";
+export type EventKind = "hung_up" | "gift" | "ended" | "missed_call" | "keepsake" | "outing";
 
 /** Something that happened in a conversation that is not a turn, recorded among its messages. */
 export type ConversationEvent = {
@@ -177,6 +177,20 @@ export type ConversationEvent = {
   gift_name?: string;
   /** The keepsake she gave, for a keepsake's (GLOSSARY.md「纪念品」); other events have none. */
   keepsake_id?: number;
+  /** A day out over, its card (GLOSSARY.md「约会」); other events have none. */
+  outing?: OutingCard;
+};
+
+/** The card of a day out over, in the conversation (GLOSSARY.md「约会」): where, which day, and
+ * her recap in her own words. */
+export type OutingCard = {
+  outing_id: number;
+  spot: string | null;
+  what: string;
+  day: string;
+  recap: string;
+  started_at: string;
+  photos: number;
 };
 
 /** What she said first in a conversation, the user not talking to her (GLOSSARY.md「搭话」): neither a

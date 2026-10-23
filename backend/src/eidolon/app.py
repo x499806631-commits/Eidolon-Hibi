@@ -74,6 +74,7 @@ from eidolon.read_aloud_api import add_read_aloud_routes
 from eidolon.home_api import add_home_routes
 from eidolon.map_api import add_map_routes
 from eidolon.relations_api import add_relation_routes
+from eidolon.outing_api import add_outing_routes
 from eidolon.voice_settings_api import add_voice_settings_routes
 from eidolon.schedules_api import add_schedule_routes
 from eidolon.letters_api import add_letter_routes
@@ -438,6 +439,7 @@ def create_app(backend: Backend) -> FastAPI:
     add_home_routes(app, backend)
     add_map_routes(app, backend)
     add_relation_routes(app, backend)
+    add_outing_routes(app, backend)
     add_voice_settings_routes(app, backend)
     add_schedule_routes(app, backend)
     add_appeal_routes(app, backend.appeals)

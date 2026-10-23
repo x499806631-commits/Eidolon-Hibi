@@ -28,7 +28,7 @@ from eidolon.producer import Birthday, ProducerProfile
 from eidolon.reply_format import Segment
 
 Role = Literal["user", "character"]
-EventKind = Literal["hung_up", "gift", "ended", "missed_call", "keepsake"]
+EventKind = Literal["hung_up", "gift", "ended", "missed_call", "keepsake", "outing"]
 PhotoStatus = Literal["pending", "ready", "failed"]
 """A photo being generated, sent, or not sent after all."""
 PhotoFailure = Literal["timeout", "service_error", "bad_image", "own_key_failed", "used_up"]
@@ -393,7 +393,8 @@ class ConversationEvent:
     her hanging up on the user (`hung_up`), her ending the conversation (`ended`), after which
     it can only be read, a call of the user's she did not answer, in the bath (`missed_call`,
     GLOSSARY.md「洗澡」), her giving the user a keepsake (`keepsake`, GLOSSARY.md「纪念品」),
-    which (`keepsake_id`) and its name (`note`), or the user giving her a gift (`gift`), which
+    which (`keepsake_id`) and its name (`note`), a day out with the producer over
+    (`outing`, GLOSSARY.md「约会」), its card in `note` as JSON, or the user giving her a gift (`gift`), which
     one (`gift_id`) and whether she liked it as it was given (`liked`), kept as it was
     should what she likes change. It can carry how it changed her affinity (`affinity`)."""
 
@@ -412,7 +413,10 @@ class ConversationEvent:
         which gift, for a gift's only; which keepsake, for a keepsake's only."""
         hidden = {"liked", "note"} | ({"gift_id"} if self.gift_id is None else set())
         hidden |= {"keepsake_id"} if self.keepsake_id is None else set()
-        return {k: v for k, v in asdict(self).items() if k not in hidden}
+        shown = {k: v for k, v in asdict(self).items() if k not in hidden}
+        if self.kind == "outing" and self.note:
+            shown["outing"] = json.loads(self.note)
+        return shown
 
 
 @dataclass(frozen=True)
@@ -1914,6 +1918,16 @@ def _insert_message(
     )
     assert cursor.lastrowid is not None
     return Message(cursor.lastrowid, role, text, ja, zh, created_at, segments or [], affinity)
+
+
+def add_outing_card(db: sqlite3.Connection, conversation_id: str, card: dict, at: str) -> None:
+    """Record, through `db`, that a day out with the producer is over, its card (`card`:
+    the outing's id, where, the day, her recap) shown in the conversation."""
+    db.execute(
+        "INSERT INTO conversation_events (conversation_id, kind, created_at, note)"
+        " VALUES (?, ?, ?, ?)",
+        (conversation_id, "outing", at, json.dumps(card, ensure_ascii=False)),
+    )
 
 
 def _insert_event(

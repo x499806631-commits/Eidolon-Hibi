@@ -70,6 +70,7 @@ from eidolon import tickets
 from eidolon.outfit_tags import OutfitTags
 from eidolon.trip_photos import Dates, TripPhotos
 from eidolon.relations import Relations
+from eidolon.outing import Outings
 from eidolon.voices import GptSovits, load_local_voices
 from eidolon.favors import Favors
 from eidolon.read_aloud import ReadAloud
@@ -184,6 +185,8 @@ class Backend:
     tickets, and her days out with the producer (GLOSSARY.md「体验券」「邀约」)."""
     outfit_tags: OutfitTags
     """The tags each outfit on the outfit lists is drawn with."""
+    outings: Outings
+    """The days out met (GLOSSARY.md「约会」)."""
     relations: Relations
     """How the characters stand with each other, and word of mouth (GLOSSARY.md「关系表」)."""
     dates: Dates
@@ -581,6 +584,11 @@ def build(
     promises.on_settled(promise_settled)
     _pass_word(relations, characters, engine, memories, gifts, affinities, promises, keepsakes,
                trip_photos, favors)
+    outings = Outings(
+        database, store, engine, characters, config, activity, clock, trip_photos, experiences,
+        diary.moment, relations, features,
+    )
+    trip_photos.with_outings(outings.played, outings.closes)
     config.on_change(gifts.notice)
     return Backend(
         settings=settings,
@@ -636,6 +644,7 @@ def build(
         experiences=experiences,
         corpus=corpus,
         relations=relations,
+        outings=outings,
         _closers=closers,
     )
 

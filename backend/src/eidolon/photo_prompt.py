@@ -478,6 +478,13 @@ def home_prompt(room: str, style: str = "") -> ImagePrompt:
     positive = ("background dataset", "no humans", "scenery", *_styled(style), *tags, sentence, *_finish(style, ""))
     return ImagePrompt(", ".join(positive), _negative(HOME_NEGATIVE, style), GROUP_SIZE)
 
+def outing_prompt(tags: str, style: str = "") -> ImagePrompt:
+    """The prompts a stop's background on a day out (GLOSSARY.md「约会」) is generated from:
+    the place drawn by `tags`, no one in it, landscape, in the art style `style`."""
+    positive = ("background dataset", "no humans", "scenery", *_styled(style), tags, *_finish(style, ""))
+    return ImagePrompt(", ".join(positive), _negative(HOME_NEGATIVE, style), GROUP_SIZE)
+
+
 SCENE_MARK = " || "
 """Between a keepsake's tags and her sentence describing it, as they are kept together."""
 _KEEPSAKE_WORDS = re.compile(r'"([^"]*)"(?:\s*@\s*([^,，、]*))?')
