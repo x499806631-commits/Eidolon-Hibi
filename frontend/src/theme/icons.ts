@@ -165,3 +165,6 @@ export {
   Paintbrush as DrawRoomIcon,
   Move as ArrangeIcon,
 } from "lucide-react";
+
+// 地图（GLOSSARY.md「地图」）：家里「出门看看」，地图上「回家」。
+export { MapPinned as MapIcon, ArrowLeft as BackHomeIcon } from "lucide-react";

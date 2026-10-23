@@ -33,6 +33,7 @@ export function isInShell(href: string): boolean {
   if (!local) return false;
   return (
     path === "/home" ||
+    path === "/home/map" ||
     path === "/conversations" ||
     conversationOf(path) !== null ||
     path === "/gifts" ||
@@ -67,7 +68,8 @@ export function departure(href: string, callee: string | null): Departure {
 export const NAV_ITEMS = ["home", "conversations", "gifts", "calendar", "letters", "diary", "keepsakes", "settings"] as const;
 export type NavItem = (typeof NAV_ITEMS)[number];
 
-/** Each item's first level; her conversation page and a settings category below it are its second.
+/** Each item's first level; her conversation page, a settings category and the map (below the
+ * home) are its second.
  * The gifts page and the calendar page have no second level. */
 export const FIRST_LEVEL: Record<NavItem, string> = {
   home: "/home",
@@ -84,7 +86,7 @@ export const FIRST_LEVEL: Record<NavItem, string> = {
 export function currentNavItem(href: string): NavItem | null {
   const { path } = pathOf(href);
   if (!isInShell(href)) return null;
-  if (path === "/home") return "home";
+  if (path === "/home" || path === "/home/map") return "home";
   if (path === "/gifts") return "gifts";
   if (path === "/calendar") return "calendar";
   if (path === "/letters") return "letters";

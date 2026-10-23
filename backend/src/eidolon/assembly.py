@@ -183,6 +183,8 @@ class Backend:
     tickets, and her days out with the producer (GLOSSARY.md「体验券」「邀约」)."""
     outfit_tags: OutfitTags
     """The tags each outfit on the outfit lists is drawn with."""
+    dates: Dates
+    """The days out the producer invited each character to (GLOSSARY.md「邀约」)."""
     features: Features
     """Each user's own switches for the fork's features (GLOSSARY.md「玩法开关」)."""
     world: World | None = None
@@ -604,6 +606,7 @@ def build(
         diary=diary,
         schedules=schedules,
         features=features,
+        dates=dates,
         keepsakes=keepsakes,
         trip_photos=trip_photos,
         favors=favors,

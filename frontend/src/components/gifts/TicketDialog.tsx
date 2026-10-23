@@ -54,6 +54,8 @@ export function TicketDialog({
   onClose,
   onDone,
   onGo,
+  idea,
+  herFirst,
 }: {
   kind: TicketKind | null;
   characters: Character[];
@@ -63,25 +65,31 @@ export function TicketDialog({
   onClose: () => void;
   onDone: () => void;
   onGo: (href: string) => void;
+  /** 邀约券：先填好的一起做什么（地图上选的地方，GLOSSARY.md「地图」）；没给是第一个常见的。 */
+  idea?: string;
+  /** 先选好的偶像；没给是名单里第一位。 */
+  herFirst?: string;
 }) {
-  const [herId, setHerId] = useState<string>("");
+  const [herId, setHerId] = useState<string>(herFirst ?? "");
   const [outfit, setOutfit] = useState<Outfit>({ kind: "free" });
   const [described, setDescribed] = useState("");
-  const [what, setWhat] = useState<string>(DATE_IDEAS[0]);
+  const [what, setWhat] = useState<string>(idea ?? DATE_IDEAS[0]);
   const [ahead, setAhead] = useState(1);
   const [isUsing, setUsing] = useState(false);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [done, setDone] = useState<TicketDone | null>(null);
   const her = characters.find((c) => c.id === herId) ?? characters[0];
 
-  // 换一种券打开时从头来。
-  const [openedFor, setOpenedFor] = useState<TicketKind | null>(null);
-  if (kind !== openedFor) {
-    setOpenedFor(kind);
+  // 换一种券（或在地图上换一处）打开时从头来。
+  const opening = kind === null ? null : `${kind}|${idea ?? ""}|${herFirst ?? ""}`;
+  const [openedFor, setOpenedFor] = useState<string | null>(null);
+  if (opening !== openedFor) {
+    setOpenedFor(opening);
     if (kind !== null) {
       setOutfit({ kind: "free" });
       setDescribed("");
-      setWhat(DATE_IDEAS[0]);
+      setWhat(idea ?? DATE_IDEAS[0]);
+      if (herFirst) setHerId(herFirst);
       setAhead(1);
       setFailure(null);
       setDone(null);

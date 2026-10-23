@@ -28,7 +28,7 @@ import {
 } from "@/lib/home";
 import { getCabinet, keepsakeImageUrl } from "@/lib/keepsakes";
 import { unreadLetters } from "@/lib/letters";
-import { AlbumIcon, ArrangeIcon, DrawRoomIcon, SwitchRoomIcon } from "@/theme/icons";
+import { AlbumIcon, ArrangeIcon, DrawRoomIcon, MapIcon, SwitchRoomIcon } from "@/theme/icons";
 
 import { AlbumDialog } from "./AlbumDialog";
 import { PICTURE_HEIGHT, RoomScene, SCENE_HEIGHT, SCENE_WIDTH, sceneSize } from "./RoomScene";
@@ -40,7 +40,8 @@ const CLOCK_MS = 60_000;
 const NEWS_THINGS = ["mailbox", "diary", "shelf", "phone"] as const;
 
 /**
- * 制作人的家（`/home`，GLOSSARY.md「制作人的家」）：页首是「家」，右边「搬去大房子 / 一室公寓」和「相册」；下面整块是屋子。
+ * 制作人的家（`/home`，GLOSSARY.md「制作人的家」）：页首是「家」，右边「搬去大房子 / 一室公寓」、「出门看看」（去地图）
+ * 和「相册」；下面整块是屋子。
  * 屋子按高度铺满，宽出来的（手机竖着拿时）可以左右划着看，一打开先停在中间。指着、Tab 到一样东西时，屋子底下的
  * 提示条说它是什么、有没有新的、点了会怎样；点了去对应的页，相框打开相册，窗户拉窗帘。
  */
@@ -206,6 +207,12 @@ export function HomePage() {
             >
               <ArrangeIcon />
               <span className="max-sm:hidden">{isArranging ? t.arrangeDone : t.arrange}</span>
+            </Button>
+          )}
+          {!isArranging && (
+            <Button variant="ghost" size="sm" onClick={() => go("/home/map")} aria-label={copy.map.open}>
+              <MapIcon />
+              <span className="max-sm:hidden">{copy.map.open}</span>
             </Button>
           )}
           {!isArranging && (

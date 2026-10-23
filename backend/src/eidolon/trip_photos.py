@@ -161,6 +161,12 @@ class Dates:
             (user_id, character_id, day.isoformat()),
         )
 
+    async def upcoming(self, user_id: str, today: date) -> list[tuple[str, date, str]]:
+        """The user's days out from `today` on, soonest first: with whom, which day, and
+        what they are to do (GLOSSARY.md「地图」)."""
+        rows = await self._db.read(_upcoming, user_id, today)
+        return [(r["character_id"], date.fromisoformat(r["day"]), r["what"]) for r in rows]
+
     async def on(self, user_id: str, character_id: str, day: date) -> str | None:
         """What she is to do with the producer on `day`, if anything."""
         return await self._db.read(self._on_body, user_id, character_id, day)
@@ -616,6 +622,14 @@ class TripPhotos:
     def close(self) -> None:
         for task in self._drawing:
             task.cancel()
+
+
+def _upcoming(db: sqlite3.Connection, user_id: str, today: date) -> list[sqlite3.Row]:
+    return by_name(db).execute(
+        "SELECT character_id, day, what FROM dates WHERE user_id = ? AND day >= ?"
+        " ORDER BY day, character_id",
+        (user_id, today.isoformat()),
+    ).fetchall()
 
 
 def _open(db: sqlite3.Connection) -> None:
