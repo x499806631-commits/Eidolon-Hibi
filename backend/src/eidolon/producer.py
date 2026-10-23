@@ -21,7 +21,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo, available_timezones
 
 Gender = Literal["male", "female"]
-Talking = Literal["typing", "in_call", "apart"]
+Talking = Literal["typing", "in_call", "apart", "together"]
 """How the user and she are talking now: typing, in a call, or not at all."""
 
 DEFAULT_TIMEZONE = "Asia/Shanghai"
@@ -169,10 +169,20 @@ def producer_prompt(profile: ProducerProfile, ties: Ties | None = None) -> str:
     return "\n".join(lines)
 
 
-_TYPING = "制作人正在用文字和你聊天，你们没有在打电话；不想聊的时候就说不想聊，不要说挂电话或挂断。"
-_IN_A_CALL = "制作人正在和你打电话。"
+_ONLINE = (
+    "你们是隔着手机联系，不在一起：不会有牵手、摸头、递东西这种见了面才有的接触，"
+    "也不要写成你就在他身边；想见面就说想见面。"
+)
+"""Text and calls are online, apart (GLOSSARY.md「约会」「偶遇」 are face to face)."""
+_TYPING = (
+    "制作人正在用文字和你聊天，你们没有在打电话；不想聊的时候就说不想聊，不要说挂电话或挂断。" + _ONLINE
+)
+_IN_A_CALL = "制作人正在和你打电话。" + _ONLINE
 _APART = "你们这会儿没在说话。"
-_TALKING: dict[Talking, str] = {"typing": _TYPING, "in_call": _IN_A_CALL, "apart": _APART}
+_TOGETHER = "你和制作人现在面对面在一起（不是在网上聊天，也不是打电话），可以有当面的动作和接触，照你的性格来。"
+_TALKING: dict[Talking, str] = {
+    "typing": _TYPING, "in_call": _IN_A_CALL, "apart": _APART, "together": _TOGETHER,
+}
 _BIRTHDAY = (
     "今天是制作人的生日。请在合适的时候用你自己的方式祝福一次：先回应制作人说的话，不要每句都提。"
 )

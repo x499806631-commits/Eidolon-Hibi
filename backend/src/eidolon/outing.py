@@ -36,17 +36,22 @@ from eidolon.photo_prompt import outing_prompt
 from eidolon.producer import effective_timezone
 from eidolon.relations import Relations
 from eidolon.store import Conversation, Message, Store, add_outing_card, read_profile
-from eidolon.trip_photos import TripPhotos
+from eidolon.affinity import Affinities
+from eidolon.trip_photos import DATE_FROM, TripPhotos
 
 log = logging.getLogger(__name__)
 
 OPENS = time(10)
 """From when on the day a day out can be met."""
-BEST = (time(13), time(18))
+BEST = (DATE_FROM, time(18))
 """When she expects to be met; later, she waited."""
 CLOSES = time(22)
 """Past this, a day out not met is missed."""
 MAX_PHOTOS = 2
+MAX_SCORE = 10
+"""The most a day out moves her affinity, either way, by how she liked it."""
+OUTING_TITLE = "{month}月{day}日 · 和{name}约会：{what}"
+"""The title of a day out's own conversation, as her past conversations list it."""
 """Photos of them together a day out may take."""
 BACKGROUND_TIME_LIMIT = 90.0
 """How long drawing a stop's background may take, in seconds."""
@@ -62,6 +67,7 @@ CREATE TABLE IF NOT EXISTS outings (
     what TEXT NOT NULL,
     spot TEXT,
     conversation_id TEXT NOT NULL,
+    home_conversation_id TEXT,
     stop INTEGER NOT NULL DEFAULT 0,
     started_at TEXT NOT NULL,
     late_minutes INTEGER NOT NULL DEFAULT 0,
@@ -127,6 +133,7 @@ class Outing:
     what: str
     spot: str | None
     conversation_id: str
+    """The conversation of its own the day out is in."""
     stop: int
     started_at: datetime
     late_minutes: int
@@ -135,6 +142,8 @@ class Outing:
     ended_at: datetime | None
     photos: int
     summary: dict | None
+    home_conversation_id: str | None = None
+    """Her current conversation as they met, where the card of the day out is put."""
 
     @property
     def stops(self) -> tuple[Stop, ...]:
@@ -173,6 +182,7 @@ class Outings:
         moment: Callable[[str, str, str, datetime], Awaitable[None]] | None,
         relations: Relations | None,
         features: Switches = AllOn(),
+        affinities: Affinities | None = None,
     ) -> None:
         self._db = db
         self._store = store
@@ -186,6 +196,7 @@ class Outings:
         self._moment = moment
         self._relations = relations
         self._features = features
+        self._affinities = affinities
         db.prepare(_open)
         engine.with_outings(self.prompt_for)
 
@@ -216,8 +227,8 @@ class Outings:
         }
 
     async def start(self, user_id: str, character_id: str) -> Outing:
-        """Meet her for today's day out, in her current conversation; the one met already
-        if they met. Raises NoDateToday, NotYet, TooLate."""
+        """Meet her for today's day out, in a conversation of its own, she speaking first;
+        the one met already if they met. Raises NoDateToday, NotYet, TooLate."""
         zone = await self._zone(user_id)
         now = self._clock().astimezone(zone)
         planned = await self._db.read(_planned_on, user_id, character_id, now.date())
@@ -230,19 +241,46 @@ class Outings:
             raise NotYet()
         if now.time() >= CLOSES:
             raise TooLate()
-        conversation = await self._conversation(user_id, character_id)
+        home = await self._conversation(user_id, character_id)
         best_until = datetime.combine(now.date(), BEST[1], zone)
         late = max(0, int((now - best_until).total_seconds() // 60))
         what = planned["what"]
-        before = await self._store.list_messages(conversation.id)
-        after_message = max((m.id for m in before), default=0)
+        spot = spot_of(what)
+        stops = stops_of(spot)
+        # 当面的事存成一段自己的对话（GLOSSARY.md「约会」）：列在历史对话里，她的当前对话照旧是当前的
+        character = self._characters.get(character_id)
+        title = OUTING_TITLE.format(
+            month=now.month, day=now.day, name=character.name if character else "", what=what
+        )
+        conversation = await self._store.create_side_conversation(user_id, character_id, home, title)
         await self._db.write(
-            _start, user_id, character_id, now.date(), what, spot_of(what), conversation.id, now,
-            late, after_message,
+            _start, user_id, character_id, now.date(), what, spot, conversation.id, now, late,
+            0, home.id,
         )
         met = await self._db.read(_outing_on, user_id, character_id, now.date())
         assert met is not None
+        await self._opening(met, conversation, stops[0].name)
         return met
+
+    async def _opening(self, outing: "Outing", conversation: Conversation, where: str) -> None:
+        """She speaks first as they meet: greets him and talks over how to spend the day."""
+        recording = self._activity.begin(
+            "trip_photo", outing.user_id, outing.character_id, own_llm=False, exempt=False
+        )
+        lease = self._config.lease()
+        try:
+            with recording.current():
+                said = await self._engine.outing_opening(
+                    conversation, lease.keys.chat_llm, outing.what, where, outing.late_minutes
+                )
+        except Exception as e:
+            log.warning("her first words on a day out failed: %s", type(e).__name__)
+            await recording.finish("failed")
+            return
+        finally:
+            lease.release()
+        await self._store.add_photo_reach_out(conversation.id, said, None)
+        await recording.finish("success")
 
     async def _conversation(self, user_id: str, character_id: str) -> Conversation:
         for conversation, _, _ in await self._store.latest_conversations(user_id):
@@ -402,8 +440,14 @@ class Outings:
             "photos": outing.photos,
         }
         await self._db.write(
-            _end, outing_id, outing.conversation_id, now, json.dumps(summary, ensure_ascii=False), card
+            _end, outing_id, outing.home_conversation_id or outing.conversation_id, now,
+            json.dumps(summary, ensure_ascii=False), card,
         )
+        score = summary.get("score")
+        if isinstance(score, int | float) and self._affinities is not None:
+            await self._affinities.moved_by(
+                user_id, outing.character_id, float(max(-MAX_SCORE, min(MAX_SCORE, score)))
+            )
         await self._trip_photos.date_met(user_id, outing.character_id, outing.day.isoformat())
         name = character.name if character else ""
         local = now.astimezone(zone)
@@ -438,7 +482,7 @@ class Outings:
         if not lines:
             return None
         prompt = [
-            ChatMessage("system", OUTING_SUMMARY.format(name=character.name, what=outing.what)),
+            ChatMessage("system", OUTING_SUMMARY.format(name=character.name, what=outing.what, max_score=MAX_SCORE)),
             ChatMessage("user", "\n".join(lines)[-12000:]),
         ]
         lease = self._config.lease()
@@ -459,7 +503,10 @@ class Outings:
             return None
         if not isinstance(read, dict) or not read.get("recap"):
             return None
-        return {k: str(read.get(k) or "")[:300] for k in ("recap", "memory", "news", "moment")}
+        kept: dict = {k: str(read.get(k) or "")[:300] for k in ("recap", "memory", "news", "moment")}
+        score = read.get("score")
+        kept["score"] = int(score) if isinstance(score, int | float) else 0
+        return kept
 
     async def played(self, user_id: str, character_id: str, day: str) -> bool:
         """Whether the day out of `day` was met."""
@@ -474,12 +521,16 @@ OUTING_SUMMARY = """下面是{name}和制作人今天约会（{what}）时的全
 {{"recap": "用{name}自己的口吻、第一人称写两三句，回顾今天的约会：去了哪、印象最深的瞬间、心情",
 "memory": "第三人称一句话，以「{name}」开头，写她和制作人今天约会的事和最重要的一两个细节，以后她能想起来",
 "news": "第三人称一句话，以「{name}」开头，写成别的偶像会听说的样子，只说大概，不写私密的细节",
-"moment": "以「{name}」开头的一句话，写今天对她来说最重要的一刻，给她写日记用"}}
-只写对话里真的发生过的事，不要编。"""
+"moment": "以「{name}」开头的一句话，写今天对她来说最重要的一刻，给她写日记用",
+"score": 一个 -{max_score} 到 {max_score} 的整数，{name}对这次约会有多满意：很开心、被好好对待是正数，被冷落、被惹生气是负数，普通就是 0 附近}}
+只写对话里真的发生过的事，不要编。不满意的时候，recap 和 moment 最多写到对制作人有一点小埋怨，不要写得更重。"""
 
 
 def _open(db: sqlite3.Connection) -> None:
     db.executescript(_SCHEMA)
+    columns = {row[1] for row in db.execute("PRAGMA table_info(outings)")}
+    if "home_conversation_id" not in columns:
+        db.execute("ALTER TABLE outings ADD COLUMN home_conversation_id TEXT")
 
 
 def _planned_on(db: sqlite3.Connection, user_id: str, character_id: str, day: date) -> sqlite3.Row | None:
@@ -498,6 +549,7 @@ def _row(row: sqlite3.Row | None) -> Outing | None:
         datetime.fromisoformat(row["started_at"]), row["late_minutes"], row["after_message"],
         datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
         row["photos"], json.loads(row["summary"]) if row["summary"] else None,
+        row["home_conversation_id"],
     )
 
 
@@ -525,12 +577,14 @@ def _active_in(db: sqlite3.Connection, conversation_id: str) -> Outing | None:
 def _start(
     db: sqlite3.Connection, user_id: str, character_id: str, day: date, what: str,
     spot: str | None, conversation_id: str, now: datetime, late: int, after_message: int,
+    home_conversation_id: str,
 ) -> None:
     db.execute(
         "INSERT OR IGNORE INTO outings (user_id, character_id, day, what, spot, conversation_id,"
-        " started_at, late_minutes, after_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " started_at, late_minutes, after_message, home_conversation_id)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (user_id, character_id, day.isoformat(), what, spot, conversation_id,
-         now.astimezone(UTC).isoformat(), late, after_message),
+         now.astimezone(UTC).isoformat(), late, after_message, home_conversation_id),
     )
 
 

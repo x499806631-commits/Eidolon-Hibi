@@ -38,6 +38,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from eidolon.city_map import spot_of
 from eidolon.activity import ActivityLog, image_origin, timed
 from eidolon.affinity import Affinities
 from eidolon.characters import Character
@@ -69,6 +70,10 @@ AFTER_DATE = time(17, 30)
 AFTER_DATE_UNTIL = time(19)
 """Between when, the day out over, she tells the producer how it was."""
 MAX_DAYS_AHEAD = 7
+DATE_FROM = time(13)
+"""When she expects the producer on the day out (GLOSSARY.md「约会」), and says she is waiting."""
+MISSED_DATE_STEP = -10.0
+"""What a day out never met takes off her affinity."""
 """How many days ahead the producer may invite her."""
 TRIES = 3
 RETRY_AFTER = timedelta(hours=1)
@@ -194,6 +199,14 @@ class Dates:
 
     async def told(self, user_id: str, character_id: str, day: str) -> None:
         return await self._db.write(self._told_body, user_id, character_id, day)
+
+    async def reminded(self, user_id: str, character_id: str, day: str) -> None:
+        await self._db.write(_reminded, user_id, character_id, day)
+
+    async def spot_taken(self, user_id: str, character_id: str, day: date, spot: str) -> bool:
+        """Whether another of them is going out with the producer to `spot` on `day`."""
+        rows = await self._db.read(_others_on, user_id, character_id, day)
+        return any(spot_of(r["what"]) == spot for r in rows)
 
     def _told_body(self, db: sqlite3.Connection, user_id: str, character_id: str, day: str) -> None:
         by_name(db).execute(
@@ -566,10 +579,11 @@ class TripPhotos:
         today = self._clock().astimezone(zone).date()
         if not 1 <= (day - today).days <= MAX_DAYS_AHEAD:
             raise DateTaken("只能约明天到一周以内")
-        minutes = (AFTER_DATE_UNTIL.hour * 60 + AFTER_DATE_UNTIL.minute) - (
-            AFTER_DATE.hour * 60 + AFTER_DATE.minute
-        )
-        due = datetime.combine(day, AFTER_DATE, zone) + timedelta(minutes=5 * self._random(minutes // 5))
+        spot = spot_of(what)
+        if spot is not None and await self._dates.spot_taken(user_id, character_id, day, spot):
+            raise DateTaken("那天那个地方已经约了别人")
+        # 当面去赴约（GLOSSARY.md「约会」）：约好的时间一到，她来说已经在那里等着了
+        due = datetime.combine(day, DATE_FROM, zone)
         await self._dates.plan(user_id, character_id, day, what, due)
         when = _when(today, day)
         recording = self._activity.begin("trip_photo", user_id, character_id, own_llm=False, exempt=False)
@@ -613,6 +627,8 @@ class TripPhotos:
                 return
             zone = await self._zone(user_id)
             if now < self._closes(date.fromisoformat(day), zone):
+                if not row["reminded"]:
+                    await self._tell_waiting(conversation, row, now)
                 return
             await self._tell_missed(conversation, row, now)
             return
@@ -644,6 +660,24 @@ class TripPhotos:
             return
         await self._sent_with_photo(conversation, said, tag, [], recording, producer_there=True)
 
+    async def _tell_waiting(self, conversation: Conversation, row: sqlite3.Row, now: datetime) -> None:
+        user_id, character_id, day = row["user_id"], row["character_id"], row["day"]
+        recording = self._activity.begin("trip_photo", user_id, character_id, own_llm=False, exempt=False)
+        lease = self._config.lease()
+        try:
+            with recording.current():
+                said = await self._engine.waiting_for_date(conversation, lease.keys.chat_llm, row["what"])
+        except Exception as e:
+            log.warning("telling she waits for a day out failed: %s", type(e).__name__)
+            await recording.finish("failed")
+            await self._dates.tried(user_id, character_id, day, now)
+            return
+        finally:
+            lease.release()
+        await self._dates.reminded(user_id, character_id, day)
+        await self._store.add_photo_reach_out(conversation.id, said, None)
+        await recording.finish("success")
+
     async def _tell_missed(self, conversation: Conversation, row: sqlite3.Row, now: datetime) -> None:
         user_id, character_id, day = row["user_id"], row["character_id"], row["day"]
         recording = self._activity.begin("trip_photo", user_id, character_id, own_llm=False, exempt=False)
@@ -661,6 +695,7 @@ class TripPhotos:
         await self._dates.told(user_id, character_id, day)
         await self._store.add_photo_reach_out(conversation.id, said, None)
         await recording.finish("success")
+        await self._affinities.moved_by(user_id, character_id, MISSED_DATE_STEP)
 
     async def _current(self, user_id: str, character_id: str) -> Conversation | None:
         return next(
@@ -687,8 +722,25 @@ def _upcoming(db: sqlite3.Connection, user_id: str, today: date) -> list[sqlite3
     ).fetchall()
 
 
+def _reminded(db: sqlite3.Connection, user_id: str, character_id: str, day: str) -> None:
+    db.execute(
+        "UPDATE dates SET reminded = 1 WHERE user_id = ? AND character_id = ? AND day = ?",
+        (user_id, character_id, day),
+    )
+
+
+def _others_on(db: sqlite3.Connection, user_id: str, character_id: str, day: date) -> list[sqlite3.Row]:
+    return by_name(db).execute(
+        "SELECT what FROM dates WHERE user_id = ? AND character_id != ? AND day = ?",
+        (user_id, character_id, day.isoformat()),
+    ).fetchall()
+
+
 def _open(db: sqlite3.Connection) -> None:
     db.executescript(_SCHEMA)
+    columns = {row[1] for row in db.execute("PRAGMA table_info(dates)")}
+    if "reminded" not in columns:  # she says she is waiting there, on the day (GLOSSARY.md「约会」)
+        db.execute("ALTER TABLE dates ADD COLUMN reminded INTEGER NOT NULL DEFAULT 0")
 
 
 def _row(db: sqlite3.Connection, user_id: str, character_id: str, day: date) -> sqlite3.Row | None:

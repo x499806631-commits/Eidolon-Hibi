@@ -2052,6 +2052,8 @@ export const zh = {
     /** 对话里的约会卡。 */
     card: (month: number, day: number, place: string) => `${month}月${day}日 · ${place}`,
     cardOpen: "打开约会",
+    photoAlt: "你们的合照",
+    photoDrawing: "合照正在洗出来……",
   },
   /** 地图（GLOSSARY.md「地图」）：从家里出门看看。 */
   map: {
@@ -2111,6 +2113,8 @@ export const zh = {
     noTickets: "邀约券用完了，抽奖时偶尔会抽到",
     /** 约好的约会，在那一处旁边：「真乃 · 10月25日」。 */
     dateBadge: (name: string, month: number, day: number) => `${name} · ${month}月${day}日`,
+    /** 今天的约会：点了去赴约。 */
+    meetHer: (name: string) => `${name}在等你 · 去赴约`,
     datesTitle: "约好的约会",
     /** 约好的一次，读屏和列表里：「10月25日，和真乃：去水族馆看水母」。 */
     dateLine: (name: string, month: number, day: number, what: string) => `${month}月${day}日，和${name}：${what}`,

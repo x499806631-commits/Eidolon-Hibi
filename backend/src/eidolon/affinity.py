@@ -803,6 +803,14 @@ class Affinities:
             return None
         return await self._db.write(self._promise_settled, user_id, character_id, step)
 
+    async def moved_by(self, user_id: str, character_id: str, step: float) -> Status | None:
+        """Change the user's affinity with the character by `step` as a day out or an
+        encounter went (GLOSSARY.md「约会」「偶遇」): as a promise settled does, no day's limit,
+        never into a cooldown; None while affinity is off, or where it changes nothing."""
+        if not self.on or step == 0.0:
+            return None
+        return await self._db.write(self._promise_settled, user_id, character_id, step)
+
     def _promise_settled(
         self, db: sqlite3.Connection, user_id: str, character_id: str, step: float
     ) -> Status | None:

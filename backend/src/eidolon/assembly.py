@@ -586,7 +586,7 @@ def build(
                trip_photos, favors)
     outings = Outings(
         database, store, engine, characters, config, activity, clock, trip_photos, experiences,
-        diary.moment, relations, features,
+        diary.moment, relations, features, affinities,
     )
     trip_photos.with_outings(outings.played, outings.closes)
     config.on_change(gifts.notice)

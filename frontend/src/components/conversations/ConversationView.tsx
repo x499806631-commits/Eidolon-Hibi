@@ -1,6 +1,7 @@
 "use client";
 
 import NextLink from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   useEffect,
   useRef,
@@ -157,16 +158,23 @@ export function ConversationView({
   // 约会（GLOSSARY.md「约会」）：今天和她约好了就在页首下面挂一条，点了打开约会的画面。
   const [outingToday, setOutingToday] = useState<OutingToday | null>(null);
   const [isOutingOpen, setOutingOpen] = useState(false);
+  // 从地图上点「去赴约」来的（`?outing=1`）：读到今天的约会就打开。
+  const params = useSearchParams();
+  const fromMap = params.get("outing") === "1";
   useEffect(() => {
     let current = true;
     getOutingToday(character.id).then(
-      (today) => current && setOutingToday(today),
+      (today) => {
+        if (!current) return;
+        setOutingToday(today);
+        if (fromMap && today.date) setOutingOpen(true);
+      },
       () => {}, // 读不到就不挂
     );
     return () => {
       current = false;
     };
-  }, [character.id]);
+  }, [character.id, fromMap]);
   const subtree = useRef<HTMLDivElement>(null);
   // 她现在对制作人的好感度；读不到（好感度关着、没配判断模型或请求失败）就不显示标识，也不出变化胶囊。
   const { affinity, affinityCue, cooling, ended, trophy } = snapshot;
@@ -548,7 +556,7 @@ export function ConversationView({
       {live && isOutingOpen && outingToday && (
         <OutingLayer
           live={live}
-          snapshot={snapshot}
+          userId={userId}
           character={character}
           standOutfits={outfits?.toTry ?? []}
           today={outingToday}

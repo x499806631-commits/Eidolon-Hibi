@@ -762,6 +762,17 @@ class Store:
         await self._db.write(_insert_conversation, conversation)
         return conversation
 
+    async def create_side_conversation(
+        self, user_id: str, character_id: str, before: Conversation, title: str
+    ) -> Conversation:
+        """A conversation of its own for what happens face to face (GLOSSARY.md「约会」「偶遇」),
+        named `title`: listed among her past ones, just before `before`, her current one,
+        which stays current."""
+        at = datetime.fromisoformat(before.created_at) - timedelta(milliseconds=1)
+        conversation = Conversation(uuid.uuid4().hex, user_id, character_id, at.isoformat(), title)
+        await self._db.write(_insert_side_conversation, conversation)
+        return conversation
+
     async def get_conversation(self, conversation_id: str) -> Conversation | None:
         return await self._db.read(_conversation, conversation_id)
 
@@ -1342,6 +1353,15 @@ def _conversations(db: sqlite3.Connection, user_id: str, character_id: str) -> l
         (user_id, character_id),
     ).fetchall()
     return [Conversation(**row) for row in rows]
+
+
+def _insert_side_conversation(db: sqlite3.Connection, conversation: Conversation) -> None:
+    db.execute(
+        "INSERT INTO conversations (id, user_id, character_id, created_at, title)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (conversation.id, conversation.user_id, conversation.character_id,
+         conversation.created_at, conversation.title),
+    )
 
 
 def _insert_conversation(db: sqlite3.Connection, conversation: Conversation) -> None:

@@ -200,9 +200,10 @@ async def test_a_date_ticket_she_answers_has_in_her_schedule_and_never_met_she_s
     make_client: ClientFactory, settings: Settings
 ):
     clock = FakeClock(NOON)
+    waiting = ["<ja>待ってるね</ja><zh>我在等你哦</zh>"]
     after = ["<ja>来なかったね……</ja><zh>你没来呢……</zh>"]
     client, llm, conversation = await talked(
-        make_client, ["<ja>行きたい！</ja><zh>想去！</zh>"], [PLAN], after,
+        make_client, ["<ja>行きたい！</ja><zh>想去！</zh>"], [PLAN], waiting, after,
         numbers=(0, 1, 0, 1), clock=clock,
     )
     await give(client, settings, "date")
@@ -215,7 +216,7 @@ async def test_a_date_ticket_she_answers_has_in_her_schedule_and_never_met_she_s
     backend = backend_of(client)
     await backend.schedule_writer.run_due()
     clock.now = datetime.combine(tomorrow, time(17, 31), UTC)
-    await backend.trip_photos.run_due()  # 还能去赴约：她先不说什么
+    await backend.trip_photos.run_due()  # 时间到了：她说在那里等着
     waiting = reach_outs(await record(client, conversation))
     clock.now = datetime.combine(tomorrow, time(22, 30), UTC)
     await backend.trip_photos.run_due()
@@ -224,9 +225,9 @@ async def test_a_date_ticket_she_answers_has_in_her_schedule_and_never_met_she_s
     assert used.status_code == 200, used.text
     assert llm.prompts[1][-1].content == WANTS_TO_ANSWER_DATE
     assert DATE_TWIST.format(what="去看电影") in str(llm.prompts[2])
-    assert len(waiting) == 1
-    assert llm.prompts[3][-1].content.endswith(WANTS_TO_TALK_MISSED_DATE)
-    assert [r["segments"][0]["zh"] for r in told] == ["想去！", "你没来呢……"]
+    assert len(waiting) == 2
+    assert llm.prompts[4][-1].content.endswith(WANTS_TO_TALK_MISSED_DATE)
+    assert [r["segments"][0]["zh"] for r in told] == ["想去！", "我在等你哦", "你没来呢……"]
 
 
 async def test_out_together_their_photo_has_the_producer_in_it_as_their_profile_has_them(
@@ -235,9 +236,10 @@ async def test_out_together_their_photo_has_the_producer_in_it_as_their_profile_
     clock = FakeClock(NOON)
     image = FakeImageService()
     tag = TAG + "\nyou: yes, holding hands"
+    hello = ["<ja>来た！</ja><zh>你来啦！</zh>"]
     after = [f"<photo>{tag}</photo><ja>楽しかった！</ja><zh>好开心！</zh>"]
     client, llm, _ = await talked(
-        make_client, ["<ja>行きたい！</ja><zh>想去！</zh>"], [PLAN], after,
+        make_client, ["<ja>行きたい！</ja><zh>想去！</zh>"], [PLAN], hello, after,
         numbers=(0, 1, 0, 1), clock=clock, image=image,
     )
     await client.put("/api/profile", json={"gender": "female"})
@@ -256,8 +258,8 @@ async def test_out_together_their_photo_has_the_producer_in_it_as_their_profile_
     await asyncio.gather(*backend.trip_photos._drawing)  # pyright: ignore[reportPrivateUsage]
 
     assert taken.status_code == 200, taken.text
-    assert any(WITH_YOU_THIS_TIME.strip() in m.content for m in llm.prompts[3])
-    assert "牵着手" in str(llm.prompts[3])
+    assert any(WITH_YOU_THIS_TIME.strip() in m.content for m in llm.prompts[4])
+    assert "牵着手" in str(llm.prompts[4])
     [request] = image.requests
     sent = json.dumps(request["body"], ensure_ascii=False)
     assert "p-head producer" in sent and "genderswap (mtf)" in sent and "holding hands" in sent

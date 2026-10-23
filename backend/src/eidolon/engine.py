@@ -639,6 +639,8 @@ DATE_AFTER_SITUATION = "今天下午你和制作人一起{what}，刚刚分开�
 """What she is told, back from it (GLOSSARY.md「邀约」)."""
 
 WANTS_TO_TAKE_OUTING_PHOTO = "（制作人举起手机，说要和你拍一张合照。）"
+WANTS_TO_SAY_WAITING = "（约好的时间到了，你已经到了约会的地方。你想给制作人发几句。）"
+WANTS_TO_GREET_ON_DATE = "（制作人刚刚到了约会的地方，就在你面前。你先开口。）"
 WANTS_TO_TALK_MISSED_DATE = "（今天约好的约会，制作人一直没有来。你想给他发几句。）"
 WANTS_TO_TALK_AFTER_DATE = "（今天和制作人一起出去回来了。制作人这会儿没在和你说话。你想先给他发几句。）"
 
@@ -1438,6 +1440,36 @@ class ConversationEngine:
             raise EmptyReply("对话模型没有写照片标签")
         return said, tag
 
+    async def waiting_for_date(self, conversation: Conversation, llm: ChatLLM, what: str) -> list[Segment]:
+        """What she says first on the day out (`what`, GLOSSARY.md「约会」) as its time comes:
+        that she is there already, waiting for the producer. Raises EmptyReply."""
+        rules = (
+            f"# 约会的日子\n今天你和制作人约好了一起{what}，约好的时间到了，你已经到了约好的地方。"
+            "\n- 用 <ja><zh> 写一到两段：照你的性格和现在的心情，问他还记不记得今天的约定，告诉他你已经在那里等他了。"
+            "\n- 不发照片，也不说要给他打电话。"
+        )
+        said, _ = await self._reaching_out(conversation, llm, rules, WANTS_TO_SAY_WAITING)
+        return said
+
+    async def outing_opening(
+        self, conversation: Conversation, llm: ChatLLM, what: str, where: str, late_minutes: int
+    ) -> list[Segment]:
+        """What she says first as the producer meets her for the day out (`what`) at `where`
+        (GLOSSARY.md「约会」): a greeting as she would, by her heart and her affinity, and how
+        they might spend it, she proposing or asking him, as she is. Raises EmptyReply."""
+        late = (
+            f"制作人比约好的时间晚到了 {late_minutes} 分钟，你等了很久，可以按你的性格先说一句。"
+            if late_minutes > 0 else ""
+        )
+        rules = (
+            f"# 约会开始\n你和制作人约好了今天一起{what}。你在{where}等着，他刚刚到了，你们现在面对面。{late}"
+            "\n- 用 <ja><zh> 写一到三段：先打招呼，招呼的样子照你的性格和你对他现在的好感；"
+            "再商量今天怎么玩：性格开朗主动的可以自己说想先去哪、想玩什么；内向的可以问他想去哪、让他来决定。"
+            "\n- 可以在中文字幕里用（）简短写一句你的动作。不发照片。"
+        )
+        said, _ = await self._reaching_out(conversation, llm, rules, WANTS_TO_GREET_ON_DATE)
+        return said
+
     async def missed_date(self, conversation: Conversation, llm: ChatLLM, what: str) -> list[Segment]:
         """What she says first when the producer never came to the day out they had planned
         for today (`what`, GLOSSARY.md「约会」). Raises EmptyReply if she says nothing."""
@@ -1655,7 +1687,8 @@ class ConversationEngine:
             chat_history(messages, turns), narrations(record, self._gift_catalog, timezone),
             [
                 now_prompt(
-                    profile, now, timezone, "in_call" if in_call is not None else "typing",
+                    profile, now, timezone,
+                    "in_call" if in_call is not None else "together" if outing else "typing",
                     affinity_lines, last_contact,
                     await self._day_lines(
                         character, conversation.user_id, now, timezone,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { FailureNotice } from "@/components/app/FailureNotice";
 import { Stand } from "@/components/conversations/stand/Stand";
@@ -8,11 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { copy } from "@/i18n";
-import type { Character, Outfit, Segment } from "@/lib/api";
-import type { Entry } from "@/lib/conversationLog";
+import { photoImageUrl, type Character, type Outfit, type Segment } from "@/lib/api";
 import { toFailure, type Failure } from "@/lib/failure";
 import { timeOfDay } from "@/lib/home";
-import type { LiveConversation, Snapshot } from "@/lib/liveConversation";
+import type { LiveConversation } from "@/lib/liveConversation";
 import {
   ACTIONS,
   actionText,
@@ -40,6 +39,7 @@ import {
 } from "@/theme/icons";
 
 import { OutingArt } from "./OutingArt";
+import { useOutingTalk, type TalkLine } from "./useOutingTalk";
 
 const t = copy.outing;
 /** 一段台词至少说多久（毫秒），长的按字数加。 */
@@ -54,7 +54,7 @@ const PER_CHAR_MS = 120;
  */
 export function OutingLayer({
   live,
-  snapshot,
+  userId,
   character,
   standOutfits,
   today,
@@ -63,8 +63,9 @@ export function OutingLayer({
   onClose,
   onChanged,
 }: {
+  /** 她的当前对话：约会结束时那里多一张约会卡，读一次。 */
   live: LiveConversation;
-  snapshot: Snapshot;
+  userId: string;
   character: Character;
   standOutfits: readonly Outfit[];
   today: OutingToday;
@@ -82,7 +83,9 @@ export function OutingLayer({
   const [direction, setDirection] = useState<StandDirection>(CALM);
   const [picture, setPicture] = useState<{ stop: string; v: number; shown: boolean } | null>(null);
   const [now] = useState(() => new Date());
-  const { draft, busy, entries } = snapshot;
+  const [draft, setDraft] = useState("");
+  const talk = useOutingTalk(outing?.conversation_id ?? null, userId);
+  const busy = talk.isBusy;
 
   const changed = (next: Outing) => {
     setOuting(next);
@@ -117,23 +120,19 @@ export function OutingLayer({
     };
   }, [outing?.id, here?.id, today.can_draw]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 这次约会里的几句：见面以后的。
-  const since = outing ? Date.parse(outing.started_at) : Infinity;
-  const said = useMemo(
-    () => entries.filter((e) => e.kind !== "event" && Date.parse(e.at) >= since - 1000),
-    [entries, since],
-  );
-  const lastReply = [...said].reverse().find((e): e is Extract<Entry, { kind: "character" }> => e.kind === "character");
+  // 这次约会里的几句：约会那段对话的。
+  const said = talk.lines;
+  const lastReply = [...said].reverse().find((l): l is Extract<TalkLine, { mine: false }> => !l.mine);
 
   // 她每回一句，按段判断表情，一段一段地换脸、动嘴。
   const played = useRef<string | null>(null);
   useEffect(() => {
     if (!lastReply || lastReply.pending || played.current === lastReply.key) return;
     played.current = lastReply.key;
-    const userSaid = [...said].reverse().find((e) => e.kind === "user");
+    const userSaid = [...said].reverse().find((l): l is Extract<TalkLine, { mine: true }> => l.mine);
     let cancelled = false;
     const segments: Segment[] = lastReply.segments;
-    judgeEmotions(character.id, userSaid && userSaid.kind === "user" ? userSaid.text : "", segments).then(
+    judgeEmotions(character.id, userSaid?.text ?? "", segments).then(
       async (judged) => {
         let nods = 0;
         for (const [i, segment] of segments.entries()) {
@@ -159,8 +158,8 @@ export function OutingLayer({
 
   const send = (text: string) => {
     if (!text.trim() || busy) return;
-    live.setDraft(text);
-    void live.submit();
+    setDraft("");
+    void talk.send(text);
   };
 
   const isLast = outing ? outing.stop >= outing.stops.length - 1 : false;
@@ -251,7 +250,7 @@ export function OutingLayer({
       <div className="relative flex-1" />
 
       <div className="relative flex flex-col gap-2 px-3 pb-3">
-        {failure && <FailureNotice failure={failure} />}
+        {(failure ?? talk.failure) && <FailureNotice failure={(failure ?? talk.failure)!} />}
         {!outing ? (
           <div className="mx-auto flex w-full max-w-md flex-col items-center gap-3 rounded-2xl bg-black/55 p-4 text-center">
             <p className="text-body">{today.date ? t.meetPrompt(character.name, today.date.what) : t.noDate}</p>
@@ -266,7 +265,6 @@ export function OutingLayer({
               onClick={() =>
                 run(async () => {
                   changed(await meet(character.id));
-                  live.reread();
                 })
               }
             >
@@ -285,24 +283,29 @@ export function OutingLayer({
         ) : (
           <>
             <ol aria-live="polite" className="flex max-h-[30vh] flex-col gap-1.5 overflow-y-auto">
-              {said.slice(-4).map((e) =>
-                e.kind === "user" ? (
-                  <li key={e.key} className="self-end rounded-2xl bg-white/85 px-3 py-1.5 text-sm text-black">
-                    {e.text}
+              {said.slice(-4).map((l) =>
+                l.mine ? (
+                  <li key={l.key} className="self-end rounded-2xl bg-white/85 px-3 py-1.5 text-sm text-black">
+                    {l.text}
                   </li>
-                ) : e.kind === "character" ? (
-                  <li key={e.key} className="max-w-[90%] self-start rounded-2xl bg-black/60 px-3 py-2 text-sm">
-                    {e.pending && e.segments.length === 0 ? (
+                ) : (
+                  <li key={l.key} className="max-w-[90%] self-start rounded-2xl bg-black/60 px-3 py-2 text-sm">
+                    {l.pending ? (
                       <Spinner className="size-4" />
                     ) : (
-                      e.segments.map((s, i) => (
+                      l.segments.map((s, i) => (
                         <p key={i} className="leading-relaxed">
                           {s.zh}
                         </p>
                       ))
                     )}
+                    {l.photo?.status === "ready" && (
+                      // eslint-disable-next-line @next/next/no-img-element -- 她发来的合照
+                      <img src={photoImageUrl(l.photo.id)} alt={t.photoAlt} className="mt-2 max-h-48 rounded-xl" />
+                    )}
+                    {l.photo?.status === "pending" && <p className="mt-1 text-xs text-white/70">{t.photoDrawing}</p>}
                   </li>
-                ) : null,
+                ),
               )}
             </ol>
             {wish !== null && (
@@ -313,7 +316,7 @@ export function OutingLayer({
                   void run(async () => {
                     changed(await takePhoto(outing.id, wish));
                     setWish(null);
-                    live.reread();
+                    await talk.reload();
                   });
                 }}
               >
@@ -387,7 +390,7 @@ export function OutingLayer({
                 value={draft}
                 placeholder={t.placeholder}
                 aria-label={t.placeholder}
-                onChange={(e) => live.setDraft(e.target.value)}
+                onChange={(e) => setDraft(e.target.value)}
                 className="flex-1 bg-white/90 text-black"
               />
               <Button type="submit" variant="her" size="icon" aria-label={copy.conversation.send} disabled={busy || !draft.trim()}>

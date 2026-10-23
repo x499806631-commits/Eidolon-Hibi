@@ -190,7 +190,9 @@ export function MapPage() {
                   dates={map.dates}
                   people={people}
                   scale={scale}
+                  today={dayOf(now, timeZone)}
                   onSpot={setSpot}
+                  onMeet={(characterId) => go(`/conversation/${encodeURIComponent(characterId)}?outing=1`)}
                 />
               )}
             </div>
@@ -228,6 +230,11 @@ export function MapPage() {
       />
     </PageShell>
   );
+}
+
+/** 今天是哪天（YYYY-MM-DD），按 `timeZone`。 */
+function dayOf(now: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
 }
 
 /** 「现在」：每处的人立在那栋建筑上面排成一排，头像按钮。 */
@@ -291,12 +298,17 @@ function Spots({
   dates,
   people,
   scale,
+  today,
   onSpot,
+  onMeet,
 }: {
   dates: DateOnMap[];
   people: Map<string, Character>;
   scale: number;
+  /** 今天（YYYY-MM-DD，按制作人的时区）：今天的约会点了就去赴约。 */
+  today: string;
   onSpot: (spot: DateSpot) => void;
+  onMeet: (characterId: string) => void;
 }) {
   const size = Math.max(56, 150 * scale);
   return DATE_SPOTS.map((spot) => {
@@ -322,13 +334,21 @@ function Spots({
               if (!her) return null;
               const [, month, day] = d.day.split("-").map(Number);
               return (
-                <li
-                  key={`${d.character_id}-${d.day}`}
-                  title={t.dateLine(her.name, month, day, d.what)}
-                  className="flex items-center gap-1 rounded-full border bg-background/95 py-0.5 pr-2 pl-0.5 text-xs whitespace-nowrap shadow-sm"
-                >
-                  <MarkedAvatar name={her.name} src={her.avatar_url} size="sm" />
-                  {t.dateBadge(her.name, month, day)}
+                <li key={`${d.character_id}-${d.day}`}>
+                  {d.day === today ? (
+                    <Button size="sm" variant="her" className="h-7 gap-1 rounded-full pl-0.5 text-xs" onClick={() => onMeet(d.character_id)}>
+                      <MarkedAvatar name={her.name} src={her.avatar_url} size="sm" />
+                      {t.meetHer(her.name)}
+                    </Button>
+                  ) : (
+                    <span
+                      title={t.dateLine(her.name, month, day, d.what)}
+                      className="flex items-center gap-1 rounded-full border bg-background/95 py-0.5 pr-2 pl-0.5 text-xs whitespace-nowrap shadow-sm"
+                    >
+                      <MarkedAvatar name={her.name} src={her.avatar_url} size="sm" />
+                      {t.dateBadge(her.name, month, day)}
+                    </span>
+                  )}
                 </li>
               );
             })}
