@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI
 
 from eidolon.assembly import Backend
-from eidolon.city_map import AWAY, place_of, resting_place, spot_of
+from eidolon.city_map import AWAY, Place, place_of, resting_place, spot_of
 from eidolon.producer import effective_timezone
 from eidolon.schedules_api import Now, now_of
 from eidolon.sessions import UserId
@@ -48,8 +48,12 @@ def add_map_routes(app: FastAPI, backend: Backend) -> None:
         }
 
 
-def _shown(character_id: str, now: Now) -> dict:
+def place_now(now: Now) -> Place:
+    """Where on the map she is, as she is now."""
     away = now.trip is not None
     resting = resting_place("bath" if now.bath else "asleep" if now.asleep else None)
-    place = (AWAY if away else resting) if resting else place_of(now.slot, away)
-    return {"character_id": character_id, "place": place, "trip": now.trip, **now.shown()}
+    return (AWAY if away else resting) if resting else place_of(now.slot, away)
+
+
+def _shown(character_id: str, now: Now) -> dict:
+    return {"character_id": character_id, "place": place_now(now), "trip": now.trip, **now.shown()}

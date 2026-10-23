@@ -10,6 +10,7 @@ import { useProducerTimezone } from "@/components/conversations/useProducerTimez
 import { TicketDialog } from "@/components/gifts/TicketDialog";
 import { sceneSize } from "@/components/home/RoomScene";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { copy } from "@/i18n";
 import type { Character } from "@/lib/api";
@@ -29,6 +30,7 @@ import {
 } from "@/lib/cityMap";
 import { toFailure, type Failure } from "@/lib/failure";
 import { getGiftState } from "@/lib/gifts";
+import { encounter, ENCOUNTER_PLACES } from "@/lib/outing";
 import { timeOfDay } from "@/lib/home";
 import { scheduleText } from "@/lib/schedule";
 import { cn } from "@/lib/utils";
@@ -202,10 +204,12 @@ export function MapPage() {
           )}
           {chosen && mode === "now" ? (
             <IdolCard
+              key={chosen.character_id}
               idol={chosen}
               her={people.get(chosen.character_id)}
               onClose={() => setPicked(null)}
               onChat={() => go(`/conversation/${encodeURIComponent(chosen.character_id)}`)}
+              onMet={() => go(`/conversation/${encodeURIComponent(chosen.character_id)}?outing=1`)}
             />
           ) : (
             <p
@@ -365,31 +369,59 @@ function IdolCard({
   her,
   onClose,
   onChat,
+  onMet,
 }: {
   idol: IdolOnMap;
   her: Character | undefined;
   onClose: () => void;
   onChat: () => void;
+  /** 偶遇到了（GLOSSARY.md「偶遇」）：去她的对话页，打开偶遇的画面。 */
+  onMet: () => void;
 }) {
+  const [isGoing, setGoing] = useState(false);
+  const [failure, setFailure] = useState<Failure | null>(null);
   if (!her) return null;
   const place: Place = idol.place;
   const doing = scheduleText(idol);
+  const canMeet = (ENCOUNTER_PLACES as readonly string[]).includes(place);
+  const goThere = async () => {
+    setGoing(true);
+    setFailure(null);
+    try {
+      await encounter(idol.character_id);
+      onMet();
+    } catch (e) {
+      setFailure(toFailure(e));
+      setGoing(false);
+    }
+  };
   return (
-    <div className="absolute bottom-4 left-1/2 flex w-[min(28rem,calc(100%-2rem))] -translate-x-1/2 items-center gap-3 rounded-2xl border bg-background/95 p-3 shadow-md">
-      <MarkedAvatar name={her.name} src={her.avatar_url} size="lg" />
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-body font-medium">{her.name}</p>
-        <p className="truncate text-meta text-muted-foreground">
-          {idol.trip && place === "away" ? t.trip(idol.trip) : t.places[place]}
-          {doing ? ` · ${doing}` : ""}
-        </p>
+    <div className="absolute bottom-4 left-1/2 flex w-[min(28rem,calc(100%-2rem))] -translate-x-1/2 flex-col gap-2 rounded-2xl border bg-background/95 p-3 shadow-md">
+      {failure && <FailureNotice failure={failure} />}
+      <div className="flex flex-wrap items-center gap-3">
+        <MarkedAvatar name={her.name} src={her.avatar_url} size="lg" />
+        <div className="min-w-32 flex-1">
+          <p className="truncate text-body font-medium">{her.name}</p>
+          <p className="truncate text-meta text-muted-foreground">
+            {idol.trip && place === "away" ? t.trip(idol.trip) : t.places[place]}
+            {doing ? ` · ${doing}` : ""}
+          </p>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+        {canMeet && (
+          <Button size="sm" disabled={isGoing} onClick={() => void goThere()}>
+            {isGoing && <Spinner data-icon="inline-start" />}
+            {t.encounter}
+          </Button>
+        )}
+        <Button size="sm" variant={canMeet ? "outline" : "default"} onClick={onChat}>
+          {t.goChat}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onClose}>
+          {t.close}
+        </Button>
+        </div>
       </div>
-      <Button size="sm" onClick={onChat}>
-        {t.goChat}
-      </Button>
-      <Button variant="ghost" size="sm" onClick={onClose}>
-        {t.close}
-      </Button>
     </div>
   );
 }

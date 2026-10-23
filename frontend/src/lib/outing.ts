@@ -6,8 +6,12 @@ import type { Emotion } from "@/lib/standAnimations";
 
 export type OutingStop = { id: string; name: string };
 
+/** 约好的约会，还是在地图上碰巧遇到她（GLOSSARY.md「偶遇」）。 */
+export type OutingKind = "date" | "encounter";
+
 export type Outing = {
   id: number;
+  kind: OutingKind;
   character_id: string;
   day: string;
   what: string;
@@ -54,6 +58,14 @@ async function post<T>(path: string, body: object = {}): Promise<T> {
 export function meet(characterId: string): Promise<Outing> {
   return post("/api/outings", { character_id: characterId });
 }
+
+/** 在她现在在的地方碰巧遇到她（GLOSSARY.md「偶遇」）；一天的次数用完、或她在家、外地时 409。 */
+export function encounter(characterId: string): Promise<Outing> {
+  return post("/api/outings/encounter", { character_id: characterId });
+}
+
+/** 地图上能碰巧遇到她的地方。 */
+export const ENCOUNTER_PLACES = ["office", "lesson", "school", "studio", "venue", "town"] as const;
 
 export function nextStop(outingId: number): Promise<Outing> {
   return post(`/api/outings/${outingId}/next`);

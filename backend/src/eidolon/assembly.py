@@ -70,6 +70,7 @@ from eidolon import tickets
 from eidolon.outfit_tags import OutfitTags
 from eidolon.trip_photos import Dates, TripPhotos
 from eidolon.relations import Relations
+from eidolon.badges import Badges
 from eidolon.outing import Outings
 from eidolon.voices import GptSovits, load_local_voices
 from eidolon.favors import Favors
@@ -92,7 +93,7 @@ from eidolon.retrieval import Retrieval, open_reference_sources
 from eidolon.service_clients import ProviderClients, ServiceClients
 from eidolon.service_status import ServiceStatus, probes
 from eidolon.sponsor import Sponsor
-from eidolon.store import Store
+from eidolon.store import Conversation, Store
 from eidolon.titles import Titles
 from eidolon.usage import UsageLimiter
 from eidolon.special_days import SpecialDays, load_special_days, special_days_path
@@ -186,7 +187,9 @@ class Backend:
     outfit_tags: OutfitTags
     """The tags each outfit on the outfit lists is drawn with."""
     outings: Outings
-    """The days out met (GLOSSARY.md「约会」)."""
+    """The days out met (GLOSSARY.md「约会」), and running into them (「偶遇」)."""
+    badges: Badges
+    """Each user's titles (GLOSSARY.md「称号」)."""
     relations: Relations
     """How the characters stand with each other, and word of mouth (GLOSSARY.md「关系表」)."""
     dates: Dates
@@ -589,6 +592,13 @@ def build(
         diary.moment, relations, features, affinities,
     )
     trip_photos.with_outings(outings.played, outings.closes)
+    badges = Badges(database, characters, clock)
+    outings.with_encounters_a_day(badges.perk)
+
+    async def look_for_badges(conversation: Conversation, *_: object) -> None:
+        await badges.check(conversation.user_id)
+
+    engine.on_recorded(look_for_badges)
     config.on_change(gifts.notice)
     return Backend(
         settings=settings,
@@ -645,6 +655,7 @@ def build(
         corpus=corpus,
         relations=relations,
         outings=outings,
+        badges=badges,
         _closers=closers,
     )
 

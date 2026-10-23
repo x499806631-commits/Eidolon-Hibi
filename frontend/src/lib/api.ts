@@ -191,6 +191,8 @@ export type OutingCard = {
   recap: string;
   started_at: string;
   photos: number;
+  /** 约会（`date`），还是偶遇（`encounter`，GLOSSARY.md「偶遇」）；旧的卡没有这一项，是约会。 */
+  kind?: "date" | "encounter";
 };
 
 /** What she said first in a conversation, the user not talking to her (GLOSSARY.md「搭话」): neither a

@@ -35,6 +35,8 @@ export type GiftState = {
   open: boolean;
   draws: number;
   max_draws: number;
+  /** 每天发几次（称号多了会多，GLOSSARY.md「称号」）；旧的后端没有这一项。 */
+  draws_per_day?: number;
   /** 只列持有的，按目录的顺序。 */
   backpack: Owned[];
   reset_cards: number;
@@ -161,11 +163,11 @@ export function drawDots(draws: number, max: number): { lit: number; more: strin
 }
 
 /** 抽奖台小点下面那句：用完了、攒满了（每日任务给的超过上限也算）、平时三种；`next` 是 `nextDrawText` 写好的下次到账时刻。 */
-export function drawNote(draws: number, max: number, next: string): string {
+export function drawNote(draws: number, max: number, next: string, perDay = 1): string {
   const t = copy.gifts.draw.notes;
-  if (draws <= 0) return t.none(next);
+  if (draws <= 0) return t.none(next, perDay);
   if (draws >= max) return t.full;
-  return t.usual(next, max);
+  return t.usual(next, max, perDay);
 }
 
 /** 重置卡条上那句：现在用会拉回几位，一位都没有时留着以后用。 */

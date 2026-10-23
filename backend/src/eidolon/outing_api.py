@@ -2,6 +2,8 @@
 
 - `GET /api/outings/today?character=`: the day out with her today, if any, and the outing if met.
 - `POST /api/outings` `{"character_id"}`: meet her (the outing met already, if they met).
+- `POST /api/outings/encounter` `{"character_id"}`: run into her where she is now (GLOSSARY.md
+  「偶遇」), 409 if she is nowhere he could, or today's are used up.
 - `POST /api/outings/{id}/next`: on to the next stop.
 - `POST /api/outings/{id}/photo` `{"wish"}`: a photo of them together, sent in the conversation.
 - `POST /api/outings/{id}/end`: it is over; what was written down of it.
@@ -20,13 +22,17 @@ from pydantic import BaseModel, Field
 from eidolon.assembly import Backend
 from eidolon.outing import (
     CannotDraw,
+    CannotMeetThere,
     NoDateToday,
+    NoMoreEncounters,
     NoMorePhotos,
     NoSuchOuting,
     NotYet,
     OutingOver,
     TooLate,
 )
+from eidolon.map_api import place_now
+from eidolon.schedules_api import now_of
 from eidolon.sessions import UserId
 
 _CACHE = {"Cache-Control": "private, max-age=31536000, immutable"}
@@ -84,6 +90,22 @@ def add_outing_routes(app: FastAPI, backend: Backend) -> None:
     async def meet(user_id: UserId, body: Meet) -> dict:
         her(body.character_id)
         return (await outings.start(user_id, body.character_id)).shown()
+
+    @app.post("/api/outings/encounter")
+    async def encounter(user_id: UserId, body: Meet) -> dict:
+        if body.character_id not in backend.characters:
+            raise HTTPException(404, "没有这个偶像")
+        on = backend.settings.schedules and await backend.features.on(user_id, "schedules")
+        now = await now_of(backend, user_id, body.character_id) if on else None
+        if now is None:
+            raise HTTPException(409, "现在不知道她在哪儿")
+        try:
+            met = await outings.encounter(user_id, body.character_id, place_now(now))
+        except CannotMeetThere:
+            raise HTTPException(409, "她现在不在能遇到的地方") from None
+        except NoMoreEncounters as e:
+            raise HTTPException(409, str(e)) from None
+        return met.shown()
 
     @app.post("/api/outings/{outing_id}/next")
     async def next_stop(user_id: UserId, outing_id: int) -> dict:

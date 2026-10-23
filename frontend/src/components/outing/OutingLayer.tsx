@@ -162,9 +162,10 @@ export function OutingLayer({
     void talk.send(text);
   };
 
+  const isEncounter = outing?.kind === "encounter";
   const isLast = outing ? outing.stop >= outing.stops.length - 1 : false;
   const time = timeOfDay(now);
-  const canPhoto = today.can_draw && outing !== null && outing.ended_at === null && outing.photos < outing.max_photos;
+  const canPhoto = today.can_draw && outing !== null && !isEncounter && outing.ended_at === null && outing.photos < outing.max_photos;
 
   const background =
     picture && picture.v > 0 && here ? (
@@ -179,7 +180,7 @@ export function OutingLayer({
     ) : null;
 
   return (
-    <div role="dialog" aria-label={t.label(character.name)} className="absolute inset-0 z-30 flex flex-col overflow-hidden bg-black text-white">
+    <div role="dialog" aria-label={isEncounter ? t.encounterLabel(character.name) : t.label(character.name)} className="absolute inset-0 z-30 flex flex-col overflow-hidden bg-black text-white">
       <div className="absolute inset-0">
         <OutingArt spot={spot} stop={here?.id ?? "meet"} time={time} />
         {background}
@@ -203,7 +204,7 @@ export function OutingLayer({
           <p className="truncate text-sm font-medium">{here ? t.stopTitle(here.name) : t.title(character.name)}</p>
           {outing && (
             <p className="text-xs text-white/75">
-              {t.progress(outing.stop + 1, outing.stops.length)} · {outing.what}
+              {isEncounter ? outing.what : `${t.progress(outing.stop + 1, outing.stops.length)} · ${outing.what}`}
             </p>
           )}
         </div>
@@ -274,7 +275,9 @@ export function OutingLayer({
           </div>
         ) : outing.ended_at ? (
           <div className="mx-auto flex w-full max-w-md flex-col gap-3 rounded-2xl bg-black/60 p-4">
-            <p className="text-sm font-medium">{t.over(character.name)}</p>
+            <p className="text-sm font-medium">
+              {isEncounter ? t.encounterOver(character.name) : t.over(character.name)}
+            </p>
             {outing.recap && <p className="text-body leading-relaxed">{outing.recap}</p>}
             <Button variant="her" onClick={onClose}>
               {t.backToChat}
@@ -411,7 +414,7 @@ export function OutingLayer({
                   }
                 >
                   {isWorking ? <Spinner /> : <EndOutingIcon />}
-                  {t.end}
+                  {isEncounter ? t.encounterEnd : t.end}
                 </Button>
               ) : (
                 <Button

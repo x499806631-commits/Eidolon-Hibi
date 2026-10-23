@@ -486,6 +486,102 @@ const SCENES: Record<string, Scene> = {
       ),
     };
   },
+  // 偶遇（GLOSSARY.md「偶遇」）：她平时在的地方，各一张。
+  office: () => ({
+    indoor: true,
+    draw: (
+      <>
+        <Room wall="#f4efe6" floor="#b9a68c" />
+        <rect x={100} y={140} width={420} height={260} rx={8} fill={C.white} stroke="#9aa3ad" strokeWidth={10} />
+        {[0, 1, 2, 3].map((i) => (
+          <rect key={i} x={140} y={180 + i * 50} width={200 + (i % 2) * 120} height={10} rx={5} fill="#9ec9e8" />
+        ))}
+        <rect x={1080} y={100} width={380} height={300} rx={10} fill="#cfe7f2" stroke={C.white} strokeWidth={14} />
+        <rect x={60} y={600} width={480} height={90} rx={30} fill="#8fa8c8" />
+        <rect x={60} y={540} width={480} height={80} rx={30} fill="#a6bcd8" />
+        <rect x={1100} y={560} width={420} height={30} fill={C.woodDark} />
+        <rect x={1140} y={500} width={120} height={60} fill={C.cream} />
+        <rect x={1300} y={520} width={90} height={40} fill="#f3d27a" />
+      </>
+    ),
+  }),
+  lesson: () => ({
+    indoor: true,
+    draw: (
+      <>
+        <Room wall="#e9eef2" floor="#d2a679" line={600} />
+        <rect x={40} y={80} width={W - 80} height={500} fill="#dbe9f2" stroke="#b5c3cf" strokeWidth={8} />
+        {[1, 2, 3, 4, 5].map((i) => (
+          <rect key={i} x={40 + i * ((W - 80) / 6)} y={80} width={6} height={500} fill="#b5c3cf" />
+        ))}
+        <rect x={40} y={440} width={W - 80} height={10} fill="#9aa3ad" />
+        {Array.from({ length: 8 }, (_, i) => (
+          <rect key={i} x={i * 200} y={640 + (i % 2) * 120} width={200} height={4} fill="#00000012" />
+        ))}
+        <rect x={1380} y={480} width={120} height={160} rx={10} fill="#3d3d45" />
+        <circle cx={1440} cy={540} r={34} fill="#55555f" />
+        <rect x={120} y={600} width={30} height={60} rx={8} fill="#9ec9e8" />
+      </>
+    ),
+  }),
+  school: () => ({
+    indoor: false,
+    draw: (
+      <>
+        <rect x={250} y={200} width={1100} height={480} fill="#efe6d6" stroke="#00000010" />
+        {[0, 1, 2].map((r) =>
+          Array.from({ length: 8 }, (_, i) => (
+            <rect key={`${r}-${i}`} x={300 + i * 130} y={250 + r * 130} width={90} height={70} fill="#cfe7f2" />
+          )),
+        )}
+        <circle cx={800} cy={170} r={50} fill={C.white} stroke="#9aa3ad" strokeWidth={8} />
+        <Ground y={680} color="#d9c9a8" />
+        <rect x={80} y={440} width={40} height={280} fill="#9aa3ad" />
+        <rect x={1480} y={440} width={40} height={280} fill="#9aa3ad" />
+        <Tree x={160} y={560} s={1.1} />
+        <Tree x={1430} y={560} s={1.1} />
+        {Array.from({ length: 12 }, (_, i) => (
+          <circle key={i} cx={(i * 137) % W} cy={420 + ((i * 53) % 200)} r={8} fill={C.pink} opacity={0.8} />
+        ))}
+      </>
+    ),
+  }),
+  studio: () => ({
+    indoor: true,
+    draw: (
+      <>
+        <rect width={W} height={H} fill="#2b2b33" />
+        <path d="M420 60 H1180 V760 Q800 820 420 760 Z" fill="#f2f0ec" />
+        {[200, 1400].map((x) => (
+          <g key={x}>
+            <rect x={x - 6} y={300} width={12} height={460} fill="#55555f" />
+            <rect x={x - 90} y={180} width={180} height={140} rx={10} fill="#ececf2" stroke="#55555f" strokeWidth={8} />
+            <path d={`M${x - 60} 760 L${x} 700 L${x + 60} 760`} stroke="#55555f" strokeWidth={8} fill="none" />
+          </g>
+        ))}
+        <rect x={1260} y={640} width={140} height={90} rx={8} fill="#3d3d45" />
+      </>
+    ),
+  }),
+  venue: () => ({
+    indoor: true,
+    draw: (
+      <>
+        <Room wall="#3b3f52" floor="#2a2c38" line={620} />
+        {[160, 520, 1100].map((x, i) => (
+          <rect key={x} x={x} y={150 + (i % 2) * 40} width={260} height={360} rx={6} fill={[C.pink, C.gold, C.sky][i]} opacity={0.85} />
+        ))}
+        {[0, 1, 2].map((i) => (
+          <rect key={i} x={1000 + i * 170} y={600} width={150} height={110} rx={8} fill="#1d1f29" stroke="#55596e" strokeWidth={6} />
+        ))}
+        <rect y={40} width={W} height={20} fill="#55596e" />
+        {Array.from({ length: 8 }, (_, i) => (
+          <circle key={i} cx={100 + i * 200} cy={70} r={18} fill={C.glow} opacity={0.9} />
+        ))}
+      </>
+    ),
+  }),
+  town: () => SCENES.around("meet"),
   around: (stop) => ({
     indoor: false,
     draw: (

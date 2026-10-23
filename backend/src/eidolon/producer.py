@@ -171,7 +171,7 @@ def producer_prompt(profile: ProducerProfile, ties: Ties | None = None) -> str:
 
 _ONLINE = (
     "你们是隔着手机联系，不在一起：不会有牵手、摸头、递东西这种见了面才有的接触，"
-    "也不要写成你就在他身边；想见面就说想见面。"
+    "也不要写成你就在制作人身边；想见面就说想见面。"
 )
 """Text and calls are online, apart (GLOSSARY.md「约会」「偶遇」 are face to face)."""
 _TYPING = (

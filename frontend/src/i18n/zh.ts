@@ -2054,6 +2054,12 @@ export const zh = {
     cardOpen: "打开约会",
     photoAlt: "你们的合照",
     photoDrawing: "合照正在洗出来……",
+    /** 偶遇（GLOSSARY.md「偶遇」）。 */
+    encounterLabel: (name: string) => `偶遇${name}`,
+    encounterBanner: (name: string) => `正在和${name}说话（偶遇）`,
+    encounterEnd: "道别",
+    encounterOver: (name: string) => `和${name}道别了`,
+    encounterCard: (month: number, day: number, place: string) => `${month}月${day}日 · 在${place}偶遇`,
   },
   /** 地图（GLOSSARY.md「地图」）：从家里出门看看。 */
   map: {
@@ -2103,6 +2109,8 @@ export const zh = {
     /** 她在外地时那一行：「在大阪」。 */
     trip: (where: string) => `在${where}`,
     goChat: "去找她",
+    /** 去她在的地方碰碰运气（GLOSSARY.md「偶遇」）。 */
+    encounter: "去那里看看",
     close: "关上",
     hintNow: "点头像看看她在做什么",
     hintDates: "点一个地方，用邀约券约她去",
@@ -2210,10 +2218,10 @@ export const zh = {
       more: (n: number) => `+${n}`,
       /** 下面那句说明：平时、攒满、用完。`next` 是下次到账的「今天 / 明天 HH:MM」（每天在制作人那边的 0 点发）。 */
       notes: {
-        usual: (next: string, max: number) => `${next} 再发 1 次，最多攒 ${max} 次`,
+        usual: (next: string, max: number, perDay = 1) => `${next} 再发 ${perDay} 次，最多攒 ${max} 次`,
         /** 每天发的那份攒到上限了；每日任务给的可以超过上限，所以不写「攒满几次」。 */
         full: "每天发的已攒满，抽掉之前不会再发",
-        none: (next: string) => `已经抽完了，${next} 再发 1 次`,
+        none: (next: string, perDay = 1) => `已经抽完了，${next} 再发 ${perDay} 次`,
       },
       once: "抽一次",
       all: "全部抽完",
@@ -2412,6 +2420,20 @@ export const zh = {
     },
   },
   /** 成就（GLOSSARY.md「成就」）：她的对话页面板和礼物页那一小节里每一行的字。 */
+  /** 称号（GLOSSARY.md「称号」）。 */
+  badges: {
+    title: "称号",
+    count: (earned: number, all: number) => `${earned} / ${all}`,
+    unseen: (n: number) => `${n} 个新称号`,
+    perk: (n: number) => `现在每天能偶遇 ${n} 次、领 ${n} 次抽奖。`,
+    next: (left: number, to: number) => `再得 ${left} 个称号，每天升到 ${to} 次。`,
+    open: "看看称号",
+    hint: "点一个称号，看看是怎么得到的。",
+    kinds: { doing: "做过的事", affinity: "和她们的羁绊" },
+    earned: "已得到",
+    notYet: "还没得到",
+    earnedOn: (day: string) => `${day} 得到`,
+  },
   achievements: {
     names: {
       turns: "和她的回合",

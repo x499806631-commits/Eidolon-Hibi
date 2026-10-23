@@ -59,6 +59,7 @@ USER_DATA = [
     ("homes", "user_id = ?"),
     ("relation_changes", "user_id = ?"),
     ("outings", "user_id = ?"),
+    ("badges", "user_id = ?"),
     ("outing_backgrounds", "user_id = ?"),
     ("relation_overrides", "user_id = ?"),
     ("relation_news", "user_id = ?"),

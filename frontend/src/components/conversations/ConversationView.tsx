@@ -167,7 +167,7 @@ export function ConversationView({
       (today) => {
         if (!current) return;
         setOutingToday(today);
-        if (fromMap && today.date) setOutingOpen(true);
+        if (fromMap && (today.date || today.outing)) setOutingOpen(true);
       },
       () => {}, // 读不到就不挂
     );
@@ -451,11 +451,12 @@ export function ConversationView({
   return (
     <Frame character={character} subtree={subtree} header={header}>
       {barShown && <CallBar ref={focus.note} call={call} onExpand={() => live?.expand()} />}
-      {outingToday?.date && !outingToday.outing?.ended_at && !viewing && !isCovered && (
+      {(outingToday?.date || outingToday?.outing) && !outingToday.outing?.ended_at && !viewing && !isCovered && (
         <OutingBanner
           name={character.name}
-          what={outingToday.date.what}
+          what={outingToday.date?.what ?? outingToday.outing?.what ?? ""}
           isOn={outingToday.outing !== null}
+          isEncounter={outingToday.outing?.kind === "encounter"}
           onOpen={() => setOutingOpen(true)}
         />
       )}

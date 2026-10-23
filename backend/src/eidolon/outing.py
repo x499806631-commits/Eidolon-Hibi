@@ -31,7 +31,7 @@ from eidolon.features import AllOn, Switches
 from eidolon.image_generation import ImageFailed
 from eidolon.live_config import LiveConfig
 from eidolon.llm import ChatLLM, ChatMessage
-from eidolon.outing_spots import Stop, stops_of
+from eidolon.outing_spots import STOPS, Stop, stops_of
 from eidolon.photo_prompt import outing_prompt
 from eidolon.producer import effective_timezone
 from eidolon.relations import Relations
@@ -49,6 +49,13 @@ CLOSES = time(22)
 """Past this, a day out not met is missed."""
 MAX_PHOTOS = 2
 MAX_SCORE = 10
+MAX_ENCOUNTER_SCORE = 5
+"""The most running into her moves her affinity, either way (GLOSSARY.md「偶遇」)."""
+ENCOUNTERS_A_DAY = 1
+"""How many times a day the user may run into one of them, before achievements add to it."""
+ENCOUNTER_PLACES = ("office", "lesson", "school", "studio", "venue", "town")
+"""Where on the map the producer may run into her (GLOSSARY.md「偶遇」)."""
+ENCOUNTER_TITLE = "{month}月{day}日 · 在{where}偶遇{name}"
 """The most a day out moves her affinity, either way, by how she liked it."""
 OUTING_TITLE = "{month}月{day}日 · 和{name}约会：{what}"
 """The title of a day out's own conversation, as her past conversations list it."""
@@ -75,7 +82,8 @@ CREATE TABLE IF NOT EXISTS outings (
     ended_at TEXT,
     photos INTEGER NOT NULL DEFAULT 0,
     summary TEXT,
-    UNIQUE (user_id, character_id, day)
+    kind TEXT NOT NULL DEFAULT 'date',
+    UNIQUE (user_id, character_id, day, kind)
 );
 -- The backgrounds drawn for each stop of each place, for a user (with image generation).
 CREATE TABLE IF NOT EXISTS outing_backgrounds (
@@ -119,6 +127,15 @@ class NoMorePhotos(Exception):
         super().__init__(f"这次约会已经拍了 {MAX_PHOTOS} 张合照了")
 
 
+class CannotMeetThere(Exception):
+    """She is somewhere the producer cannot run into her: at home, away, asleep, in the bath."""
+
+
+class NoMoreEncounters(Exception):
+    def __init__(self, a_day: int) -> None:
+        super().__init__(f"今天的偶遇用完了（一天 {a_day} 次）")
+
+
 class CannotDraw(Exception):
     def __init__(self) -> None:
         super().__init__("现在没有生图服务，画不了")
@@ -144,6 +161,8 @@ class Outing:
     summary: dict | None
     home_conversation_id: str | None = None
     """Her current conversation as they met, where the card of the day out is put."""
+    kind: str = "date"
+    """A day out planned (`date`), or running into her where she is (`encounter`, GLOSSARY.md「偶遇」)."""
 
     @property
     def stops(self) -> tuple[Stop, ...]:
@@ -162,6 +181,7 @@ class Outing:
             "ended_at": self.ended_at.isoformat() if self.ended_at else None,
             "photos": self.photos, "max_photos": MAX_PHOTOS,
             "recap": (self.summary or {}).get("recap"),
+            "kind": self.kind,
         }
 
 
@@ -197,6 +217,7 @@ class Outings:
         self._relations = relations
         self._features = features
         self._affinities = affinities
+        self._encounters_a_day: Callable[[str], Awaitable[int]] | None = None
         db.prepare(_open)
         engine.with_outings(self.prompt_for)
 
@@ -212,6 +233,10 @@ class Outings:
         planned = await self._db.read(_planned_on, user_id, character_id, now.date())
         outing = await self._db.read(_outing_on, user_id, character_id, now.date())
         can_draw = self._config.image_generator() is not None
+        met = await self._db.read(_encounter_on, user_id, character_id, now.date())
+        if met is not None and met.ended_at is None and (outing is None or outing.ended_at is not None):
+            # 正在偶遇（GLOSSARY.md「偶遇」）：画面打开的是这一次
+            return {"date": None, "outing": met.shown(), "can_draw": can_draw}
         if planned is None:
             return {"date": None, "outing": None, "can_draw": can_draw}
         what = planned["what"]
@@ -261,6 +286,58 @@ class Outings:
         assert met is not None
         await self._opening(met, conversation, stops[0].name)
         return met
+
+    async def encounter(self, user_id: str, character_id: str, place: str) -> Outing:
+        """Run into her at `place`, where her schedule has her now (GLOSSARY.md「偶遇」): in a conversation of its own, she speaking first. The one
+        today if they ran into each other already and it is not over. Raises
+        NoMoreEncounters once today's are used up."""
+        zone = await self._zone(user_id)
+        now = self._clock().astimezone(zone)
+        met = await self._db.read(_encounter_on, user_id, character_id, now.date())
+        if met is not None:
+            if met.ended_at is None:
+                return met
+            raise NoMoreEncounters(await self.encounters_a_day(user_id))
+        if await self._db.read(_encounters_on, user_id, now.date()) >= await self.encounters_a_day(user_id):
+            raise NoMoreEncounters(await self.encounters_a_day(user_id))
+        if place not in ENCOUNTER_PLACES:
+            raise CannotMeetThere()
+        where = STOPS[place][0].name
+        home = await self._conversation(user_id, character_id)
+        character = self._characters.get(character_id)
+        name = character.name if character else ""
+        title = ENCOUNTER_TITLE.format(month=now.month, day=now.day, name=name, where=where)
+        conversation = await self._store.create_side_conversation(user_id, character_id, home, title)
+        await self._db.write(
+            _start_encounter, user_id, character_id, now.date(), f"在{where}偶遇", place,
+            conversation.id, now, home.id,
+        )
+        met = await self._db.read(_encounter_on, user_id, character_id, now.date())
+        assert met is not None
+        recording = self._activity.begin("trip_photo", user_id, character_id, own_llm=False, exempt=False)
+        lease = self._config.lease()
+        try:
+            with recording.current():
+                said = await self._engine.encounter_opening(
+                    conversation, lease.keys.chat_llm, where, met.here.scene
+                )
+            await self._store.add_photo_reach_out(conversation.id, said, None)
+            await recording.finish("success")
+        except Exception as e:
+            log.warning("her first words running into the producer failed: %s", type(e).__name__)
+            await recording.finish("failed")
+        finally:
+            lease.release()
+        return met
+
+    async def encounters_a_day(self, user_id: str) -> int:
+        """How many times a day the user may run into one of them (GLOSSARY.md「偶遇」)."""
+        if self._encounters_a_day is not None:
+            return await self._encounters_a_day(user_id)
+        return ENCOUNTERS_A_DAY
+
+    def with_encounters_a_day(self, how_many: Callable[[str], Awaitable[int]]) -> None:
+        self._encounters_a_day = how_many
 
     async def _opening(self, outing: "Outing", conversation: Conversation, where: str) -> None:
         """She speaks first as they meet: greets him and talks over how to spend the day."""
@@ -313,6 +390,14 @@ class Outings:
             return None
         here = outing.here
         stops = outing.stops
+        if outing.kind == "encounter":
+            return (
+                f"# 偶遇中\n你在{here.name}碰巧遇到了制作人，你们现在面对面。{here.scene}\n"
+                "- 不是约好的，是碰巧遇到的；你本来在这里做自己的事。用当面说话的口吻；做了什么小动作，"
+                "可以在中文字幕里用（）简短写一句。\n"
+                "- 制作人用（动作：……）写的是他当面做的事，自然地回应。\n"
+                "- 不要自己说要走或者结束，由制作人决定。"
+            )
         late = (
             f"\n- 制作人比约好的时间晚到了 {outing.late_minutes} 分钟，你等了他很久；见面时按你的性格说一句，之后就不要再提。"
             if outing.late_minutes > 0 and outing.stop == 0 else ""
@@ -335,7 +420,7 @@ class Outings:
         outing = await self.of(user_id, outing_id)
         if outing.ended_at is not None:
             raise OutingOver()
-        if outing.photos >= MAX_PHOTOS:
+        if outing.photos >= MAX_PHOTOS or outing.kind != "date":
             raise NoMorePhotos()
         if self._config.image_generator() is None or not await self._features.on(user_id, "photos"):
             raise CannotDraw()
@@ -429,26 +514,29 @@ class Outings:
         ]
         character = self._characters.get(outing.character_id)
         summary = await self._summary(outing, character, messages) if character else None
+        did = f"一起{outing.what}" if outing.kind == "date" else outing.what
         summary = summary or {
-            "recap": f"一起{outing.what}的一天。", "memory": "", "news": "", "moment": "",
+            "recap": f"今天和制作人{did}。", "memory": "", "news": "", "moment": "",
         }
         zone = await self._zone(user_id)
         card = {
             "outing_id": outing.id, "spot": outing.spot, "what": outing.what,
             "day": outing.day.isoformat(), "recap": summary.get("recap", ""),
             "started_at": outing.started_at.astimezone(UTC).isoformat(),
-            "photos": outing.photos,
+            "photos": outing.photos, "kind": outing.kind,
         }
         await self._db.write(
             _end, outing_id, outing.home_conversation_id or outing.conversation_id, now,
             json.dumps(summary, ensure_ascii=False), card,
         )
         score = summary.get("score")
+        most = MAX_SCORE if outing.kind == "date" else MAX_ENCOUNTER_SCORE
         if isinstance(score, int | float) and self._affinities is not None:
             await self._affinities.moved_by(
-                user_id, outing.character_id, float(max(-MAX_SCORE, min(MAX_SCORE, score)))
+                user_id, outing.character_id, float(max(-most, min(most, score)))
             )
-        await self._trip_photos.date_met(user_id, outing.character_id, outing.day.isoformat())
+        if outing.kind == "date":
+            await self._trip_photos.date_met(user_id, outing.character_id, outing.day.isoformat())
         name = character.name if character else ""
         local = now.astimezone(zone)
         if self._experiences is not None and summary.get("memory"):
@@ -459,14 +547,14 @@ class Outings:
         if self._moment is not None:
             try:
                 await self._moment(
-                    user_id, outing.character_id, summary.get("moment") or f"和制作人一起{outing.what}", local
+                    user_id, outing.character_id, summary.get("moment") or f"和制作人{did}", local
                 )
             except Exception:
                 log.exception("noting a day out for the diary failed")
         if self._relations is not None:
             await self._relations.tell(
                 user_id, outing.character_id,
-                summary.get("news") or f"{name}和制作人一起{outing.what}", now,
+                summary.get("news") or f"{name}和制作人{did}", now,
             )
         return await self.of(user_id, outing_id)
 
@@ -482,7 +570,11 @@ class Outings:
         if not lines:
             return None
         prompt = [
-            ChatMessage("system", OUTING_SUMMARY.format(name=character.name, what=outing.what, max_score=MAX_SCORE)),
+            ChatMessage("system", OUTING_SUMMARY.format(
+                name=character.name,
+                what=outing.what, event="约会" if outing.kind == "date" else "碰巧遇到",
+                max_score=MAX_SCORE if outing.kind == "date" else MAX_ENCOUNTER_SCORE,
+            )),
             ChatMessage("user", "\n".join(lines)[-12000:]),
         ]
         lease = self._config.lease()
@@ -517,12 +609,12 @@ class Outings:
         return datetime.combine(day, CLOSES, zone)
 
 
-OUTING_SUMMARY = """下面是{name}和制作人今天约会（{what}）时的全部对话。请整理成 JSON，只输出 JSON：
-{{"recap": "用{name}自己的口吻、第一人称写两三句，回顾今天的约会：去了哪、印象最深的瞬间、心情",
-"memory": "第三人称一句话，以「{name}」开头，写她和制作人今天约会的事和最重要的一两个细节，以后她能想起来",
+OUTING_SUMMARY = """下面是{name}和制作人今天{event}（{what}）时的全部对话。请整理成 JSON，只输出 JSON：
+{{"recap": "用{name}自己的口吻、第一人称写两三句，回顾今天的{event}：去了哪、印象最深的瞬间、心情",
+"memory": "第三人称一句话，以「{name}」开头，写她和制作人今天{event}的事和最重要的一两个细节，以后她能想起来",
 "news": "第三人称一句话，以「{name}」开头，写成别的偶像会听说的样子，只说大概，不写私密的细节",
 "moment": "以「{name}」开头的一句话，写今天对她来说最重要的一刻，给她写日记用",
-"score": 一个 -{max_score} 到 {max_score} 的整数，{name}对这次约会有多满意：很开心、被好好对待是正数，被冷落、被惹生气是负数，普通就是 0 附近}}
+"score": 一个 -{max_score} 到 {max_score} 的整数，{name}对这次{event}有多满意：很开心、被好好对待是正数，被冷落、被惹生气是负数，普通就是 0 附近}}
 只写对话里真的发生过的事，不要编。不满意的时候，recap 和 moment 最多写到对制作人有一点小埋怨，不要写得更重。"""
 
 
@@ -531,6 +623,8 @@ def _open(db: sqlite3.Connection) -> None:
     columns = {row[1] for row in db.execute("PRAGMA table_info(outings)")}
     if "home_conversation_id" not in columns:
         db.execute("ALTER TABLE outings ADD COLUMN home_conversation_id TEXT")
+    if "kind" not in columns:
+        db.execute("ALTER TABLE outings ADD COLUMN kind TEXT NOT NULL DEFAULT 'date'")
 
 
 def _planned_on(db: sqlite3.Connection, user_id: str, character_id: str, day: date) -> sqlite3.Row | None:
@@ -549,15 +643,43 @@ def _row(row: sqlite3.Row | None) -> Outing | None:
         datetime.fromisoformat(row["started_at"]), row["late_minutes"], row["after_message"],
         datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
         row["photos"], json.loads(row["summary"]) if row["summary"] else None,
-        row["home_conversation_id"],
+        row["home_conversation_id"], row["kind"],
     )
 
 
 def _outing_on(db: sqlite3.Connection, user_id: str, character_id: str, day: date) -> Outing | None:
     return _row(by_name(db).execute(
-        "SELECT * FROM outings WHERE user_id = ? AND character_id = ? AND day = ?",
+        "SELECT * FROM outings WHERE user_id = ? AND character_id = ? AND day = ? AND kind = 'date'",
         (user_id, character_id, day.isoformat()),
     ).fetchone())
+
+
+def _encounter_on(db: sqlite3.Connection, user_id: str, character_id: str, day: date) -> Outing | None:
+    return _row(by_name(db).execute(
+        "SELECT * FROM outings WHERE user_id = ? AND character_id = ? AND day = ?"
+        " AND kind = 'encounter'",
+        (user_id, character_id, day.isoformat()),
+    ).fetchone())
+
+
+def _encounters_on(db: sqlite3.Connection, user_id: str, day: date) -> int:
+    (count,) = db.execute(
+        "SELECT COUNT(*) FROM outings WHERE user_id = ? AND day = ? AND kind = 'encounter'",
+        (user_id, day.isoformat()),
+    ).fetchone()
+    return count
+
+
+def _start_encounter(
+    db: sqlite3.Connection, user_id: str, character_id: str, day: date, what: str, spot: str,
+    conversation_id: str, now: datetime, home_conversation_id: str,
+) -> None:
+    db.execute(
+        "INSERT OR IGNORE INTO outings (user_id, character_id, day, what, spot, conversation_id,"
+        " started_at, home_conversation_id, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'encounter')",
+        (user_id, character_id, day.isoformat(), what, spot, conversation_id,
+         now.astimezone(UTC).isoformat(), home_conversation_id),
+    )
 
 
 def _outing(db: sqlite3.Connection, user_id: str, outing_id: int) -> Outing | None:

@@ -477,7 +477,10 @@ def _narration(event: ConversationEvent, gift_catalog: Mapping[str, Gift]) -> st
     if event.kind == "keepsake":
         return f"（你送给了制作人「{event.note}」。）"
     if event.kind == "outing":
-        recap = json.loads(event.note or "{}").get("recap", "")
+        card = json.loads(event.note or "{}")
+        recap = card.get("recap", "")
+        if card.get("kind") == "encounter":
+            return f"（刚才你和制作人碰巧遇到，聊了一会儿。{recap}）"
         return f"（你们的约会结束了。{recap}）"
     assert event.gift_id is not None
     liked = "这是你喜欢的东西。" if event.liked else ""
@@ -640,6 +643,7 @@ DATE_AFTER_SITUATION = "今天下午你和制作人一起{what}，刚刚分开�
 
 WANTS_TO_TAKE_OUTING_PHOTO = "（制作人举起手机，说要和你拍一张合照。）"
 WANTS_TO_SAY_WAITING = "（约好的时间到了，你已经到了约会的地方。你想给制作人发几句。）"
+WANTS_TO_GREET_ENCOUNTER = "（你碰巧遇到了制作人，他就在你面前。你先开口。）"
 WANTS_TO_GREET_ON_DATE = "（制作人刚刚到了约会的地方，就在你面前。你先开口。）"
 WANTS_TO_TALK_MISSED_DATE = "（今天约好的约会，制作人一直没有来。你想给他发几句。）"
 WANTS_TO_TALK_AFTER_DATE = "（今天和制作人一起出去回来了。制作人这会儿没在和你说话。你想先给他发几句。）"
@@ -1439,6 +1443,20 @@ class ConversationEngine:
         if tag is None:
             raise EmptyReply("对话模型没有写照片标签")
         return said, tag
+
+    async def encounter_opening(
+        self, conversation: Conversation, llm: ChatLLM, where: str, scene: str
+    ) -> list[Segment]:
+        """What she says first as she runs into the producer at `where` (GLOSSARY.md「偶遇」),
+        surprised to: as she would, by her heart and her affinity. Raises EmptyReply."""
+        rules = (
+            f"# 偶遇\n你正在{where}做自己的事，{scene}没想到碰巧遇到了制作人，你们现在面对面。"
+            "\n- 用 <ja><zh> 写一到两段：先开口，照你的性格和你对他现在的好感，"
+            "表现出意外（比如「制作人怎么会在这里？」「没想到在这里遇到你」），再顺着说点什么。"
+            "\n- 可以在中文字幕里用（）简短写一句你的动作。不发照片。"
+        )
+        said, _ = await self._reaching_out(conversation, llm, rules, WANTS_TO_GREET_ENCOUNTER)
+        return said
 
     async def waiting_for_date(self, conversation: Conversation, llm: ChatLLM, what: str) -> list[Segment]:
         """What she says first on the day out (`what`, GLOSSARY.md「约会」) as its time comes:

@@ -70,6 +70,8 @@ export { Circle as TaskOpenIcon } from "lucide-react";
 
 // 对话页更多菜单的「成就」，和解锁她的阶段时页首好感度标识左边跳出的奖杯（GLOSSARY.md「成就」）。
 export { Trophy as AchievementsIcon } from "lucide-react";
+// 礼物页「称号」一节的「看看称号」（GLOSSARY.md「称号」）。
+export { Medal as BadgeIcon } from "lucide-react";
 
 // 对话列表页首的公告铃铛（GLOSSARY.md「公告」）；后台导航的公告用 Megaphone。
 export { Bell as AnnouncementsBellIcon } from "lucide-react";

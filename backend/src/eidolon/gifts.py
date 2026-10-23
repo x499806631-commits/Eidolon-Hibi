@@ -3,7 +3,7 @@ and their reset cards, the one way into them for the gifts page and the admin co
 for drawing and giving, which count towards the daily tasks and the achievements and so are
 kept with them (`happenings.Happenings.draw`, `Happenings.give`).
 
-Draw chances are given one a day (`affinity.DRAWS_PER_DAY`) as the day begins, at midnight
+Draw chances are given one a day (`affinity.DRAWS_PER_DAY`, more with titles, GLOSSARY.md「称号」) as the day begins, at midnight
 in the producer's own time zone (the profile's, Beijing's without one), kept up to
 `affinity.MAX_DRAWS`.
 Nothing gives them on a schedule: whoever reads them first gives what the days since they
@@ -234,6 +234,8 @@ class GiftState:
     whom a reset card would bring back: none while closed, as affinity shows nothing then."""
     rewarded_at: datetime | None
     """When the user was last rewarded (`Gifts.reward`); None if never."""
+    a_day: int = DRAWS_PER_DAY
+    """How many draw chances the user is given a day (more with titles, GLOSSARY.md「称号」)."""
 
     def shown(self) -> dict:
         """As the browser is told it."""
@@ -241,6 +243,7 @@ class GiftState:
             "open": self.open,
             "draws": self.draws,
             "max_draws": MAX_DRAWS,
+            "draws_per_day": self.a_day,
             "backpack": [{"gift_id": g, "count": n} for g, n in self.backpack],
             "reset_cards": self.reset_cards,
             "tickets": [{"kind": k, "count": n} for k, n in self.tickets],
@@ -618,6 +621,7 @@ class Gifts:
         return GiftState(
             is_open, draws, backpack, reset_cards, [(k, n) for k, n in tickets],
             PITY - since_rare, next_draw_at, characters, _last_rewarded(db, user_id),
+            _draws_a_day(db, user_id),
         )
 
     def _use_reset_card(self, db: sqlite3.Connection, user_id: str) -> Reset:
@@ -826,11 +830,18 @@ def _give(db: sqlite3.Connection, user_id: str, today: date) -> None:
     opened = _opened_on(db, today)
     if opened is not None and opened > given_on:
         since = opened - timedelta(days=1)
-    due = (today - since).days * DRAWS_PER_DAY
+    due = (today - since).days * _draws_a_day(db, user_id)
     db.execute(
         "UPDATE gift_balances SET draws = ?, given_on = ? WHERE user_id = ?",
         (max(draws, min(draws + due, MAX_DRAWS)), today.isoformat(), user_id),
     )
+
+
+def _draws_a_day(db: sqlite3.Connection, user_id: str) -> int:
+    """How many draw chances the user is given a day: more for more titles (GLOSSARY.md「称号」)."""
+    from eidolon import badges  # 称号读成就，成就读礼物
+
+    return DRAWS_PER_DAY - 1 + badges.perk_of(badges.earned_count(db, user_id))
 
 
 def _start(db: sqlite3.Connection, user_id: str, today: date, reset_cards: int = 0) -> None:

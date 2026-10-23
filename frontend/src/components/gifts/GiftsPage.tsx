@@ -10,6 +10,7 @@ import { SectionHeading } from "@/components/app/SubpageHeader";
 import { useDirectory, useWide } from "@/components/conversations/ConversationDirectory";
 import { useProducerTimezone } from "@/components/conversations/useProducerTimezone";
 import { AchievementsSection } from "@/components/gifts/AchievementsSection";
+import { BadgesSection } from "@/components/gifts/BadgesSection";
 import { DailyTasksSection } from "@/components/gifts/DailyTasksSection";
 import { DrawDialog, type Drawing } from "@/components/gifts/DrawDialog";
 import { GivenToast, type GivenNotice } from "@/components/gifts/GivenToast";
@@ -259,6 +260,7 @@ export function GiftsPage({ pick }: { pick: GiftsFor | null }) {
             <DrawDesk
               draws={state.draws}
               max={state.max_draws}
+              perDay={state.draws_per_day ?? 1}
               next={nextDraw}
               toRare={state.to_rare}
               isDrawing={drawing !== null}
@@ -287,6 +289,7 @@ export function GiftsPage({ pick }: { pick: GiftsFor | null }) {
                 unseen={seen ? unseenRows({ achievements: state.achievements }, seen.at) : NONE}
               />
             )}
+            <BadgesSection />
             {state.reset_cards > 0 && (
               <ResetCards
                 count={state.reset_cards}
@@ -425,6 +428,7 @@ function PickedFor({ character, onCancel }: { character: Character; onCancel: ()
 function DrawDesk({
   draws,
   max,
+  perDay,
   next,
   toRare,
   isDrawing,
@@ -432,6 +436,8 @@ function DrawDesk({
 }: {
   draws: number;
   max: number;
+  /** 每天发几次。 */
+  perDay: number;
   /** 下次到账的「今天 / 明天 HH:MM」。 */
   next: string;
   /** 最多再抽几次一定出稀有（保底）。 */
@@ -455,7 +461,7 @@ function DrawDesk({
             <span className="ml-0.5 text-meta leading-none text-muted-foreground tabular-nums">{dots.more}</span>
           )}
         </span>
-        <p className="text-subtitle text-muted-foreground">{drawNote(draws, max, next)}</p>
+        <p className="text-subtitle text-muted-foreground">{drawNote(draws, max, next, perDay)}</p>
         <p className="text-meta text-muted-foreground">{t.draw.toRare(toRare)}</p>
       </div>
       <div className="flex gap-2">

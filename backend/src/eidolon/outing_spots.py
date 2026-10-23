@@ -76,6 +76,13 @@ STOPS: dict[str, tuple[Stop, ...]] = {
         Stop("shop", "杂货店", "一家可爱的杂货店，里面摆着发饰、小镜子和香薰蜡烛。", "zakka shop, accessories, hair clips, shelves, indoors, cute"),
         Stop("purikura", "大头贴", "游戏中心的大头贴机里，亮亮的灯光，屏幕上可以画画。", "purikura booth, interior, bright lights, game center"),
     ),
+    # 偶遇（GLOSSARY.md「偶遇」）：她平时会在的地方，各一站
+    "office": (Stop("office", "283 事务所", "283 事务所的大房间，沙发、白板和堆着资料的桌子，はづき在一旁忙着。", "office, sofa, whiteboard, desks, documents, indoors, daytime"),),
+    "lesson": (Stop("lesson", "练习室", "练习室，一整面墙的镜子，地板擦得发亮，角落放着音响和水瓶。", "dance studio, mirror wall, wooden floor, speakers, indoors"),),
+    "school": (Stop("school", "学校门口", "她学校的校门口，放学的学生三三两两走出来。", "school gate, school building, cherry trees, afternoon"),),
+    "studio": (Stop("studio", "摄影棚", "摄影棚，灯光架和背景布，工作人员在调整器材，现在正好休息。", "photo studio, lighting equipment, backdrop, cameras, indoors"),),
+    "venue": (Stop("venue", "Live 会场", "Live 会场的后台通道，墙上贴着演出流程，远处传来彩排的音乐。", "concert venue backstage, corridor, posters, equipment cases, indoors"),),
+    "town": (Stop("town", "车站前", "车站前的广场，人来人往，便利店和咖啡店的灯亮着。", "train station plaza, crowd, convenience store, street"),),
     AROUND: (
         Stop("meet", "碰头", "约好碰头的车站前，人来人往。", "train station, plaza, crowd, daytime"),
         Stop("stroll", "随便走走", "街上，两个人随意地逛着，看到什么就停下来看看。", "city street, shops, sidewalk, afternoon"),
