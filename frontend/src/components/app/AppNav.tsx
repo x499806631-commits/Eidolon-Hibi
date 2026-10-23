@@ -22,11 +22,13 @@ import {
   GiftIcon,
   KeepsakesIcon,
   GitHubIcon,
+  HomeIcon,
   LettersIcon,
   SettingsIcon,
 } from "@/theme/icons";
 
 const ICONS: Record<NavItem, typeof SettingsIcon> = {
+  home: HomeIcon,
   conversations: ConversationsIcon,
   gifts: GiftIcon,
   calendar: CalendarIcon,
@@ -37,7 +39,7 @@ const ICONS: Record<NavItem, typeof SettingsIcon> = {
 };
 
 /**
- * 导航栏（电脑）：最左一条 72px，右边一条细线，不能收起；对话、礼物、日历、信箱、日记、设置从上往下，GitHub 仓库链接在最底下
+ * 导航栏（电脑）：最左一条 72px，右边一条细线，不能收起；家、对话、礼物、日历、信箱、日记、纪念品、设置从上往下，GitHub 仓库链接在最底下
  * （DESIGN.md「Layout」）。窄屏由 CSS 藏起来，换成 dock。通话层只盖住它右边，展开时它照样能点（见 NavLinks）。
  */
 export function NavRail() {

@@ -29,6 +29,7 @@ export const zh = {
   /** 导航外壳的导航栏（电脑）和 dock（手机），DESIGN.md「Layout」。 */
   nav: {
     label: "导航",
+    home: "家",
     conversations: "对话",
     /** 「对话」图标上有点时读屏读的名字：列表里有一行有没看过的搭话。 */
     conversationsUnseen: "对话，有没看过的搭话",
@@ -1904,6 +1905,65 @@ export const zh = {
     goChat: "去找她",
     showTranslation: "显示翻译",
     hideTranslation: "只看原文",
+  },
+  /** 制作人的家（GLOSSARY.md「制作人的家」）。 */
+  home: {
+    title: "家",
+    loading: "正在回家",
+    scene: "制作人的家",
+    rooms: { apartment: "一室公寓", mansion: "大房子" },
+    /** 换屋子的按钮：说的是换过去的那一间。 */
+    moveTo: (room: string) => `搬去${room}`,
+    /** 屋里每样东西的名字（读屏和提示条），有新的时后面接一句。 */
+    things: {
+      mailbox: "信箱",
+      diary: "日记本",
+      shelf: "纪念品架",
+      phone: "手机",
+      calendar: "挂历",
+      drawer: "抽屉",
+      frame: "相框",
+      window: "窗户",
+    },
+    news: {
+      mailbox: "有没读的信",
+      diary: "有没读的日记",
+      shelf: "有新收到的纪念品",
+      phone: "有没看过的消息",
+    },
+    /** 提示条：指着、Tab 到一样东西时说它是什么、点了会怎样。 */
+    hints: {
+      mailbox: "看看她们写来的信",
+      diary: "翻开日记",
+      shelf: "打开纪念品柜",
+      phone: "和她们聊天",
+      calendar: "看看日子",
+      drawer: "礼物和券都收在这里",
+      frame: "打开相册，换一张挂上",
+      window: { open: "拉上窗帘", closed: "拉开窗帘" },
+    },
+    hintIdle: "点屋里的东西看看",
+    draw: "画这间屋子",
+    redraw: "重画屋子",
+    drawingShort: "正在画…",
+    drawing: "正在画这间屋子，要等十几秒……",
+    arrange: "布置",
+    arrangeDone: "布置好了",
+    arrangeHint: "按住东西拖到画里合适的地方，松手就记下",
+    /** 手机上屋子宽出屏幕时。 */
+    hintSwipe: "左右划着看看，点屋里的东西",
+    off: "这项玩法关着",
+    weekdays: ["周日", "周一", "周二", "周三", "周四", "周五", "周六"],
+    album: {
+      title: "相册",
+      description: "她们发来的照片。点一张挂到墙上。",
+      empty: "还没有照片。她们拍了照片发给你时，会收在这里。",
+      loading: "正在翻相册",
+      takeDown: "取下照片",
+      framed: "挂着",
+      /** 一张照片读屏读的：「真乃发来的照片，10月3日」。 */
+      photoLabel: (name: string, month: number, day: number) => `${name}发来的照片，${month}月${day}日`,
+    },
   },
   /** 纪念品柜（GLOSSARY.md「纪念品」）。 */
   keepsakes: {

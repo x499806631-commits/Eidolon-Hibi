@@ -66,6 +66,7 @@ from eidolon.trip_photos import Dates, TripPhotos
 from eidolon.voices import GptSovits, load_local_voices
 from eidolon.favors import Favors
 from eidolon.read_aloud import ReadAloud
+from eidolon.home import Home
 from eidolon.schedule_writer import ScheduleWriter
 from eidolon.schedules import Schedules
 from eidolon.letters import Letters
@@ -160,6 +161,8 @@ class Backend:
     trip_photos: TripPhotos
     favors: Favors
     read_aloud: ReadAloud
+    home: Home
+    """The producer's home (GLOSSARY.md「制作人的家」)."""
     """The photos she sends from her trips (GLOSSARY.md「外景照片」), and those asked for with
     tickets, and her days out with the producer (GLOSSARY.md「体验券」「邀约」)."""
     outfit_tags: OutfitTags
@@ -512,6 +515,8 @@ def build(
     engine.with_ties(favors.ties)
     read_aloud = ReadAloud(settings.database_path, characters, config, speech, activity, clock)
     closers.append(read_aloud.close)
+    home = Home(settings.database_path, config, activity)
+    closers.append(home.close)
     outfit_tags = OutfitTags(settings.database_path, settings.vision, settings.stand_assets_url)
     closers.append(outfit_tags.close)
     affinities.on_scene_done(keepsakes.scene_played)
@@ -575,6 +580,7 @@ def build(
         trip_photos=trip_photos,
         favors=favors,
         read_aloud=read_aloud,
+        home=home,
         outfit_tags=outfit_tags,
         schedule_writer=schedule_writer,
         world=world,

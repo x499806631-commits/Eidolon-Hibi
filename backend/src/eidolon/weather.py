@@ -14,7 +14,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -72,6 +72,27 @@ SKIES: dict[int, str] = {
 worded to follow「现在」: 「现在下着小雨」，「现在晴」."""
 
 
+Sky = Literal["clear", "cloudy", "fog", "rain", "snow", "storm"]
+"""What the sky looks like, as a window shows it (GLOSSARY.md「制作人的家」)."""
+
+
+def sky_of(code: int) -> Sky | None:
+    """The sky a WMO weather code looks like; None for one no one here knows."""
+    if code not in SKIES:
+        return None
+    if code <= 1:
+        return "clear"
+    if code <= 3:
+        return "cloudy"
+    if code <= 48:
+        return "fog"
+    if code >= 95:
+        return "storm"
+    if 71 <= code <= 77 or code in (85, 86):
+        return "snow"
+    return "rain"
+
+
 def say(code: int, celsius: float) -> str | None:
     """The weather as she is told it, from a code and a temperature; None for a code no one
     here knows, which is not worth telling her wrongly."""
@@ -98,6 +119,8 @@ class Weather:
     _failed_at: datetime | None = field(default=None, init=False)
     """When a request last failed, so that the service is let be for `RETRY`."""
     _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
+    _code: int | None = field(default=None, init=False)
+    """The weather code the line said last was said from."""
 
     async def now(self) -> str | None:
         """The weather as she is told it now; None where it cannot be told, or is not known."""
@@ -118,6 +141,11 @@ class Weather:
         self._said, self._asked_at, self._failed_at = said, now, None
         return said
 
+    async def sky(self) -> Sky | None:
+        """What the sky looks like there now, as `now` has it; None where it is not known."""
+        await self.now()
+        return sky_of(self._code) if self._code is not None else None
+
     async def _ask(self) -> str | None:
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=TIMEOUT, transport=self.transport)
@@ -131,7 +159,10 @@ class Weather:
             },
         )
         response.raise_for_status()
-        said = _read(response.json())
+        body = response.json()
+        said = _read(body)
+        if said is not None:
+            self._code = int(body["current"]["weather_code"])
         if said is None:
             log.warning("Open-Meteo answered a weather code this deployment does not know")
         return said

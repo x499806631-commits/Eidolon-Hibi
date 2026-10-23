@@ -63,6 +63,7 @@ from eidolon.trip_photos_api import add_trip_photo_routes
 from eidolon.tickets_api import add_ticket_routes
 from eidolon.favors_api import add_favor_routes
 from eidolon.read_aloud_api import add_read_aloud_routes
+from eidolon.home_api import add_home_routes
 from eidolon.voice_settings_api import add_voice_settings_routes
 from eidolon.schedules_api import add_schedule_routes
 from eidolon.letters_api import add_letter_routes
@@ -382,6 +383,7 @@ def create_app(backend: Backend) -> FastAPI:
     add_ticket_routes(app, backend)
     add_favor_routes(app, backend)
     add_read_aloud_routes(app, backend)
+    add_home_routes(app, backend)
     add_voice_settings_routes(app, backend)
     add_schedule_routes(app, backend)
     add_appeal_routes(app, backend.appeals)

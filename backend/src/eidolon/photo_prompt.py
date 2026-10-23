@@ -441,6 +441,43 @@ def keepsake_prompt(tags: str, style: str = "") -> tuple[ImagePrompt, tuple[Cros
 
 
 _KEEPSAKE_START = ("background dataset", "no humans", "still life", "object focus")
+
+HOME_TAGS: dict[str, tuple[tuple[str, ...], str]] = {
+    "apartment": (
+        (
+            "indoors", "bedroom", "one-room apartment", "wooden floor", "bed", "desk", "wall shelf",
+            "window", "door", "curtains", "daytime", "sunlight", "cozy",
+        ),
+        "A cozy small one-room apartment seen from the front at eye level with the front door "
+        "on the left side of the picture and a window in the middle and a bed under the window "
+        "and a desk with shelves on the right side of the picture",
+    ),
+    "mansion": (
+        (
+            "indoors", "mansion", "living room", "luxury", "fireplace", "chandelier",
+            "arched window", "sofa", "carpet", "display cabinet", "writing desk", "daytime",
+            "sunlight",
+        ),
+        "A spacious elegant living room of a big house seen from the front at eye level with a "
+        "tall double door on the left side of the picture and an arched window and a "
+        "fireplace in the middle and a display cabinet on the right side of the picture",
+    ),
+}
+"""The producer's home's rooms (GLOSSARY.md「制作人的家」) as drawn: the tags, and a sentence on
+where the things the user will set out in it stand."""
+
+HOME_NEGATIVE = ", ".join((NEGATIVE_PROMPT, "1girl", "1boy", "person", "people", "text", "watermark"))
+"""A room's picture shows no one."""
+
+
+def home_prompt(room: str, style: str = "") -> ImagePrompt:
+    """The prompts the picture of the producer's room `room` is generated from: no one in it,
+    landscape, by day (the browser darkens it for the evening and the night), in the art
+    style `style`."""
+    tags, sentence = HOME_TAGS[room]
+    positive = ("background dataset", "no humans", "scenery", *_styled(style), *tags, sentence, *_finish(style, ""))
+    return ImagePrompt(", ".join(positive), _negative(HOME_NEGATIVE, style), GROUP_SIZE)
+
 SCENE_MARK = " || "
 """Between a keepsake's tags and her sentence describing it, as they are kept together."""
 _KEEPSAKE_WORDS = re.compile(r'"([^"]*)"(?:\s*@\s*([^,，、]*))?')

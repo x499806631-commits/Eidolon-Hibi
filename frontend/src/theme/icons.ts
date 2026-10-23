@@ -147,3 +147,13 @@ export {
 
 // 朗读（GLOSSARY.md「朗读」）：她消息旁的小喇叭，念的时候换成停。
 export { Volume2 as ReadAloudIcon, Square as StopReadingIcon } from "lucide-react";
+
+// 制作人的家（GLOSSARY.md「制作人的家」）：导航里的「家」，换屋子、相册里取下照片。
+// 用生图把屋子画出来、布置（把东西拖到画里合适的地方）。
+export {
+  House as HomeIcon,
+  Images as AlbumIcon,
+  ArrowLeftRight as SwitchRoomIcon,
+  Paintbrush as DrawRoomIcon,
+  Move as ArrangeIcon,
+} from "lucide-react";
