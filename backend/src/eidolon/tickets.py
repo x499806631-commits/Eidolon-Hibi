@@ -18,6 +18,7 @@ does (`tickets_api`). A ticket is taken as it is used, and given back should usi
   favor takes one.
 """
 
+import sqlite3
 from collections.abc import Callable
 from typing import Literal, get_args
 
@@ -32,17 +33,18 @@ WEIGHTS: dict[TicketKind, int] = {"favor": 2}
 
 def available(
     settings: Settings, features: Switches, has_images: Callable[[], bool]
-) -> Callable[[str], list[TicketKind]]:
+) -> Callable[[sqlite3.Connection, str], list[TicketKind]]:
     """The kinds of ticket a user can use now, in `TICKET_KINDS`' order, each as many times
-    as its weight (`WEIGHTS`), for a draw to pick one of them as likely as another."""
+    as its weight (`WEIGHTS`), for a draw to pick one of them as likely as another; the
+    user's switches read through the connection given, in the draw's transaction."""
 
-    def kinds(user_id: str) -> list[TicketKind]:
+    def kinds(db: sqlite3.Connection, user_id: str) -> list[TicketKind]:
         on = {
             "liked_gift": True,
-            "letter": settings.letters and features.on(user_id, "letters"),
-            "diary_key": settings.diary and features.on(user_id, "diary"),
-            "photo": has_images() and features.on(user_id, "photos"),
-            "date": settings.schedules and features.on(user_id, "schedules"),
+            "letter": settings.letters and features.read_on(db, user_id, "letters"),
+            "diary_key": settings.diary and features.read_on(db, user_id, "diary"),
+            "photo": has_images() and features.read_on(db, user_id, "photos"),
+            "date": settings.schedules and features.read_on(db, user_id, "schedules"),
             "favor": True,
         }
         return [k for k in TICKET_KINDS if on[k] for _ in range(WEIGHTS.get(k, 1))]

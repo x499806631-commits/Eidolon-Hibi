@@ -7,7 +7,7 @@ speech services the user's own keys are tried on; the user is allowed one turn a
 call an hour.
 """
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from datetime import timedelta
 from pathlib import Path
 
@@ -15,6 +15,7 @@ import pytest
 
 from eidolon.activity import ActivityLog, Result
 from eidolon.admission import Admissions
+from eidolon.data_access import Database
 from eidolon.config import EXEMPTING_SERVICES, ChatModelSettings, LLMSettings, SttKey, UsageLimits
 from eidolon.own_keys import (
     BroughtKeys,
@@ -23,8 +24,8 @@ from eidolon.own_keys import (
     DeployerLease,
     OwnKeys,
 )
-from eidolon.store import Store
 from eidolon.usage import OverLimit, UsageKind, UsageLimiter
+from tests.conftest import users_in
 from tests.fakes import FakeBackgroundLLM, FakeClock, FakeLLM, FakeLLMService, FakeSpeech
 
 MY_LLM = ChatModelSettings(
@@ -52,24 +53,28 @@ class CountingDeployer:
         self.released += 1
 
 
+async def not_cooling(*_: str) -> None:
+    """No character is in a cooldown with anyone."""
+
+
 class Deployment:
     """A user allowed one turn and one call an hour, and everything letting them begin."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, user: str) -> None:
         self.clock = FakeClock()
-        self.store = Store(path)
-        self.user = self.store.create_user("producer").id
+        self.user = user
+        self.db = Database(path)
         self.usage = UsageLimiter(
-            path, UsageLimits(turns_per_hour=1, calls_per_hour=1), self.clock
+            self.db, UsageLimits(turns_per_hour=1, calls_per_hour=1), self.clock
         )
-        self.activity = ActivityLog(path, self.clock)
+        self.activity = ActivityLog(self.db, self.clock)
         self.deployer = CountingDeployer()
         self.llm_service = FakeLLMService()
         self.speech = FakeSpeech()
 
     def admissions(self) -> Admissions:
         return Admissions(
-            self.usage, self.activity, self.own_keys(), cooldown_until=lambda *_: None
+            self.usage, self.activity, self.own_keys(), cooldown_until=not_cooling
         )
 
     def own_keys(self) -> OwnKeys:
@@ -78,150 +83,148 @@ class Deployment:
             exempting=lambda: frozenset(EXEMPTING_SERVICES),
         )
 
-    def counted(self, kind: UsageKind = "turn") -> bool:
+    async def counted(self, kind: UsageKind = "turn") -> bool:
         """Whether this hour's turn, or call, is used up, that is, the last one counted."""
         try:
-            self.usage.take(self.user, kind).give_back()
+            await (await self.usage.take(self.user, kind)).give_back()
         except OverLimit:
             return True
         return False
 
-    def turns_taken(self) -> int:
+    async def turns_taken(self) -> int:
         """Uses of the limit kept for the admin, counting or not."""
-        return self.usage.last_day(self.user).total.turns
+        return (await self.usage.last_day(self.user)).total.turns
 
-    def calls_taken(self) -> int:
-        return self.usage.last_day(self.user).total.calls
+    async def calls_taken(self) -> int:
+        return (await self.usage.last_day(self.user)).total.calls
 
-    def records(self) -> list[tuple[Result, bool]]:
+    async def records(self) -> list[tuple[Result, bool]]:
         """Each of the user's records: how it turned out, and whether on their own keys."""
         return [
             (r.result, r.own_keys)
-            for r in self.activity.of_user(self.user, self.clock() - timedelta(hours=1))
+            for r in await self.activity.of_user(self.user, self.clock() - timedelta(hours=1))
         ]
-
-    def close(self) -> None:
-        self.activity.close()
-        self.usage.close()
-        self.store.close()
 
 
 @pytest.fixture
-def deployment(tmp_path: Path) -> Iterator[Deployment]:
-    deployment = Deployment(tmp_path / "eidolon.db")
+async def deployment(tmp_path: Path) -> AsyncIterator[Deployment]:
+    path = tmp_path / "eidolon.db"
+    [user] = await users_in(path, "producer")
+    deployment = Deployment(path, user)
     yield deployment
-    deployment.close()
+    await deployment.db.close()
 
 
 @pytest.mark.parametrize(
     ("result", "counted"),
     [("success", True), ("failed", False), ("rejected", False), ("left", True)],
 )
-def test_a_turn_counts_when_it_succeeded_or_was_left_and_is_given_back_otherwise(
+async def test_a_turn_counts_when_it_succeeded_or_was_left_and_is_given_back_otherwise(
     deployment: Deployment, result: Result, counted: bool
 ):
-    admission = deployment.admissions().turn(deployment.user, "mano", BroughtKeys())
+    admission = await deployment.admissions().turn(deployment.user, "mano", BroughtKeys())
 
-    admission.settle(result)
+    await admission.settle(result)
 
-    assert deployment.counted() is counted
+    assert await deployment.counted() is counted
     assert admission.counts(result) is counted
-    assert deployment.records() == [(result, False)]
+    assert await deployment.records() == [(result, False)]
     assert deployment.deployer.released == 1
 
 
-def test_a_turn_over_the_limit_is_refused_recorded_rejected_and_lets_go_of_its_lease(
+async def test_a_turn_over_the_limit_is_refused_recorded_rejected_and_lets_go_of_its_lease(
     deployment: Deployment,
 ):
     admissions = deployment.admissions()
-    admissions.turn(deployment.user, "mano", BroughtKeys()).settle("success")
+    await (await admissions.turn(deployment.user, "mano", BroughtKeys())).settle("success")
 
     with pytest.raises(OverLimit):
-        admissions.turn(deployment.user, "mano", BroughtKeys())
+        await admissions.turn(deployment.user, "mano", BroughtKeys())
 
-    assert deployment.turns_taken() == 1
-    assert deployment.records() == [("success", False), ("rejected", False)]
+    assert await deployment.turns_taken() == 1
+    assert await deployment.records() == [("success", False), ("rejected", False)]
     assert deployment.deployer.released == 2
 
 
-def test_a_turn_bringing_an_own_llm_does_not_count_and_leases_nothing(deployment: Deployment):
+async def test_a_turn_bringing_an_own_llm_does_not_count_and_leases_nothing(deployment: Deployment):
     admissions = deployment.admissions()
 
     for _ in range(2):  # over the limit, were they counted
-        admission = admissions.turn(deployment.user, "mano", BroughtKeys(llm=MY_LLM))
+        admission = await admissions.turn(deployment.user, "mano", BroughtKeys(llm=MY_LLM))
         assert admission.exempt
         assert not any(admission.counts(r) for r in ("success", "failed", "rejected", "left"))
-        admission.settle("success")
+        await admission.settle("success")
 
-    assert not deployment.counted()
-    assert deployment.turns_taken() == 2  # kept for the admin all the same
-    assert deployment.records() == [("success", True), ("success", True)]
+    assert not await deployment.counted()
+    assert await deployment.turns_taken() == 2  # kept for the admin all the same
+    assert await deployment.records() == [("success", True), ("success", True)]
     assert deployment.deployer.leased == 0
 
 
-def test_a_turn_settled_twice_is_settled_once(deployment: Deployment):
-    admission = deployment.admissions().turn(deployment.user, "mano", BroughtKeys())
+async def test_a_turn_settled_twice_is_settled_once(deployment: Deployment):
+    admission = await deployment.admissions().turn(deployment.user, "mano", BroughtKeys())
 
-    admission.settle("failed")
-    admission.settle("success")
+    await admission.settle("failed")
+    await admission.settle("success")
 
-    assert not deployment.counted()
-    assert deployment.records() == [("failed", False)]
+    assert not await deployment.counted()
+    assert await deployment.records() == [("failed", False)]
     assert deployment.deployer.released == 1
 
 
 @pytest.mark.parametrize(
     ("result", "counted"), [("not_connected", False), ("success", True), ("failed", True)]
 )
-def test_a_call_counts_once_it_connected_and_is_given_back_otherwise(
+async def test_a_call_counts_once_it_connected_and_is_given_back_otherwise(
     deployment: Deployment, result: Result, counted: bool
 ):
-    admission = deployment.admissions().call(deployment.user, "mano", BroughtKeys())
+    admission = await deployment.admissions().call(deployment.user, "mano", BroughtKeys())
 
-    admission.settle(result, None if result == "not_connected" else 12.5, "hung_up")
+    await admission.settle(result, None if result == "not_connected" else 12.5, "hung_up")
 
-    assert deployment.counted("call") is counted
+    assert await deployment.counted("call") is counted
     assert admission.counts(result) is counted
-    assert deployment.records() == [(result, False)]
+    assert await deployment.records() == [(result, False)]
     assert deployment.deployer.released == 1
 
 
-def test_a_call_over_the_limit_is_refused_recorded_rejected_and_lets_go_of_its_lease(
+async def test_a_call_over_the_limit_is_refused_recorded_rejected_and_lets_go_of_its_lease(
     deployment: Deployment,
 ):
     admissions = deployment.admissions()
-    admissions.call(deployment.user, "mano", BroughtKeys()).settle("success", 3.0, "hung_up")
+    admission = await admissions.call(deployment.user, "mano", BroughtKeys())
+    await admission.settle("success", 3.0, "hung_up")
 
     with pytest.raises(OverLimit):
-        admissions.call(deployment.user, "mano", BroughtKeys())
+        await admissions.call(deployment.user, "mano", BroughtKeys())
 
-    assert deployment.calls_taken() == 1
-    assert deployment.records() == [("success", False), ("rejected", False)]
+    assert await deployment.calls_taken() == 1
+    assert await deployment.records() == [("success", False), ("rejected", False)]
     assert deployment.deployer.released == 2
 
 
-def test_a_call_without_keys_for_speech_is_unavailable_and_not_recorded(
+async def test_a_call_without_keys_for_speech_is_unavailable_and_not_recorded(
     deployment: Deployment,
 ):
     deployment.deployer.keys = DeployerKeys(FakeLLM(), FakeBackgroundLLM())
 
     with pytest.raises(CallsUnavailable):
-        deployment.admissions().call(deployment.user, "mano", BroughtKeys())
+        await deployment.admissions().call(deployment.user, "mano", BroughtKeys())
 
-    assert deployment.calls_taken() == 0
-    assert deployment.records() == []
+    assert await deployment.calls_taken() == 0
+    assert await deployment.records() == []
     assert deployment.deployer.leased == deployment.deployer.released
 
 
-def test_a_call_on_the_users_own_keys_alone_does_not_count(deployment: Deployment):
+async def test_a_call_on_the_users_own_keys_alone_does_not_count(deployment: Deployment):
     admissions = deployment.admissions()
 
     for _ in range(2):  # over the limit, were they counted
-        admission = admissions.call(deployment.user, "mano", ALL_OWN)
+        admission = await admissions.call(deployment.user, "mano", ALL_OWN)
         assert admission.exempt
         assert not any(admission.counts(r) for r in ("success", "failed", "not_connected"))
-        admission.settle("success", 3.0, "hung_up")
+        await admission.settle("success", 3.0, "hung_up")
 
-    assert not deployment.counted("call")
-    assert deployment.calls_taken() == 2  # kept for the admin all the same
-    assert deployment.records() == [("success", True), ("success", True)]
+    assert not await deployment.counted("call")
+    assert await deployment.calls_taken() == 2  # kept for the admin all the same
+    assert await deployment.records() == [("success", True), ("success", True)]

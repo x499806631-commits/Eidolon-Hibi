@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   createContext,
   useCallback,
@@ -49,14 +49,17 @@ import { isWebOn } from "@/lib/webToggle";
 import type { Ambience } from "@/lib/ambience";
 import { CharacterVoice } from "@/lib/characterVoice";
 import { toFailure, type Failure } from "@/lib/failure";
+import { getGiftState, type GiftState } from "@/lib/gifts";
 import { keepListPreferences, listPreferences, NO_PREFERENCES, type ListPreferences } from "@/lib/listPreferences";
 import { isLive, LiveConversation, NOT_OPEN, type LiveCall } from "@/lib/liveConversation";
-import { departure } from "@/lib/navShell";
+import { departure, isGiftsInView } from "@/lib/navShell";
+import { hasNewRewards, keepRewardsSeenUpTo, rewardsSeenUpTo, type Rewarded } from "@/lib/rewards";
+import { later } from "@/lib/seenOnDevice";
 
 import { MicSheet } from "./MicSheet";
 import { useCallTones } from "./useCallTones";
 
-/** 标签页在前台时多久重新拉一次摘要：她到点的搭话最多晚这么久出现（切回标签页时马上拉一次）。 */
+/** 标签页在前台时多久重新拉一次摘要和最近一次到账：她到点的搭话、别处做完的任务最多晚这么久出现（切回标签页时马上拉一次）。 */
 const LIST_POLL_MS = 60_000;
 
 /** 正在和谁通话，列表那一行和外壳顶上的通话条据此显示「正在呼叫…」「通话中 mm:ss」；从外壳持有的 LiveConversation 的快照算出。 */
@@ -78,6 +81,16 @@ export type Directory = {
   refresh: () => void;
   /** 从头重新载入，给「重试」用。 */
   reload: () => void;
+  /**
+   * 「礼物」上该不该有点（lib/rewards）：好感度和礼物开着，最近一次到账晚于这台设备上看过的。礼物页在眼前
+   * （没被展开的通话层盖住）时不出，最近一次到账随即记成看过。最近一次到账随摘要每分钟拉一次；回合、送礼带着
+   * 到账时当场更新。
+   */
+  newRewards: boolean;
+  /** 已知的最近一次到账（ISO）；礼物页据此知道自己读到的状态落后了。 */
+  rewardedAt: string | null;
+  /** 礼物页读到（或送礼改了）礼物状态：开关和最近一次到账以它为准。 */
+  giftsRead: (state: Pick<GiftState, "open" | "rewarded_at">) => void;
   /** 这台设备上的隐藏和置顶；和角色一起读出，读不到时什么都没整理。 */
   preferences: ListPreferences;
   /** 整理列表（隐藏、显示、置顶…），立即生效并存下；存不进去时只在这次页面里生效。 */
@@ -156,6 +169,7 @@ export function useDirectory(): Directory {
 
 export function DirectoryProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [account, setAccount] = useState<Account | null>(null);
   const userId = account?.id ?? null;
   const [configured, setConfigured] = useState<Character[] | null>(null);
@@ -165,6 +179,9 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
   const characters = useMemo(() => configured && withAppearance(configured, appearance), [configured, appearance]);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // 好感度和礼物开没开、最近一次到账；这台设备上看过的最近一次到账。
+  const [rewards, setRewards] = useState<{ isOpen: boolean; at: string | null }>({ isOpen: false, at: null });
+  const [rewardsSeenAt, setRewardsSeenAt] = useState<string | null>(null);
   // 外壳持有的那段对话：状态给渲染，ref 给回调在点击、卸下这一刻读。
   const [held, setHeld] = useState<LiveConversation | null>(null);
   const heldRef = useRef<LiveConversation | null>(null);
@@ -191,6 +208,7 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
   const snapshot = useSyncExternalStore(held?.subscribe ?? noSubscription, held?.snapshot ?? notHeld, notHeld);
   const liveCall = held && isLive(snapshot.call) ? snapshot.call : null;
   const call: CallInList = held && liveCall ? { characterId: held.characterId, state: liveCall } : null;
+  const giftsInView = isGiftsInView(pathname, held !== null && snapshot.layer?.collapsed === false);
 
   /** 拉回来的摘要，第 `since` 次看过之后又在本地看过的那几位记成看过。 */
   const received = useCallback((all: LatestConversation[], since: number): Record<string, LatestConversation> => {
@@ -208,6 +226,18 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
       return hers?.unseen_reach_out ? { ...all, [characterId]: { ...hers, unseen_reach_out: false } } : all;
     });
   }, []);
+
+  const giftsRead = useCallback((state: Pick<GiftState, "open" | "rewarded_at">) => {
+    setRewards((r) => ({ isOpen: state.open, at: later(r.at, state.rewarded_at) }));
+  }, []);
+
+  /** 回合带着到账：开关必然开着。 */
+  const rewarded = useCallback((r: Rewarded) => giftsRead({ open: true, rewarded_at: r.rewarded_at }), [giftsRead]);
+
+  /** 拉一次礼物状态，只看开关和最近一次到账；拉不到时留着上一次的。 */
+  const checkRewards = useCallback(() => {
+    getGiftState().then(giftsRead, () => {});
+  }, [giftsRead]);
 
   const refresh = useCallback(() => {
     const since = seenCount.current;
@@ -237,23 +267,44 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
           setConfigured(all);
           setPreferences(listPreferences(account.id, all.map((c) => c.id)));
           setAppearance(loadAppearance(account.id));
+          setRewardsSeenAt(rewardsSeenUpTo(account.id));
           setLatest(received(summaries, since));
+          checkRewards();
         },
         (e) => !cancelled && setFailure(toFailure(e)),
       );
     return () => {
       cancelled = true;
     };
-  }, [attempt, received]);
+  }, [attempt, received, checkRewards]);
 
-  // 开着网站时她到点的搭话不用刷新就出现：载入了才拉，后台标签页不拉。
+  // 开着网站时她到点的搭话、别处做完的任务不用刷新就出现：载入了才拉，后台标签页不拉。
   useWhileVisible(
     () => {
-      if (configured && !failure) refresh();
+      if (configured && !failure) {
+        refresh();
+        checkRewards();
+      }
     },
     LIST_POLL_MS,
     { atOnceWhenShown: true },
   );
+
+  // 礼物页在眼前：到账一来就记成看过（这台设备上），所以不出点。
+  useEffect(() => {
+    if (!giftsInView || !userId || rewards.at === null) return;
+    if (!hasNewRewards({ isOpen: true, rewardedAt: rewards.at, seenAt: rewardsSeenAt })) return;
+    keepRewardsSeenUpTo(userId, rewards.at);
+    setRewardsSeenAt(rewardsSeenUpTo(userId));
+  }, [giftsInView, userId, rewards.at, rewardsSeenAt]);
+
+  // 别的标签页记下了看过：这里的点跟着灭。
+  useEffect(() => {
+    if (!userId) return;
+    const onStorage = () => setRewardsSeenAt(rewardsSeenUpTo(userId));
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [userId]);
 
   const showPast = useCallback(
     (shown: boolean) => {
@@ -324,6 +375,7 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
             return record;
           }),
         onListChanged: refresh,
+        onRewarded: rewarded,
         startCall: (conversationId, preferences, handlers, asmr) =>
           startCall(conversationId, preferences, handlers, userId, asmr),
         sendTurn: (conversationId, text) =>
@@ -339,7 +391,7 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
       setHeld(live);
       return live;
     },
-    [end, refresh, seen, showHeld, voice, tones],
+    [end, refresh, rewarded, seen, showHeld, voice, tones],
   );
 
   const close = useCallback(
@@ -420,6 +472,10 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
         failure,
         refresh,
         reload,
+        newRewards:
+          !giftsInView && hasNewRewards({ isOpen: rewards.isOpen, rewardedAt: rewards.at, seenAt: rewardsSeenAt }),
+        rewardedAt: rewards.at,
+        giftsRead,
         call,
         ambience: voice.ambience,
         held,

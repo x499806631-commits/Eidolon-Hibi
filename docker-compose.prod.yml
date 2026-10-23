@@ -6,6 +6,13 @@
 # 四个服务都用 host 网络：语音通话走 WebRTC（UDP），后端需要把本机的公网地址作为候选地址告诉浏览器，
 # coturn 也需要直接收发 UDP。前端和后端只监听 127.0.0.1，公网上只开放 Caddy（80、443）和 coturn（3478 与中继端口）。
 
+# 每个容器的日志最多留 5 个 10 MB 的文件，免得写满磁盘
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "5"
+
 services:
   caddy:
     image: caddy:2-alpine
@@ -19,6 +26,7 @@ services:
     depends_on:
       - frontend
     restart: unless-stopped
+    logging: *logging
 
   frontend:
     image: ghcr.io/sallyn0225/eidolon-sc-frontend:${EIDOLON_IMAGE_TAG:-main}
@@ -33,6 +41,7 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+    logging: *logging
 
   backend:
     image: ghcr.io/sallyn0225/eidolon-sc-backend:${EIDOLON_IMAGE_TAG:-main}
@@ -52,6 +61,20 @@ services:
       - ./corpus:/corpus:ro # SCTranslationData 等剧情库的原始数据，导入和同步时读取（deploy/story-sync.sh 在主机上更新）
       - ./deploy:/deploy:ro # 活动名对照表 event-names.toml（同步时读取）
     restart: unless-stopped
+    logging: *logging
+    # 停止时先给 20 秒让进行中的请求（文字回合的回复）结束，再挂断通话、关库；默认 10 秒后就会被强行结束
+    stop_grace_period: 30s
+    # /api/health 读不了数据库时返回 503；docker ps 里看得到 unhealthy，不会自动重启
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=8)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   coturn:
     image: coturn/coturn:4.7
@@ -80,6 +103,7 @@ services:
       - --log-file=stdout
       - --simple-log
     restart: unless-stopped
+    logging: *logging
 
 volumes:
   eidolon-data:

@@ -26,7 +26,7 @@ from eidolon.schedules import (
     lines,
     rest,
 )
-from tests.conftest import CharacterConfig, ClientFactory
+from tests.conftest import CharacterConfig, ClientFactory, database_in
 from tests.fakes import FakeClock, FakeLLM, FakeRandom, context_of
 from tests.test_call_turns import CallUnderTest
 from tests.test_call_turns import mano_call  # noqa: F401  # the fixture
@@ -50,15 +50,14 @@ def night(day: date, bath: Bath | None, sleep: time = time(23)) -> Schedule:
     return Schedule(day, (Slot(time(10), time(12), "练习", "", "lesson"),), (), time(7), sleep, bath)
 
 
-def keep_bath(
+async def keep_bath(
     settings: Settings, bath: Bath, day: date = TODAY, sleep: time = time(23)
 ) -> None:
-    schedules = Schedules(settings.database_path, lambda: datetime.now(UTC))
-    schedules.keep(
-        user_id(settings.database_path, "producer"), "mano", day,
-        [Slot(time(10), time(12), "练习", "", "lesson")], [], time(7), sleep, bath,
-    )
-    schedules.close()
+    async with database_in(settings.database_path) as db:
+        await Schedules(db, lambda: datetime.now(UTC)).keep(
+            user_id(settings.database_path, "producer"), "mano", day,
+            [Slot(time(10), time(12), "练习", "", "lesson")], [], time(7), sleep, bath,
+        )
 
 
 def test_her_bath_is_drawn_before_she_goes_to_bed_as_long_as_her_way_takes():
@@ -136,7 +135,7 @@ async def in_the_bath(
     conversation = await start_conversation(client)
     await send_turn(client, conversation, "下午好")
     last_contact(settings.database_path, conversation, at(15))
-    keep_bath(settings, Bath(time(21), 40))
+    await keep_bath(settings, Bath(time(21), 40))
     return client, llm, conversation
 
 
@@ -213,7 +212,7 @@ async def test_an_adult_who_soaks_answers_first_from_the_tub(
 ):
     characters.write("hearts/mano.toml", ADULT)
     # The call's clock is Shanghai's 20:30, 2026-09-25.
-    keep_bath(settings, Bath(time(20, 15), 40), date(2026, 9, 25))
+    await keep_bath(settings, Bath(time(20, 15), 40), date(2026, 9, 25))
     llm = FakeLLM(["<ja>もしもし、今お風呂なの</ja><zh>喂，我在泡澡呢</zh>"])
 
     spoken, messages = await mano_call.run(llm, [answered(), SleepFrame(0.5)])
@@ -237,7 +236,7 @@ async def test_after_the_bath_she_comes_back_for_the_call_she_did_not_answer_nig
     conversation = await start_conversation(client)
     await send_turn(client, conversation, "晚上好")
     last_contact(settings.database_path, conversation, at(20))
-    keep_bath(settings, Bath(time(22, 20), 40), sleep=time(23, 50))
+    await keep_bath(settings, Bath(time(22, 20), 40), sleep=time(23, 50))
     assert (await offer(client, conversation)).status_code == 409
     missed_at(settings, at(22, 30))
     reaching = backend_of(client).reach_outs

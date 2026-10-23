@@ -7,15 +7,16 @@ import pytest
 
 from eidolon.characters import load_characters
 from eidolon.corpus import CatalogEntry, Episode, Line, StoryCorpus
+from eidolon.data_access import Database
 from eidolon.story_import import ImportReport, import_csv_directory, is_failure_ending
 from tests.conftest import Admin, CharacterConfig
 from tests.fakes import FakeEmbedder
 from tests.stories import KNOCKED_OUT, PARK, WON, write_story
 
 class Importer:
-    def __init__(self, database: Path, characters: CharacterConfig) -> None:
+    def __init__(self, db: Database, characters: CharacterConfig) -> None:
         self.embedder = FakeEmbedder()
-        self.corpus = StoryCorpus(database, self.embedder)
+        self.corpus = StoryCorpus(db, self.embedder)
         self._characters = characters
 
     async def run(self, directory: Path) -> ImportReport:
@@ -24,10 +25,10 @@ class Importer:
 
 
 @pytest.fixture
-def importer(tmp_path: Path, characters: CharacterConfig):
-    importer = Importer(tmp_path / "eidolon.db", characters)
-    yield importer
-    importer.corpus.close()
+async def importer(tmp_path: Path, characters: CharacterConfig):
+    db = Database(tmp_path / "eidolon.db")
+    yield Importer(db, characters)
+    await db.close()
 
 
 async def test_each_file_becomes_an_episode_with_source_title_category_and_lines(
@@ -35,7 +36,7 @@ async def test_each_file_becomes_an_episode_with_source_title_category_and_lines
 ):
     await importer.run(story)
 
-    park = importer.corpus.get("produce_events/100100101")
+    park = await importer.corpus.get("produce_events/100100101")
     assert park is not None
     assert (park.category, park.source, park.title) == ("培育剧情", "W.I.N.G.編", "公園の歌声")
     assert park.lines[0] == Line(
@@ -43,10 +44,10 @@ async def test_each_file_becomes_an_episode_with_source_title_category_and_lines
     )
     assert [line.speaker for line in park.lines] == ["プロデューサー", "社長", "真乃", "真乃"]
 
-    card = importer.corpus.get("produce_events/201100401")
+    card = await importer.corpus.get("produce_events/201100401")
     assert card is not None
     assert (card.category, card.source) == ("P卡剧情", "【ばりうまかブルース】月岡恋鐘")
-    event = importer.corpus.get("game_event_communications/400100401")
+    event = await importer.corpus.get("game_event_communications/400100401")
     assert event is not None
     assert (event.category, event.source, event.title) == (
         "活动剧情", "Light up the illumination", "第1話"
@@ -58,7 +59,7 @@ async def test_the_producers_choices_are_dropped_but_the_characters_reaction_kep
 ):
     await importer.run(story)
 
-    park = importer.corpus.get("produce_events/100100101")
+    park = await importer.corpus.get("produce_events/100100101")
     assert park is not None
     texts = [line.ja for line in park.lines]
     assert "歌が好きなのか？" not in texts and "鳩が好きなのか？" not in texts
@@ -68,23 +69,23 @@ async def test_the_producers_choices_are_dropped_but_the_characters_reaction_kep
 async def test_cast_is_the_configured_characters_who_speak(importer: Importer, story: Path):
     await importer.run(story)
 
-    def cast(episode_id: str) -> frozenset[str]:
-        episode = importer.corpus.get(episode_id)
+    async def cast(episode_id: str) -> frozenset[str]:
+        episode = await importer.corpus.get(episode_id)
         assert episode is not None
         return episode.cast
 
     # The producer and the president speak here too, but only Mano is cast.
-    assert cast("produce_events/100100101") == {"mano"}
+    assert await cast("produce_events/100100101") == {"mano"}
     # A joint line casts both; Kogane's mother is not Kogane.
-    assert cast("produce_events/201100401") == {"kogane", "mano"}
+    assert await cast("produce_events/201100401") == {"kogane", "mano"}
     # Idols who are not configured characters are not cast.
-    assert cast("game_event_communications/400100401") == frozenset()
+    assert await cast("game_event_communications/400100401") == frozenset()
 
 
 async def test_failure_endings_are_not_imported(importer: Importer, story: Path):
     report = await importer.run(story)
 
-    ids = {episode.id for episode in importer.corpus.list_episodes()}
+    ids = {episode.id for episode in await importer.corpus.list_episodes()}
     assert ids == {
         "produce_events/100100101",
         "produce_events/600100106",
@@ -104,8 +105,8 @@ async def test_importing_again_updates_in_place_without_duplicates(
 
     report = await importer.run(story)
 
-    assert len(importer.corpus.list_episodes()) == 4
-    assert len(importer.corpus.list_episodes("mano")) == 3
+    assert len(await importer.corpus.list_episodes()) == 4
+    assert len(await importer.corpus.list_episodes("mano")) == 3
     # Nothing changed, so nothing is embedded again.
     assert report.embedded_passages == 0
     assert len(importer.embedder.documents) == embedded_first
@@ -114,10 +115,10 @@ async def test_importing_again_updates_in_place_without_duplicates(
     write_story(story, "櫻木真乃/W.I.N.G.編/決勝後コミュ.csv", revised, "produce_events/600100106")
     await importer.run(story)
 
-    won = importer.corpus.get("produce_events/600100106")
+    won = await importer.corpus.get("produce_events/600100106")
     assert won is not None
     assert [line.ja for line in won.lines][-1] == "今まで、本当にありがとうございましたっ！"
-    assert len(importer.corpus.list_episodes()) == 4
+    assert len(await importer.corpus.list_episodes()) == 4
 
 
 async def test_search_only_finds_episodes_the_character_is_cast_in(
@@ -126,17 +127,17 @@ async def test_search_only_finds_episodes_the_character_is_cast_in(
     await importer.run(story)
 
     mano = await importer.corpus.search("鳩の話", "mano", limit=1)
-    assert [p.episode.id for p in mano] == ["produce_events/100100101"]
+    assert [p.episode_id for p in mano] == ["produce_events/100100101"]
     assert "公園で鳩と一緒に歌っていました" in mano[0].text
 
     kogane = await importer.corpus.search("鳩の話", "kogane")
-    assert "produce_events/100100101" not in {p.episode.id for p in kogane}
-    assert {p.episode.id for p in kogane} == {"produce_events/201100401"}
+    assert "produce_events/100100101" not in {p.episode_id for p in kogane}
+    assert {p.episode_id for p in kogane} == {"produce_events/201100401"}
 
     # Hiori's event is about a photo shoot in the park, but no configured character is in it.
     for character in ("mano", "kogane"):
         hits = await importer.corpus.search("公園で写真", character)
-        assert "game_event_communications/400100401" not in {p.episode.id for p in hits}
+        assert "game_event_communications/400100401" not in {p.episode_id for p in hits}
 
 
 async def test_adding_a_characters_speaker_name_casts_her_on_the_next_import(
@@ -148,13 +149,13 @@ async def test_adding_a_characters_speaker_name_casts_her_on_the_next_import(
     await importer.run(story)
 
     hits = await importer.corpus.search("公園で写真", "hiori")
-    assert [p.episode.id for p in hits] == ["game_event_communications/400100401"]
+    assert [p.episode_id for p in hits] == ["game_event_communications/400100401"]
 
 
-def catalog(importer: Importer, character_id: str) -> list[tuple[str, str, list[str]]]:
+async def catalog(importer: Importer, character_id: str) -> list[tuple[str, str, list[str]]]:
     return [
         (s.category, s.source, [e.title for e in s.episodes])
-        for s in importer.corpus.catalog(character_id)
+        for s in await importer.corpus.catalog(character_id)
     ]
 
 
@@ -164,17 +165,17 @@ async def test_the_catalog_groups_a_characters_episodes_by_card_or_event(
     await importer.run(story)
 
     # Character → card or event → episode; failure endings are not in it.
-    assert catalog(importer, "mano") == [
+    assert await catalog(importer, "mano") == [
         ("培育剧情", "W.I.N.G.編", ["公園の歌声", "決勝後コミュ"]),
         ("P卡剧情", "【ばりうまかブルース】月岡恋鐘", ["長崎の味"]),
     ]
-    assert catalog(importer, "kogane") == [
+    assert await catalog(importer, "kogane") == [
         ("P卡剧情", "【ばりうまかブルース】月岡恋鐘", ["長崎の味"]),
     ]
-    [source] = importer.corpus.catalog("kogane")
+    [source] = await importer.corpus.catalog("kogane")
     assert source.episodes == (CatalogEntry("produce_events/201100401", "長崎の味"),)
     # Nobody configured is in Hiori's event, so no one's catalog lists it.
-    assert importer.corpus.catalog("hiori") == []
+    assert await importer.corpus.catalog("hiori") == []
 
 
 async def test_the_catalog_stays_right_when_importing_again(importer: Importer, story: Path):
@@ -191,11 +192,11 @@ async def test_the_catalog_stays_right_when_importing_again(importer: Importer, 
 
     await importer.run(story)
 
-    assert catalog(importer, "mano") == [
+    assert await catalog(importer, "mano") == [
         ("培育剧情", "W.I.N.G.編", ["公園の歌声", "はじまりの日", "決勝後コミュ"]),
         ("P卡剧情", "【ばりうまかブルース】月岡恋鐘", ["ふるさとの味"]),
     ]
-    assert catalog(importer, "kogane") == [
+    assert await catalog(importer, "kogane") == [
         ("P卡剧情", "【ばりうまかブルース】月岡恋鐘", ["ふるさとの味"]),
     ]
 
@@ -219,10 +220,10 @@ async def test_a_failure_ending_left_from_an_earlier_import_is_removed(
 
     report = await importer.run(story)
 
-    assert importer.corpus.get("produce_events/600100102") is None
+    assert await importer.corpus.get("produce_events/600100102") is None
     assert report.removed == 1
     assert "produce_events/600100102" not in {
-        p.episode.id for p in await importer.corpus.search("負け", "mano")
+        p.episode_id for p in await importer.corpus.search("負け", "mano")
     }
 
 
@@ -232,7 +233,7 @@ async def test_a_file_without_an_info_row_is_keyed_by_its_path(importer: Importe
 
     report = await importer.run(root)
 
-    assert [e.id for e in importer.corpus.list_episodes()] == ["csv/櫻木真乃/W.I.N.G.編/公園の歌声"]
+    assert [e.id for e in await importer.corpus.list_episodes()] == ["csv/櫻木真乃/W.I.N.G.編/公園の歌声"]
     assert any("info" in w for w in report.warnings)
 
 
@@ -268,12 +269,12 @@ async def test_files_translated_from_the_same_script_import_once(
 
     report = await importer.run(story)
 
-    assert len(importer.corpus.list_episodes("mano")) == 3
+    assert len(await importer.corpus.list_episodes("mano")) == 3
     assert report.embedded_passages == 0
     assert len(importer.embedder.documents) == embedded_first
     assert any("produce_events/100100101" in w for w in report.warnings)
     # The partial copy sorts first, but the complete one is kept.
-    park = importer.corpus.get("produce_events/100100101")
+    park = await importer.corpus.get("produce_events/100100101")
     assert park is not None and park.title == "公園の歌声"
     assert park.lines[-1].ja == "ほわっ……はい、どっちも好きです"
 
@@ -287,7 +288,7 @@ async def test_a_file_named_like_a_failure_ending_that_no_rule_catches_is_flagge
 
     report = await importer.run(root)
 
-    assert importer.corpus.get("produce_events/600100199") is not None
+    assert await importer.corpus.get("produce_events/600100199") is not None
     assert report.looks_like_failures == [CatalogEntry("produce_events/600100199", "新しい敗北")]
 
     report = await importer.run(root)

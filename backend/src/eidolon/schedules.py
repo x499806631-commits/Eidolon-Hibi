@@ -20,15 +20,14 @@ takes (`BATH_MINUTES`).
 
 import json
 import re
-import threading
+import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, tzinfo
-from pathlib import Path
 from typing import Literal, cast, get_args
 
 from eidolon.clock import Clock
-from eidolon.database import connect
+from eidolon.data_access import Database
 from eidolon.hearts import BathKind
 from eidolon.randomness import Random
 
@@ -339,33 +338,26 @@ def _time(text: object) -> time | None:
 
 
 class Schedules:
-    """Every character's schedules with every user, in the database at `path` beside the users
-    they belong to."""
+    """Every character's schedules with every user, in `db` beside the users they belong to
+    (ADR-0028)."""
 
-    def __init__(self, path: Path, clock: Clock) -> None:
-        self._db = connect(path)
-        self._lock = threading.Lock()
+    def __init__(self, db: Database, clock: Clock) -> None:
+        self._db = db
         self._clock = clock
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
-            columns = {row[1] for row in self._db.execute("PRAGMA table_info(schedules)")}
-            for column, kind in (
-                ("wake", "TEXT"), ("sleep", "TEXT"), ("bath_at", "TEXT"), ("bath_minutes", "INTEGER"),
-                ("trip", "TEXT"), ("trip_with", "TEXT"),
-            ):
-                if column not in columns:
-                    self._db.execute(f"ALTER TABLE schedules ADD COLUMN {column} {kind}")
+        db.prepare(_open)
 
-    def of(self, user_id: str, character_id: str, day: date) -> Schedule | None:
+    async def of(self, user_id: str, character_id: str, day: date) -> Schedule | None:
         """Her schedule for `day` with the user; None if none was written, or it could not be."""
-        with self._lock:
-            row = self._db.execute(
-                "SELECT slots, twists, wake, sleep, bath_at, bath_minutes, trip, trip_with"
-                " FROM schedules"
-                " WHERE user_id = ? AND character_id = ?"
-                " AND day = ?",
-                (user_id, character_id, day.isoformat()),
-            ).fetchone()
+        return await self._db.read(self._of_body, user_id, character_id, day)
+
+    def _of_body(self, db: sqlite3.Connection, user_id: str, character_id: str, day: date) -> Schedule | None:
+        row = db.execute(
+            "SELECT slots, twists, wake, sleep, bath_at, bath_minutes, trip, trip_with"
+            " FROM schedules"
+            " WHERE user_id = ? AND character_id = ?"
+            " AND day = ?",
+            (user_id, character_id, day.isoformat()),
+        ).fetchone()
         if row is None:
             return None
         slots = tuple(_stored_slot(s) for s in json.loads(row[0]))
@@ -379,70 +371,93 @@ class Schedules:
             row[6], tuple(json.loads(row[7])) if row[7] else (),
         )
 
-    def joining(self, user_id: str, character_id: str, day: date) -> tuple[str, tuple[str, ...]] | None:
+    async def joining(self, user_id: str, character_id: str, day: date) -> tuple[str, tuple[str, ...]] | None:
         """The trip on `day` another of hers with the user is going on with her, if any: where,
         and who goes, by id, she not among them (GLOSSARY.md「外景照片」)."""
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT character_id, trip, trip_with FROM schedules"
-                " WHERE user_id = ? AND day = ? AND trip IS NOT NULL AND trip_with IS NOT NULL",
-                (user_id, day.isoformat()),
-            ).fetchall()
+        return await self._db.read(self._joining_body, user_id, character_id, day)
+
+    def _joining_body(self, db: sqlite3.Connection, user_id: str, character_id: str, day: date) -> tuple[str, tuple[str, ...]] | None:
+        rows = db.execute(
+            "SELECT character_id, trip, trip_with FROM schedules"
+            " WHERE user_id = ? AND day = ? AND trip IS NOT NULL AND trip_with IS NOT NULL",
+            (user_id, day.isoformat()),
+        ).fetchall()
         for other, trip, trip_with in rows:
             going = json.loads(trip_with)
             if character_id in going:
                 return trip, (other, *(g for g in going if g != character_id))
         return None
 
-    def tried(self, user_id: str, character_id: str, day: date) -> bool:
+    async def tried(self, user_id: str, character_id: str, day: date) -> bool:
         """Whether her schedule for `day` was written, or tried and could not be."""
-        with self._lock:
-            return self._db.execute(
-                "SELECT 1 FROM schedules WHERE user_id = ? AND character_id = ? AND day = ?",
-                (user_id, character_id, day.isoformat()),
-            ).fetchone() is not None
+        return await self._db.read(self._tried_body, user_id, character_id, day)
 
-    def keep(
+    def _tried_body(self, db: sqlite3.Connection, user_id: str, character_id: str, day: date) -> bool:
+        return db.execute(
+            "SELECT 1 FROM schedules WHERE user_id = ? AND character_id = ? AND day = ?",
+            (user_id, character_id, day.isoformat()),
+        ).fetchone() is not None
+
+    async def keep(
         self, user_id: str, character_id: str, day: date, slots: Sequence[Slot],
         twists: Sequence[str], wake: time | None = None, sleep: time | None = None,
         bath: Bath | None = None, trip: str | None = None, trip_with: Sequence[str] = (),
     ) -> None:
         """Keep her schedule for `day`; none (`slots` empty) keeps the day from being tried
         again. One kept already is left as it is."""
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT OR IGNORE INTO schedules"
-                " (user_id, character_id, day, slots, twists, created_at, wake, sleep, bath_at,"
-                " bath_minutes, trip, trip_with) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    user_id, character_id, day.isoformat(),
-                    json.dumps([s.shown() for s in slots], ensure_ascii=False),
-                    json.dumps(list(twists), ensure_ascii=False),
-                    self._clock().isoformat(), _clock(wake), _clock(sleep),
-                    _clock(bath.at) if bath else None, bath.minutes if bath else None, trip,
-                    json.dumps(list(trip_with)) if trip and trip_with else None,
-                ),
-            )
+        return await self._db.write(self._keep_body, user_id, character_id, day, slots, twists, wake, sleep, bath, trip, trip_with)
 
-    def forget(self, user_id: str, character_id: str, day: date) -> None:
+    def _keep_body(
+        self,
+        db: sqlite3.Connection, user_id: str, character_id: str, day: date, slots: Sequence[Slot],
+        twists: Sequence[str], wake: time | None = None, sleep: time | None = None,
+        bath: Bath | None = None, trip: str | None = None, trip_with: Sequence[str] = (),
+    ) -> None:
+        db.execute(
+            "INSERT OR IGNORE INTO schedules"
+            " (user_id, character_id, day, slots, twists, created_at, wake, sleep, bath_at,"
+            " bath_minutes, trip, trip_with) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                user_id, character_id, day.isoformat(),
+                json.dumps([s.shown() for s in slots], ensure_ascii=False),
+                json.dumps(list(twists), ensure_ascii=False),
+                self._clock().isoformat(), _clock(wake), _clock(sleep),
+                _clock(bath.at) if bath else None, bath.minutes if bath else None, trip,
+                json.dumps(list(trip_with)) if trip and trip_with else None,
+            ),
+        )
+
+    async def forget(self, user_id: str, character_id: str, day: date) -> None:
         """Forget her schedule for `day`, to write it again."""
-        with self._lock, self._db:
-            self._db.execute(
-                "DELETE FROM schedules WHERE user_id = ? AND character_id = ? AND day = ?",
-                (user_id, character_id, day.isoformat()),
-            )
+        return await self._db.write(self._forget_body, user_id, character_id, day)
 
-    def sweep(self, today: date) -> None:
+    def _forget_body(self, db: sqlite3.Connection, user_id: str, character_id: str, day: date) -> None:
+        db.execute(
+            "DELETE FROM schedules WHERE user_id = ? AND character_id = ? AND day = ?",
+            (user_id, character_id, day.isoformat()),
+        )
+
+    async def sweep(self, today: date) -> None:
         """Forget the schedules of days more than `KEPT_DAYS` ago."""
-        with self._lock, self._db:
-            self._db.execute(
-                "DELETE FROM schedules WHERE day < ?",
-                ((today - timedelta(days=KEPT_DAYS)).isoformat(),),
-            )
+        return await self._db.write(self._sweep_body, today)
 
-    def close(self) -> None:
-        with self._lock:
-            self._db.close()
+    def _sweep_body(self, db: sqlite3.Connection, today: date) -> None:
+        db.execute(
+            "DELETE FROM schedules WHERE day < ?",
+            ((today - timedelta(days=KEPT_DAYS)).isoformat(),),
+        )
+
+
+
+def _open(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+    columns = {row[1] for row in db.execute("PRAGMA table_info(schedules)")}
+    for column, kind in (
+        ("wake", "TEXT"), ("sleep", "TEXT"), ("bath_at", "TEXT"), ("bath_minutes", "INTEGER"),
+        ("trip", "TEXT"), ("trip_with", "TEXT"),
+    ):
+        if column not in columns:
+            db.execute(f"ALTER TABLE schedules ADD COLUMN {column} {kind}")
 
 
 WOKEN = (

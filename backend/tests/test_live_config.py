@@ -6,7 +6,9 @@ call, while calls already connected keep the model they connected with; it overr
 
 import asyncio
 import logging
+import sqlite3
 from collections.abc import Callable
+from contextlib import closing
 from dataclasses import replace
 from datetime import timedelta
 
@@ -82,8 +84,12 @@ def recorded(client: httpx.AsyncClient, service: str) -> list[tuple[str, str, bo
     """The service calls to `service` recorded so far, by provider, model and whether on
     the user's own key, sorted."""
     backend: Backend = client._transport.app.state.backend  # pyright: ignore[reportAttributeAccessIssue]
-    _, calls = backend.activity.since(backend.clock() - timedelta(days=1))
-    return sorted((c.provider, c.model, c.own_key) for c in calls if c.service == service)
+    with closing(sqlite3.connect(backend.settings.database_path)) as db:
+        calls = db.execute(
+            "SELECT provider, model, own_key FROM service_calls WHERE service = ? AND at > ?",
+            (service, (backend.clock() - timedelta(days=1)).timestamp()),
+        ).fetchall()
+    return sorted((provider, model, bool(own)) for provider, model, own in calls)
 
 
 async def until(done: Callable[[], object]) -> None:

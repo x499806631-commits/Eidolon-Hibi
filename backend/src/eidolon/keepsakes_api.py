@@ -35,43 +35,43 @@ class GiveNow(BaseModel):
 def add_keepsake_routes(app: FastAPI, backend: Backend) -> None:
     keepsakes, clock = backend.keepsakes, backend.clock
 
-    def drawing(user_id: str) -> dict:
-        drawn = keepsakes.can_draw(user_id) or backend.config.image_generator() is None
+    async def drawing(user_id: str) -> dict:
+        drawn = await keepsakes.can_draw(user_id) or backend.config.image_generator() is None
         return {  # pictures switched off: none missing, none to draw (GLOSSARY.md「玩法开关」)
-            "missing": keepsakes.missing(user_id) if drawn else 0,
+            "missing": await keepsakes.missing(user_id) if drawn else 0,
             "filling": keepsakes.filling(user_id),
-            "can_draw": keepsakes.can_draw(user_id),
+            "can_draw": await keepsakes.can_draw(user_id),
         }
 
     @app.get("/api/keepsakes")
-    def list_keepsakes(user_id: UserId) -> dict:
+    async def list_keepsakes(user_id: UserId) -> dict:
         return {
-            "keepsakes": [k.shown() for k in keepsakes.of(user_id, clock())],
-            **drawing(user_id),
+            "keepsakes": [k.shown() for k in await keepsakes.of(user_id, clock())],
+            **await drawing(user_id),
         }
 
     @app.get("/api/keepsakes/unseen")
-    def unseen_keepsakes(user_id: UserId) -> dict:
-        return {"unseen": keepsakes.unseen(user_id, clock())}
+    async def unseen_keepsakes(user_id: UserId) -> dict:
+        return {"unseen": await keepsakes.unseen(user_id, clock())}
 
     @app.post("/api/keepsakes/seen", status_code=204)
-    def see_keepsakes(user_id: UserId) -> None:
-        keepsakes.seen(user_id, clock())
+    async def see_keepsakes(user_id: UserId) -> None:
+        await keepsakes.seen(user_id, clock())
 
     @app.post("/api/keepsakes/fill-images")
     async def fill_images(user_id: UserId) -> dict:
-        return {"started": keepsakes.fill_images(user_id), **drawing(user_id)}
+        return {"started": await keepsakes.fill_images(user_id), **await drawing(user_id)}
 
     @app.get("/api/keepsakes/{keepsake_id}")
-    def read_keepsake(user_id: UserId, keepsake_id: int) -> dict:
-        found = keepsakes.one(user_id, keepsake_id)
+    async def read_keepsake(user_id: UserId, keepsake_id: int) -> dict:
+        found = await keepsakes.one(user_id, keepsake_id)
         if found is None:
             raise HTTPException(404, NOT_FOUND)
         return found.shown()
 
     @app.get("/api/keepsakes/{keepsake_id}/image")
-    def read_keepsake_image(user_id: UserId, keepsake_id: int) -> Response:
-        image = keepsakes.image(user_id, keepsake_id)
+    async def read_keepsake_image(user_id: UserId, keepsake_id: int) -> Response:
+        image = await keepsakes.image(user_id, keepsake_id)
         if image is None:
             raise HTTPException(404, NOT_FOUND)
         return Response(image, media_type="image/webp", headers=_CACHE)
@@ -80,20 +80,20 @@ def add_keepsake_routes(app: FastAPI, backend: Backend) -> None:
     async def redraw(keepsake_id: int, user_id: UserId) -> dict:
         """Its picture drawn again: the keepsake as it is now. 404 for none of the user's,
         409 where nothing draws, 502 where the picture could not be drawn."""
-        if keepsakes.one(user_id, keepsake_id) is None:
+        if await keepsakes.one(user_id, keepsake_id) is None:
             raise HTTPException(404, "没有这件纪念品")
-        if not keepsakes.can_draw(user_id):
+        if not await keepsakes.can_draw(user_id):
             raise HTTPException(409, "现在没有生图服务，画不了")
         if not await keepsakes.redraw(user_id, keepsake_id):
             raise HTTPException(502, "这次没画出来，稍后再试")
-        kept = keepsakes.one(user_id, keepsake_id)
+        kept = await keepsakes.one(user_id, keepsake_id)
         assert kept is not None
         return kept.shown()
 
     @app.delete("/api/keepsakes/{keepsake_id}", status_code=204)
-    def take_out(keepsake_id: int, user_id: UserId) -> Response:
+    async def take_out(keepsake_id: int, user_id: UserId) -> Response:
         """Out of the cabinet, and its card out of the conversation; 404 for none of the user's."""
-        if not keepsakes.take_out(user_id, keepsake_id):
+        if not await keepsakes.take_out(user_id, keepsake_id):
             raise HTTPException(404, "没有这件纪念品")
         return Response(status_code=204)
 

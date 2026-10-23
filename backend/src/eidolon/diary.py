@@ -26,11 +26,9 @@ import asyncio
 import json
 import logging
 import sqlite3
-import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -39,14 +37,14 @@ from eidolon.activity import ActivityLog
 from eidolon.affinity import Affinities, Change, Status, Tier
 from eidolon.characters import Character
 from eidolon.clock import Clock
-from eidolon.database import connect
+from eidolon.data_access import Database
 from eidolon.features import AllOn, Switches
 from eidolon.engine import ConversationEngine
 from eidolon.live_config import LiveConfig
 from eidolon.producer import effective_timezone, is_birthday
 from eidolon.reply_format import Segment
 from eidolon.special_days import SpecialDays
-from eidolon.store import Conversation, Message, NotFound, Store
+from eidolon.store import Conversation, Message, NotFound, Store, read_profile
 
 log = logging.getLogger(__name__)
 
@@ -192,13 +190,13 @@ def split_secret(segments: Sequence[Segment]) -> tuple[list[Segment], list[Segme
 
 
 class Diary:
-    """Her diary, on the database at `path` beside the conversations of `store`, written on the
+    """Her diary, in `db` beside the conversations of `store` (ADR-0028), written on the
     deployer's models of `config` as `engine` writes it, each entry recorded in `activity`;
     `special_days` has the birthdays that make a day matter."""
 
     def __init__(
         self,
-        path: Path,
+        db: Database,
         store: Store,
         engine: ConversationEngine,
         characters: Mapping[str, Character],
@@ -220,33 +218,20 @@ class Diary:
         self._clock = clock
         self._enabled = enabled
         self._special_days = special_days
-        self._db = connect(path)
-        self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
-            columns = {row[1] for row in self._db.execute("PRAGMA table_info(diary_entries)")}
-            if "unlocked" not in columns:
-                self._db.execute(
-                    "ALTER TABLE diary_entries ADD COLUMN unlocked INTEGER NOT NULL DEFAULT 0"
-                )
+        self._db = db
+        db.prepare(_open)
 
     # What makes a day matter.
 
-    def note(
+    async def note(
         self, user_id: str, character_id: str, kind: MomentKind, what: str, at: datetime
     ) -> None:
         """Note a moment of the producer's day `at` falls on, once."""
         if not self._enabled or character_id not in self._characters:
             return
-        day = at.astimezone(self._zone(user_id)).date()
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT OR IGNORE INTO diary_moments"
-                " (user_id, character_id, day, kind, what, at) VALUES (?, ?, ?, ?, ?, ?)",
-                (user_id, character_id, day.isoformat(), kind, what[:200], at.isoformat()),
-            )
+        await self._db.write(_note, user_id, character_id, kind, what, at)
 
-    def turn_recorded(
+    async def turn_recorded(
         self, conversation: Conversation, reply: Message, at: datetime, timezone: str
     ) -> None:
         """A turn with her was recorded `at`: her affinity first reaching close or intimate,
@@ -257,9 +242,9 @@ class Diary:
         user_id, character_id = conversation.user_id, conversation.character_id
         change = reply.affinity
         if change is not None:
-            self.affinity_changed(user_id, character_id, change, at)
+            await self.affinity_changed(user_id, character_id, change, at)
         day = at.astimezone(ZoneInfo(timezone)).date()
-        first = self._store.first_records(user_id).get(character_id)
+        first = (await self._store.first_records(user_id)).get(character_id)
         found = None if first is None else anniversaries.of(
             anniversaries.day_of(first, timezone), day
         )
@@ -268,15 +253,15 @@ class Diary:
                 f"今天是和制作人认识的第 {found.days} 天" if found.days % anniversaries.HUNDRED == 0
                 else f"今天是和制作人认识的第 {found.years} 周年"
             )
-            self.note(user_id, character_id, "anniversary", said, at)
+            await self.note(user_id, character_id, "anniversary", said, at)
         days = self._special_days
         if days is not None and character_id in days.birthdays_on(day):
-            self.note(user_id, character_id, "her_birthday", "今天是自己的生日，和制作人说了话", at)
-        birthday = self._store.get_profile(user_id).birthday
+            await self.note(user_id, character_id, "her_birthday", "今天是自己的生日，和制作人说了话", at)
+        birthday = (await self._store.get_profile(user_id)).birthday
         if birthday is not None and is_birthday(birthday, day):
-            self.note(user_id, character_id, "producer_birthday", "今天是制作人的生日", at)
+            await self.note(user_id, character_id, "producer_birthday", "今天是制作人的生日", at)
 
-    def affinity_changed(
+    async def affinity_changed(
         self, user_id: str, character_id: str, change: Change, at: datetime
     ) -> None:
         """Her affinity changed `at`: first reaching close or intimate is a moment, the first
@@ -284,41 +269,39 @@ class Diary:
         if not (change.up and change.tier_changed and change.tier in _TIER_NAMES):
             return
         what = f"和制作人的关系第一次变成了「{_TIER_NAMES[change.tier]}」"
-        with self._lock:
-            before = self._db.execute(
-                "SELECT 1 FROM diary_moments WHERE user_id = ? AND character_id = ?"
-                " AND ((kind = 'closer' AND what = ?) OR (kind = 'scene' AND what = ?))",
-                (user_id, character_id, what, _scene_what(change.tier)),
-            ).fetchone()
-        if before is None:
-            self.note(user_id, character_id, "closer", what, at)
+        if not await self._db.read(_noted_closer, user_id, character_id, what, change.tier):
+            await self.note(user_id, character_id, "closer", what, at)
 
-    def scene_played(self, user_id: str, character_id: str, tier: Tier, at: datetime) -> None:
+    async def scene_played(self, user_id: str, character_id: str, tier: Tier, at: datetime) -> None:
         """Her scene at the door of `tier` was played through `at` (GLOSSARY.md「重要的一幕」):
         the moment of the day, which her affinity reaching `tier` with it needs no other."""
         if tier in _TIER_NAMES:
-            self.note(user_id, character_id, "scene", _scene_what(tier), at)
+            await self.note(user_id, character_id, "scene", _scene_what(tier), at)
 
-    def gift_given(
+    async def gift_given(
         self, user_id: str, character_id: str, gift_name: str, liked: bool,
         change: Change | None, at: datetime,
     ) -> None:
         """The producer gave her a gift `at`: one she likes is a moment, and so is her affinity
         first reaching close or intimate with it."""
         if liked:
-            self.note(user_id, character_id, "gift", f"制作人送了自己喜欢的{gift_name}", at)
+            await self.note(user_id, character_id, "gift", f"制作人送了自己喜欢的{gift_name}", at)
         if change is not None:
-            self.affinity_changed(user_id, character_id, change, at)
+            await self.affinity_changed(user_id, character_id, change, at)
 
-    def promise_kept(self, user_id: str, character_id: str, text: str, at: datetime) -> None:
-        self.note(user_id, character_id, "promise_kept", f"制作人做到了答应过的事：{text}", at)
+    async def promise_kept(self, user_id: str, character_id: str, text: str, at: datetime) -> None:
+        await self.note(user_id, character_id, "promise_kept", f"制作人做到了答应过的事：{text}", at)
 
-    def promise_broken(self, user_id: str, character_id: str, text: str, at: datetime) -> None:
-        self.note(user_id, character_id, "promise_broken", f"制作人答应过的事没有做到：{text}", at)
+    async def promise_broken(
+        self, user_id: str, character_id: str, text: str, at: datetime
+    ) -> None:
+        await self.note(
+            user_id, character_id, "promise_broken", f"制作人答应过的事没有做到：{text}", at
+        )
 
-    def moment(self, user_id: str, character_id: str, what: str, at: datetime) -> None:
+    async def moment(self, user_id: str, character_id: str, what: str, at: datetime) -> None:
         """What the background model found mattered to her in a turn (`Memories.on_moment`)."""
-        self.note(user_id, character_id, "chat", what, at)
+        await self.note(user_id, character_id, "chat", what, at)
 
     # Writing it.
 
@@ -337,7 +320,7 @@ class Diary:
         if not self._enabled:
             return
         now = self._clock()
-        due = await asyncio.to_thread(self._due, now)
+        due = await self._db.read(self._due, now)
         for user_id, character_id, day in due[:PER_TICK]:
             try:
                 await self._write(user_id, character_id, day, now)
@@ -349,115 +332,114 @@ class Diary:
         hour: for trying the diary out under the development sign-in. None if they have no
         conversation; raises what the model raises."""
         now = self._clock()
-        self.note(user_id, character_id, "chat", what, now)
-        day = now.astimezone(self._zone(user_id)).date()
+        await self.note(user_id, character_id, "chat", what, now)
+        day = now.astimezone(await self._zone(user_id)).date()
         return await self._write(user_id, character_id, day, now, raises=True)
 
-    def entries(self, user_id: str) -> list[dict]:
+    async def entries(self, user_id: str) -> list[dict]:
         """The user's diary, every character's, newest day first, as they may read it now."""
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT * FROM diary_entries WHERE user_id = ? ORDER BY day DESC, id DESC",
-                (user_id,),
-            ).fetchall()
-        return [self._shown(user_id, _entry(row)) for row in rows]
+        return await self._db.read(self._entries, user_id)
 
-    def unread(self, user_id: str) -> int:
+    async def unread(self, user_id: str) -> int:
         """How many entries the user may read and has not opened."""
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT character_id FROM diary_entries WHERE user_id = ? AND read_at IS NULL",
-                (user_id,),
-            ).fetchall()
-        return sum(
-            shown_by(self._affinities.status(user_id, row[0])) != "closed" for row in rows
-        )
+        return await self._db.read(self._unread, user_id)
 
-    def read(self, user_id: str, entry_id: int) -> dict:
+    async def read(self, user_id: str, entry_id: int) -> dict:
         """Open an entry: read, if the user may read it now. Raises NotFound if it is not
         theirs."""
-        with self._lock, self._db:
-            row = self._db.execute(
-                "SELECT * FROM diary_entries WHERE id = ? AND user_id = ?", (entry_id, user_id)
-            ).fetchone()
-            if row is None:
-                raise NotFound(entry_id)
-            entry = _entry(row)
-            if shown_by(self._affinities.status(user_id, entry.character_id)) != "closed":
-                self._db.execute(
-                    "UPDATE diary_entries SET read_at = COALESCE(read_at, ?) WHERE id = ?",
-                    (self._clock().isoformat(), entry_id),
-                )
-                row = self._db.execute(
-                    "SELECT * FROM diary_entries WHERE id = ?", (entry_id,)
-                ).fetchone()
-        return self._shown(user_id, _entry(row))
+        return await self._db.write(self._read, user_id, entry_id)
 
-    def unlock(self, user_id: str, entry_id: int) -> dict:
+    async def unlock(self, user_id: str, entry_id: int) -> dict:
         """Open an entry with a diary key (GLOSSARY.md「日记钥匙」): all of it shown from now
         on, read. Raises NotFound if it is not theirs, NothingToUnlock if all of it is shown
         already."""
-        with self._lock, self._db:
-            row = self._db.execute(
-                "SELECT * FROM diary_entries WHERE id = ? AND user_id = ?", (entry_id, user_id)
-            ).fetchone()
-            if row is None:
-                raise NotFound(entry_id)
-            entry = _entry(row)
-            if not entry.shown(self._affinities.status(user_id, entry.character_id))["unlockable"]:
-                raise NothingToUnlock()
-            self._db.execute(
-                "UPDATE diary_entries SET unlocked = 1, read_at = COALESCE(read_at, ?)"
-                " WHERE id = ?",
-                (self._clock().isoformat(), entry_id),
-            )
-            row = self._db.execute("SELECT * FROM diary_entries WHERE id = ?", (entry_id,)).fetchone()
-        return self._shown(user_id, _entry(row))
+        return await self._db.write(self._unlock, user_id, entry_id)
 
-    def all_of(self, user_id: str) -> list[Entry]:
+    async def all_of(self, user_id: str) -> list[Entry]:
         """Every character's entries, whole, the page she did not mean them to see among them:
         for a data package, which is the user's own to keep."""
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT * FROM diary_entries WHERE user_id = ? ORDER BY character_id, day",
-                (user_id,),
-            ).fetchall()
-        return [_entry(row) for row in rows]
+        return await self._db.read(read_all_of, user_id)
 
-    def close(self) -> None:
-        with self._lock:
-            self._db.close()
+    def _status(self, db: sqlite3.Connection, user_id: str, character_id: str) -> Status | None:
+        """Her affinity with the user, read through `db`; None while affinity is off."""
+        if not self._affinities.on:
+            return None
+        return self._affinities.read_status(db, user_id, character_id)
 
-    def _shown(self, user_id: str, entry: Entry) -> dict:
-        return entry.shown(self._affinities.status(user_id, entry.character_id))
+    def _shown(self, db: sqlite3.Connection, user_id: str, entry: Entry) -> dict:
+        return entry.shown(self._status(db, user_id, entry.character_id))
 
-    def _zone(self, user_id: str) -> ZoneInfo:
-        return ZoneInfo(effective_timezone(self._store.get_profile(user_id), None))
+    def _entries(self, db: sqlite3.Connection, user_id: str) -> list[dict]:
+        rows = db.execute(
+            "SELECT * FROM diary_entries WHERE user_id = ? ORDER BY day DESC, id DESC",
+            (user_id,),
+        ).fetchall()
+        return [self._shown(db, user_id, _entry(row)) for row in rows]
 
-    def _due(self, now: datetime) -> list[tuple[str, str, date]]:
+    def _unread(self, db: sqlite3.Connection, user_id: str) -> int:
+        rows = db.execute(
+            "SELECT character_id FROM diary_entries WHERE user_id = ? AND read_at IS NULL",
+            (user_id,),
+        ).fetchall()
+        return sum(shown_by(self._status(db, user_id, row[0])) != "closed" for row in rows)
+
+    def _read(self, db: sqlite3.Connection, user_id: str, entry_id: int) -> dict:
+        row = db.execute(
+            "SELECT * FROM diary_entries WHERE id = ? AND user_id = ?", (entry_id, user_id)
+        ).fetchone()
+        if row is None:
+            raise NotFound(entry_id)
+        entry = _entry(row)
+        if shown_by(self._status(db, user_id, entry.character_id)) != "closed":
+            db.execute(
+                "UPDATE diary_entries SET read_at = COALESCE(read_at, ?) WHERE id = ?",
+                (self._clock().isoformat(), entry_id),
+            )
+            row = db.execute("SELECT * FROM diary_entries WHERE id = ?", (entry_id,)).fetchone()
+        return self._shown(db, user_id, _entry(row))
+
+    def _unlock(self, db: sqlite3.Connection, user_id: str, entry_id: int) -> dict:
+        row = db.execute(
+            "SELECT * FROM diary_entries WHERE id = ? AND user_id = ?", (entry_id, user_id)
+        ).fetchone()
+        if row is None:
+            raise NotFound(entry_id)
+        entry = _entry(row)
+        if not entry.shown(self._status(db, user_id, entry.character_id))["unlockable"]:
+            raise NothingToUnlock()
+        db.execute(
+            "UPDATE diary_entries SET unlocked = 1, read_at = COALESCE(read_at, ?) WHERE id = ?",
+            (self._clock().isoformat(), entry_id),
+        )
+        row = db.execute("SELECT * FROM diary_entries WHERE id = ?", (entry_id,)).fetchone()
+        return self._shown(db, user_id, _entry(row))
+
+    async def _zone(self, user_id: str) -> ZoneInfo:
+        return ZoneInfo(effective_timezone(await self._store.get_profile(user_id), None))
+
+    def _due(self, db: sqlite3.Connection, now: datetime) -> list[tuple[str, str, date]]:
         """The days with moments that are over in the producer's time zone, not yet written
         of, not let go, and not tried too lately: oldest first."""
         since = (now.date() - timedelta(days=KEEP_TRYING + 1)).isoformat()
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT DISTINCT m.user_id, m.character_id, m.day,"
-                " t.tries, t.last_at FROM diary_moments m"
-                " LEFT JOIN diary_tries t ON t.user_id = m.user_id"
-                "  AND t.character_id = m.character_id AND t.day = m.day"
-                " WHERE m.day >= ? AND NOT EXISTS (SELECT 1 FROM diary_entries e"
-                "  WHERE e.user_id = m.user_id AND e.character_id = m.character_id"
-                "  AND e.day = m.day)"
-                " ORDER BY m.day, m.user_id, m.character_id",
-                (since,),
-            ).fetchall()
+        rows = db.execute(
+            "SELECT DISTINCT m.user_id, m.character_id, m.day,"
+            " t.tries, t.last_at FROM diary_moments m"
+            " LEFT JOIN diary_tries t ON t.user_id = m.user_id"
+            "  AND t.character_id = m.character_id AND t.day = m.day"
+            " WHERE m.day >= ? AND NOT EXISTS (SELECT 1 FROM diary_entries e"
+            "  WHERE e.user_id = m.user_id AND e.character_id = m.character_id"
+            "  AND e.day = m.day)"
+            " ORDER BY m.day, m.user_id, m.character_id",
+            (since,),
+        ).fetchall()
         due = []
         for user_id, character_id, day_text, tries, last_at in rows:
             if character_id not in self._characters:
                 continue
-            if not self._features.on(user_id, "diary"):  # GLOSSARY.md「玩法开关」
+            if not self._features.read_on(db, user_id, "diary"):  # GLOSSARY.md「玩法开关」
                 continue
             day = date.fromisoformat(day_text)
-            today = now.astimezone(self._zone(user_id)).date()
+            today = now.astimezone(_zone(db, user_id)).date()
             if not (today - timedelta(days=KEEP_TRYING) <= day < today):
                 continue
             if tries is not None and (
@@ -467,58 +449,20 @@ class Diary:
             due.append((user_id, character_id, day))
         return due
 
-    def _moments(self, user_id: str, character_id: str, day: date) -> list[str]:
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT what FROM diary_moments WHERE user_id = ? AND character_id = ? AND day = ?"
-                " ORDER BY id",
-                (user_id, character_id, day.isoformat()),
-            ).fetchall()
-        return [row[0] for row in rows]
-
-    def _tried(self, user_id: str, character_id: str, day: date, now: datetime) -> None:
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT INTO diary_tries (user_id, character_id, day, tries, last_at)"
-                " VALUES (?, ?, ?, 1, ?) ON CONFLICT (user_id, character_id, day)"
-                " DO UPDATE SET tries = tries + 1, last_at = excluded.last_at",
-                (user_id, character_id, day.isoformat(), now.isoformat()),
-            )
-
-    def _keep(
-        self, user_id: str, character_id: str, day: date, said: Sequence[Segment], now: datetime
-    ) -> Entry:
-        kept, secret = split_secret(said)
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT OR REPLACE INTO diary_entries"
-                " (user_id, character_id, day, segments, secret, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    user_id, character_id, day.isoformat(), _stored(kept), _stored(secret),
-                    now.isoformat(),
-                ),
-            )
-            row = self._db.execute(
-                "SELECT * FROM diary_entries WHERE user_id = ? AND character_id = ? AND day = ?",
-                (user_id, character_id, day.isoformat()),
-            ).fetchone()
-        return _entry(row)
-
     async def _write(
         self, user_id: str, character_id: str, day: date, now: datetime, raises: bool = False
     ) -> Entry | None:
         """Have her write of `day`, in her newest conversation with the user: the entry kept,
         or None if they have none, or the model failed (tried again later, unless `raises`)."""
         newest = [
-            c for c, _, _ in await asyncio.to_thread(self._store.latest_conversations, user_id)
+            c for c, _, _ in await self._store.latest_conversations(user_id)
             if c.character_id == character_id
         ]
         if not newest:
             return None
         conversation = newest[0]
-        moments = await asyncio.to_thread(self._moments, user_id, character_id, day)
-        zone = self._zone(user_id)
+        moments = await self._db.read(_moments, user_id, character_id, day)
+        zone = await self._zone(user_id)
         evening = min(datetime.combine(day, time(23, 30), zone), now)
         recording = self._activity.begin(
             "diary", user_id, character_id, own_llm=False, exempt=False
@@ -533,16 +477,95 @@ class Diary:
             # Not logged with what was raised: a service's error may repeat what it was asked.
             log.warning("writing a diary in conversation %s failed: %s", conversation.id,
                         type(e).__name__)
-            recording.finish("failed")
-            await asyncio.to_thread(self._tried, user_id, character_id, day, now)
+            await recording.finish("failed")
+            await self._db.write(_tried, user_id, character_id, day, now)
             if raises:
                 raise
             return None
         finally:
             lease.release()
-        entry = await asyncio.to_thread(self._keep, user_id, character_id, day, said, now)
-        recording.finish("success")
+        entry = await self._db.write(_keep, user_id, character_id, day, said, now)
+        await recording.finish("success")
         return entry
+
+
+def _open(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+    columns = {row[1] for row in db.execute("PRAGMA table_info(diary_entries)")}
+    if "unlocked" not in columns:
+        db.execute("ALTER TABLE diary_entries ADD COLUMN unlocked INTEGER NOT NULL DEFAULT 0")
+
+
+def _zone(db: sqlite3.Connection, user_id: str) -> ZoneInfo:
+    return ZoneInfo(effective_timezone(read_profile(db, user_id), None))
+
+
+def _note(
+    db: sqlite3.Connection, user_id: str, character_id: str, kind: "MomentKind", what: str,
+    at: datetime,
+) -> None:
+    day = at.astimezone(_zone(db, user_id)).date()
+    db.execute(
+        "INSERT OR IGNORE INTO diary_moments"
+        " (user_id, character_id, day, kind, what, at) VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, character_id, day.isoformat(), kind, what[:200], at.isoformat()),
+    )
+
+
+def _noted_closer(
+    db: sqlite3.Connection, user_id: str, character_id: str, what: str, tier: Tier
+) -> bool:
+    return db.execute(
+        "SELECT 1 FROM diary_moments WHERE user_id = ? AND character_id = ?"
+        " AND ((kind = 'closer' AND what = ?) OR (kind = 'scene' AND what = ?))",
+        (user_id, character_id, what, _scene_what(tier)),
+    ).fetchone() is not None
+
+
+def read_all_of(db: sqlite3.Connection, user_id: str) -> list[Entry]:
+    """Every character's entries of the user's, whole, read through `db`."""
+    rows = db.execute(
+        "SELECT * FROM diary_entries WHERE user_id = ? ORDER BY character_id, day", (user_id,)
+    ).fetchall()
+    return [_entry(row) for row in rows]
+
+
+def _moments(db: sqlite3.Connection, user_id: str, character_id: str, day: date) -> list[str]:
+    rows = db.execute(
+        "SELECT what FROM diary_moments WHERE user_id = ? AND character_id = ? AND day = ?"
+        " ORDER BY id",
+        (user_id, character_id, day.isoformat()),
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
+def _tried(
+    db: sqlite3.Connection, user_id: str, character_id: str, day: date, now: datetime
+) -> None:
+    db.execute(
+        "INSERT INTO diary_tries (user_id, character_id, day, tries, last_at)"
+        " VALUES (?, ?, ?, 1, ?) ON CONFLICT (user_id, character_id, day)"
+        " DO UPDATE SET tries = tries + 1, last_at = excluded.last_at",
+        (user_id, character_id, day.isoformat(), now.isoformat()),
+    )
+
+
+def _keep(
+    db: sqlite3.Connection, user_id: str, character_id: str, day: date,
+    said: Sequence[Segment], now: datetime,
+) -> Entry:
+    kept, secret = split_secret(said)
+    db.execute(
+        "INSERT OR REPLACE INTO diary_entries"
+        " (user_id, character_id, day, segments, secret, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, character_id, day.isoformat(), _stored(kept), _stored(secret), now.isoformat()),
+    )
+    row = db.execute(
+        "SELECT * FROM diary_entries WHERE user_id = ? AND character_id = ? AND day = ?",
+        (user_id, character_id, day.isoformat()),
+    ).fetchone()
+    return _entry(row)
 
 
 def carry(

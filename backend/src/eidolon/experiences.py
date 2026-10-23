@@ -12,17 +12,15 @@ nothing has recalled it), and then forgotten by `sweep`; one `pinned` is forgott
 days left tell the UI when to say so (`SOON`).
 """
 
-import asyncio
 import logging
 import sqlite3
-import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from eidolon.clock import Clock
-from eidolon.database import connect
+from eidolon.data_access import Database
+from eidolon.database import by_name
 from eidolon.embedding import Document, Embedder, EmbeddingError, nearest, to_blob
 
 log = logging.getLogger(__name__)
@@ -143,58 +141,64 @@ def parse_experiences(written: object) -> list[NewExperience]:
 
 
 class Experiences:
-    """Every character's own doings, in the database at `path` beside the users they belong
-    to; `clock` says when one was last recalled, and so when it is forgotten."""
+    """Every character's own doings, in `db` beside the users they belong to (ADR-0028);
+    `clock` says when one was last recalled, and so when it is forgotten."""
 
-    def __init__(self, path: Path, clock: Clock) -> None:
-        self._db = connect(path)
-        self._db.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
+    def __init__(self, db: Database, clock: Clock) -> None:
+        self._db = db
         self._clock = clock
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
+        db.prepare(_open)
 
-    def record(
+    async def record(
         self, user_id: str, character_id: str, made: Sequence[NewExperience], now: datetime
     ) -> int:
         """Keep `made`, said in the turn recorded at `now`: the same words are kept once, what
         was looked up about them the latest."""
+        return await self._db.write(self.record_in, user_id, character_id, made, now)
+
+    def record_in(
+        self,
+        db: sqlite3.Connection, user_id: str, character_id: str, made: Sequence[NewExperience], now: datetime
+    ) -> int:
         kept = 0
-        with self._lock, self._db:
-            for made_one in made:
-                at = now.astimezone(UTC).isoformat()
-                self._db.execute(
-                    "INSERT INTO experiences"
-                    " (user_id, character_id, text, summary, url, created_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?)"
-                    " ON CONFLICT (user_id, character_id, text) DO UPDATE SET"
-                    " summary = excluded.summary, url = COALESCE(excluded.url, url)",
-                    (user_id, character_id, made_one.text, made_one.summary, made_one.url, at),
-                )
-                kept += 1
+        for made_one in made:
+            at = now.astimezone(UTC).isoformat()
+            by_name(db).execute(
+                "INSERT INTO experiences"
+                " (user_id, character_id, text, summary, url, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT (user_id, character_id, text) DO UPDATE SET"
+                " summary = excluded.summary, url = COALESCE(excluded.url, url)",
+                (user_id, character_id, made_one.text, made_one.summary, made_one.url, at),
+            )
+            kept += 1
         return kept
 
-    def recent(self, user_id: str, character_id: str) -> list[Experience]:
+    async def recent(self, user_id: str, character_id: str) -> list[Experience]:
         """Her own, newest first, as many as `SHOWN_BEFORE_WRITING`: what the background model
         is shown before writing more, so that it writes the same thing once."""
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT * FROM experiences WHERE user_id = ? AND character_id = ?"
-                " ORDER BY created_at DESC, id DESC LIMIT ?",
-                (user_id, character_id, SHOWN_BEFORE_WRITING),
-            ).fetchall()
+        return await self._db.read(self._recent_body, user_id, character_id)
+
+    def _recent_body(self, db: sqlite3.Connection, user_id: str, character_id: str) -> list[Experience]:
+        rows = by_name(db).execute(
+            "SELECT * FROM experiences WHERE user_id = ? AND character_id = ?"
+            " ORDER BY created_at DESC, id DESC LIMIT ?",
+            (user_id, character_id, SHOWN_BEFORE_WRITING),
+        ).fetchall()
         return [_one(row) for row in rows]
 
-    def all_of(self, user_id: str) -> list[Experience]:
+    async def all_of(self, user_id: str) -> list[Experience]:
         """Everyone's, for a data package: hers and hers and hers, none of them told apart."""
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT * FROM experiences WHERE user_id = ? ORDER BY character_id, id",
-                (user_id,),
-            ).fetchall()
+        return await self._db.read(self.read_all_of, user_id)
+
+    def read_all_of(self, db: sqlite3.Connection, user_id: str) -> list[Experience]:
+        rows = by_name(db).execute(
+            "SELECT * FROM experiences WHERE user_id = ? ORDER BY character_id, id",
+            (user_id,),
+        ).fetchall()
         return [_one(row) for row in rows]
 
-    def carry(
+    async def carry(
         self,
         user_id: str,
         character_id: str,
@@ -205,56 +209,73 @@ class Experiences:
     ) -> None:
         """Keep one carried in by a data package (`carry`), aged as it was there: `used_at`
         is when it was last recalled, so a package does not make it young again."""
-        at = now.astimezone(UTC).isoformat()
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT INTO experiences"
-                " (user_id, character_id, text, summary, url, created_at, last_used_at, pinned)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-                " ON CONFLICT (user_id, character_id, text) DO UPDATE SET"
-                " summary = excluded.summary, url = COALESCE(excluded.url, url)",
-                (
-                    user_id, character_id, made.text, made.summary, made.url, at,
-                    used_at.astimezone(UTC).isoformat() if used_at else None,
-                    1 if pinned else 0,
-                ),
-            )
+        return await self._db.write(self.carry_in, user_id, character_id, made, now, used_at, pinned)
 
-    def of(self, user_id: str, character_id: str) -> list[Experience]:
+    def carry_in(
+        self,
+        db: sqlite3.Connection,
+        user_id: str,
+        character_id: str,
+        made: NewExperience,
+        now: datetime,
+        used_at: datetime | None,
+        pinned: bool,
+    ) -> None:
+        at = now.astimezone(UTC).isoformat()
+        by_name(db).execute(
+            "INSERT INTO experiences"
+            " (user_id, character_id, text, summary, url, created_at, last_used_at, pinned)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT (user_id, character_id, text) DO UPDATE SET"
+            " summary = excluded.summary, url = COALESCE(excluded.url, url)",
+            (
+                user_id, character_id, made.text, made.summary, made.url, at,
+                used_at.astimezone(UTC).isoformat() if used_at else None,
+                1 if pinned else 0,
+            ),
+        )
+
+    async def of(self, user_id: str, character_id: str) -> list[Experience]:
         """Her own, newest first: for the page."""
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT * FROM experiences WHERE user_id = ? AND character_id = ?"
-                " ORDER BY created_at DESC, id DESC",
-                (user_id, character_id),
-            ).fetchall()
+        return await self._db.read(self._of_body, user_id, character_id)
+
+    def _of_body(self, db: sqlite3.Connection, user_id: str, character_id: str) -> list[Experience]:
+        rows = by_name(db).execute(
+            "SELECT * FROM experiences WHERE user_id = ? AND character_id = ?"
+            " ORDER BY created_at DESC, id DESC",
+            (user_id, character_id),
+        ).fetchall()
         return [_one(row) for row in rows]
 
-    def due_soon(self, user_id: str) -> list[Experience]:
+    async def due_soon(self, user_id: str) -> list[Experience]:
         """Everyone's that are about to be forgotten, soonest first: for the notice."""
+        return await self._db.read(self._due_soon_body, user_id)
+
+    def _due_soon_body(self, db: sqlite3.Connection, user_id: str) -> list[Experience]:
         now = self._clock()
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT * FROM experiences WHERE user_id = ? AND pinned = 0"
-                " ORDER BY COALESCE(last_used_at, created_at)",
-                (user_id,),
-            ).fetchall()
+        rows = by_name(db).execute(
+            "SELECT * FROM experiences WHERE user_id = ? AND pinned = 0"
+            " ORDER BY COALESCE(last_used_at, created_at)",
+            (user_id,),
+        ).fetchall()
         soon = [
             e for e in (_one(row) for row in rows)
             if (left := e.left(now)) is not None and left <= SOON
         ]
         return soon
 
-    def remember_used(self, ids: Sequence[int]) -> None:
+    async def remember_used(self, ids: Sequence[int]) -> None:
         """Note that these were recalled: each is kept `KEPT` from now."""
+        return await self._db.write(self._remember_used_body, ids)
+
+    def _remember_used_body(self, db: sqlite3.Connection, ids: Sequence[int]) -> None:
         if not ids:
             return
         at = self._clock().astimezone(UTC).isoformat()
-        with self._lock, self._db:
-            self._db.executemany(
-                "UPDATE experiences SET last_used_at = ? WHERE id = ?",
-                [(at, i) for i in ids],
-            )
+        db.executemany(
+            "UPDATE experiences SET last_used_at = ? WHERE id = ?",
+            [(at, i) for i in ids],
+        )
 
     async def nearest(
         self,
@@ -266,7 +287,7 @@ class Experiences:
     ) -> list["Experience"]:
         """As many as `limit` of hers nearest the turn's query, nearest first, her own only;
         those without a vector yet are embedded now, and left for next time if that fails."""
-        mine = await asyncio.to_thread(self.of, user_id, character_id)
+        mine = await self.of(user_id, character_id)
         if not mine:
             return []
         vectors = await self._vectors(embedder, user_id, mine)
@@ -280,13 +301,8 @@ class Experiences:
         """The vectors these have, embedding those that have none yet; those that cannot be
         embedded are left without, to be tried again next time."""
         model = embedder.model
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT experience_id, embedding FROM experience_vectors"
-                " WHERE user_id = ? AND model = ?",
-                (user_id, model),
-            ).fetchall()
-        vectors = {row["experience_id"]: row["embedding"] for row in rows}
+        rows = await self._db.read(_stored_vectors, user_id, model)
+        vectors = {experience_id: embedding for experience_id, embedding in rows}
         missing = [e for e in mine if e.id not in vectors]
         if not missing:
             return vectors
@@ -295,65 +311,68 @@ class Experiences:
         except EmbeddingError:
             log.warning("embedding her own doings failed; finding them without", exc_info=True)
             return vectors
-        with self._lock, self._db:
-            self._db.executemany(
-                "INSERT OR REPLACE INTO experience_vectors"
-                " (experience_id, user_id, model, embedding) VALUES (?, ?, ?, ?)",
-                [(e.id, user_id, model, to_blob(v)) for e, v in zip(missing, embedded, strict=True)],
-            )
+        await self._db.write(
+            _keep_vectors,
+            [(e.id, user_id, model, to_blob(v)) for e, v in zip(missing, embedded, strict=True)],
+        )
         vectors |= {
             e.id: to_blob(v) for e, v in zip(missing, embedded, strict=True)
         }
         return vectors
 
-    def keep(self, user_id: str, experience_id: int) -> bool:
+    async def keep(self, user_id: str, experience_id: int) -> bool:
         """Kept `KEPT` from now, as being recalled keeps it."""
+        return await self._db.write(self._keep_body, user_id, experience_id)
+
+    def _keep_body(self, db: sqlite3.Connection, user_id: str, experience_id: int) -> bool:
         at = self._clock().astimezone(UTC).isoformat()
-        with self._lock, self._db:
-            return self._db.execute(
-                "UPDATE experiences SET last_used_at = ? WHERE id = ? AND user_id = ?",
-                (at, experience_id, user_id),
-            ).rowcount > 0
+        return by_name(db).execute(
+            "UPDATE experiences SET last_used_at = ? WHERE id = ? AND user_id = ?",
+            (at, experience_id, user_id),
+        ).rowcount > 0
 
-    def pin(self, user_id: str, experience_id: int, pinned: bool) -> bool:
+    async def pin(self, user_id: str, experience_id: int, pinned: bool) -> bool:
         """Kept for good, or counted again from when it was last recalled."""
-        with self._lock, self._db:
-            return self._db.execute(
-                "UPDATE experiences SET pinned = ? WHERE id = ? AND user_id = ?",
-                (1 if pinned else 0, experience_id, user_id),
-            ).rowcount > 0
+        return await self._db.write(self._pin_body, user_id, experience_id, pinned)
 
-    def delete(self, user_id: str, experience_id: int) -> bool:
+    def _pin_body(self, db: sqlite3.Connection, user_id: str, experience_id: int, pinned: bool) -> bool:
+        return by_name(db).execute(
+            "UPDATE experiences SET pinned = ? WHERE id = ? AND user_id = ?",
+            (1 if pinned else 0, experience_id, user_id),
+        ).rowcount > 0
+
+    async def delete(self, user_id: str, experience_id: int) -> bool:
         """Gone, the vectors with it."""
-        with self._lock, self._db:
-            gone = self._db.execute(
-                "DELETE FROM experiences WHERE id = ? AND user_id = ?",
-                (experience_id, user_id),
-            ).rowcount
-            if gone:
-                self._db.execute(
-                    "DELETE FROM experience_vectors WHERE experience_id = ?", (experience_id,)
-                )
+        return await self._db.write(self._delete_body, user_id, experience_id)
+
+    def _delete_body(self, db: sqlite3.Connection, user_id: str, experience_id: int) -> bool:
+        gone = by_name(db).execute(
+            "DELETE FROM experiences WHERE id = ? AND user_id = ?",
+            (experience_id, user_id),
+        ).rowcount
+        if gone:
+            by_name(db).execute(
+                "DELETE FROM experience_vectors WHERE experience_id = ?", (experience_id,)
+            )
         return gone > 0
 
-    def sweep(self, now: datetime) -> None:
+    async def sweep(self, now: datetime) -> None:
         """Forget what nothing has recalled for `KEPT`, and what is not pinned."""
-        cutoff = (now - KEPT).astimezone(UTC).isoformat()
-        with self._lock, self._db:
-            forgotten = self._db.execute(
-                "DELETE FROM experiences WHERE pinned = 0"
-                " AND COALESCE(last_used_at, created_at) <= ?",
-                (cutoff,),
-            ).rowcount
-            if forgotten:
-                self._db.execute(
-                    "DELETE FROM experience_vectors WHERE experience_id NOT IN"
-                    " (SELECT id FROM experiences)"
-                )
+        return await self._db.write(self._sweep_body, now)
 
-    def close(self) -> None:
-        with self._lock:
-            self._db.close()
+    def _sweep_body(self, db: sqlite3.Connection, now: datetime) -> None:
+        cutoff = (now - KEPT).astimezone(UTC).isoformat()
+        forgotten = by_name(db).execute(
+            "DELETE FROM experiences WHERE pinned = 0"
+            " AND COALESCE(last_used_at, created_at) <= ?",
+            (cutoff,),
+        ).rowcount
+        if forgotten:
+            by_name(db).execute(
+                "DELETE FROM experience_vectors WHERE experience_id NOT IN"
+                " (SELECT id FROM experiences)"
+            )
+
 
 
 def _one(row: sqlite3.Row) -> Experience:
@@ -384,3 +403,22 @@ def prompt_of(found: Sequence[Experience], name: str) -> str | None:
         ],
     ]
     return "\n".join(lines)
+
+
+def _open(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+
+
+def _stored_vectors(db: sqlite3.Connection, user_id: str, model: str) -> list[tuple[int, bytes]]:
+    return db.execute(
+        "SELECT experience_id, embedding FROM experience_vectors WHERE user_id = ? AND model = ?",
+        (user_id, model),
+    ).fetchall()
+
+
+def _keep_vectors(db: sqlite3.Connection, rows: list[tuple[int, str, str, bytes]]) -> None:
+    db.executemany(
+        "INSERT OR REPLACE INTO experience_vectors"
+        " (experience_id, user_id, model, embedding) VALUES (?, ?, ?, ?)",
+        rows,
+    )

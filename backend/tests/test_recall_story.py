@@ -8,7 +8,6 @@ import pytest
 
 from eidolon.characters import load_characters
 from eidolon.config import Settings
-from eidolon.corpus import StoryCorpus
 from eidolon import engine
 from eidolon.engine import MAX_TOOL_ROUNDS
 from eidolon.llm import ChatMessage, Reasoning, ToolCall
@@ -16,6 +15,7 @@ from eidolon.retrieval import RECALL_STORY_TOOL
 from eidolon.story_import import import_csv_directory
 from tests.conftest import ClientFactory
 from tests.fakes import FakeEmbedder, FakeJudge, FakeLLM, FakeReranker, context_of, system_of
+from tests.stories import corpus_in
 from tests.test_text_turn import send_turn, start_conversation
 
 PARK_LINE = "公園で鳩と一緒に歌っていました"
@@ -36,12 +36,9 @@ def recall(query: str, id: str = "call_1") -> ToolCall:
 async def embedder(settings: Settings, story: Path) -> FakeEmbedder:
     """The embedder the sample stories were imported with."""
     embedder = FakeEmbedder()
-    corpus = StoryCorpus(settings.database_path, embedder)
-    try:
+    async with corpus_in(settings.database_path, embedder) as corpus:
         characters = load_characters(settings.characters_path)
         await import_csv_directory(story, corpus, characters.values())
-    finally:
-        corpus.close()
     return embedder
 
 

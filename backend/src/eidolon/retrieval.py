@@ -50,7 +50,6 @@ import asyncio
 import logging
 from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from eidolon.affinity import Judged
@@ -59,6 +58,7 @@ from eidolon.affinity_judge import questions_for
 from eidolon.affinity_judge import read_judged
 from eidolon.characters import Character
 from eidolon.corpus import CatalogSource, Episode, StoryCorpus
+from eidolon.data_access import Database
 from eidolon.embedding import Embedder, EmbeddingError, Reembeddable
 from eidolon.facts import CharacterFacts
 from eidolon.judge import (
@@ -163,26 +163,21 @@ class StoryReferences:
     async def search(
         self, query_vector: Sequence[float], character: Character, limit: int
     ) -> list[Reference]:
-        passages = await asyncio.to_thread(
-            self.corpus.search_by_vector, query_vector, character.id, limit
-        )
-        return [Reference(self.kind, p.text, p.episode.id, p.score) for p in passages]
+        passages = await self.corpus.search_by_vector(query_vector, character.id, limit)
+        return [Reference(self.kind, p.text, p.episode_id, p.score) for p in passages]
 
     async def embed_missing(self, batch: int, progress: Callable[[int], None]) -> int:
         return await self.corpus.embed_missing(batch, progress)
 
-    def forget_other_models(self) -> int:
+    async def forget_other_models(self) -> int:
         """Nothing: each passage keeps only one vector, which embedding it again replaces."""
         return 0
-
-    def close(self) -> None:
-        self.corpus.close()
 
 
 class ReferenceSources:
     """The reference sources a turn looks references up in, all searched with the same
     query vector and reranked together; and the story corpus and the work facts, which
-    recalling searches itself. Closed all at once."""
+    recalling searches itself."""
 
     def __init__(
         self,
@@ -192,8 +187,8 @@ class ReferenceSources:
         work: WorkFacts | None,
         unsearched: Sequence[ReferenceSource] = (),
     ) -> None:
-        """`sources` are closed with the whole, `corpus` and `work` among them; so are
-        `unsearched`, sources with nothing to search, kept only to be embedded again."""
+        """`corpus` and `work` are among `sources`; `unsearched` are sources with nothing
+        to search, kept only to be embedded again."""
         self.embedder = embedder
         self.corpus = corpus
         self.work = work
@@ -251,26 +246,22 @@ class ReferenceSources:
             lines += ["", f"## {headings[reference.kind]}", reference.text]
         return "\n".join(lines)
 
-    def close(self) -> None:
-        for source in [*self._sources, *self._unsearched]:
-            source.close()
-
 
 def open_reference_sources(
-    path: Path,
+    db: Database,
     embedder: Embedder,
     characters: Iterable[Character],
     world: World | None,
     *,
     warn: bool = True,
 ) -> ReferenceSources:
-    """The reference sources in the database at `path`: the story, the characters' facts
+    """The reference sources in the database `db` reads and writes: the story, the characters' facts
     and, given a world setting, the work facts; without one, the work facts are there only
     to be embedded again, which forgets whatever vectors they had. Warns (unless not to
     `warn`) if story passages have no vector from `embedder`'s model, as they cannot be
     found."""
-    corpus = StoryCorpus(path, embedder)
-    if warn and (missing := corpus.count_missing_vectors()):
+    corpus = StoryCorpus(db, embedder)
+    if warn and (missing := corpus.missing_vectors_at_open):
         log.warning(
             "%d story passages have no vectors from the embedding model %s and cannot be"
             " found: run `eidolon reembed` after changing the embedding service, model"
@@ -278,9 +269,9 @@ def open_reference_sources(
             missing, embedder.model,
         )
     sources: list[ReferenceSource] = [
-        StoryReferences(corpus), CharacterFacts(path, embedder, characters)
+        StoryReferences(corpus), CharacterFacts(db, embedder, characters)
     ]
-    work = WorkFacts(path, embedder, world)
+    work = WorkFacts(db, embedder, world)
     if world is None:
         return ReferenceSources(embedder, sources, corpus, None, [work])
     sources.append(work)
@@ -506,10 +497,10 @@ class Retrieval:
         else:
             episode_ids, found = self._relevant(best, story, entries)
         corpus = self._sources.corpus
-        episodes = await asyncio.to_thread(_episodes, corpus, episode_ids) if episode_ids else []
+        episodes = await corpus.episodes(episode_ids) if episode_ids else []
         if not episodes and not found:
             return f"没有想起和「{asked}」有关的剧情：{_NOT_IN_STORY}，或者问问制作人。"
-        catalog = await asyncio.to_thread(corpus.catalog, character.id) if episodes else []
+        catalog = await corpus.catalog(character.id) if episodes else []
         return recall_prompt(asked, episodes, catalog, found)
 
     def _relevant(
@@ -532,9 +523,6 @@ class Retrieval:
             elif len(found) < RECALL_ENTRIES:
                 found.append(entries[i - len(story)])
         return episode_ids, found
-
-    def close(self) -> None:
-        self._sources.close()
 
 
 def _query_vector(embedding: "asyncio.Future[list[float] | None]") -> list[float] | None:
@@ -569,11 +557,6 @@ async def _find_experiences(
     if memory is None or found is None:
         return None
     return await memory.her_own(query, found.query_vector)
-
-
-def _episodes(corpus: StoryCorpus, ids: Iterable[str]) -> list[Episode]:
-    """The episodes of `ids` still in `corpus`."""
-    return [e for id in ids if (e := corpus.get(id)) is not None]
 
 
 async def _search_work(work: WorkFacts | None, query_vector: Sequence[float]) -> list[WorldEntry]:
@@ -628,7 +611,7 @@ def _transcript(episode: Episode) -> str:
 
 _JUDGE_QUESTION = {
     "type": "noul",
-    "instructions": "角色扮演对话中，角色是《偶像大师 闪耀色彩》的偶像，正在和她的制作人对话。"
+    "instructions": "角色扮演对话中，角色是《偶像大师 闪耀色彩》283 事务所的偶像（或事务员），正在和制作人对话。"
     "可检索的内容有三类：剧情，即她亲身经历过的原作剧情；角色资料，即关于她自己和身边人物的设定"
     "（档案、人物关系等）；作品资料，即作品里的歌曲、唱片和演出（演唱者、发售日、曲目、"
     "演出的日期、会场和出演者）。回答制作人最新的一句话，是否需要检索这些内容？",
@@ -649,7 +632,7 @@ _RECALL_QUESTION = {
 }
 _ABOUT_PRODUCER_QUESTION = {
     "type": "noul",
-    "instructions": "角色扮演对话中，角色是《偶像大师 闪耀色彩》的偶像，正在和她的制作人对话。"
+    "instructions": "角色扮演对话中，角色是《偶像大师 闪耀色彩》283 事务所的偶像（或事务员），正在和制作人对话。"
     "制作人最新的一句话，是否说起或问起制作人自己的事（生活、近况、工作安排、计划、家人、宠物、喜好、"
     "身体状况等），而制作人以前对偶像们说过的相关的事可能有助于回应？",
     "criteria": {

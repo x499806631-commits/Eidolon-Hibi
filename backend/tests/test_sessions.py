@@ -3,6 +3,9 @@ days after it was last used; signing out ends it, and requests that change somet
 must come from the site itself. Development signs in by name, which a public deployment
 refuses to start with."""
 
+import asyncio
+import sqlite3
+import threading
 from dataclasses import replace
 
 import httpx
@@ -12,6 +15,7 @@ from eidolon.config import Settings
 from eidolon.sessions import SESSION_COOKIE
 from tests.conftest import COOKIE_DOMAIN, ClientFactory, agree_to_terms
 from tests.fakes import FakeClock, FakeLLM
+from tests.test_service_status import backend_of
 from tests.test_text_turn import send_turn, start_conversation
 
 REPLY = ["<ja>はいっ</ja><zh>好的</zh>"]
@@ -108,6 +112,28 @@ async def test_renewing_a_session_renews_its_cookie(make_client: ClientFactory):
 
     assert res.headers["set-cookie"].startswith(f"{SESSION_COOKIE}=")
     assert "Max-Age=2592000" in res.headers["set-cookie"]
+
+
+async def test_two_requests_at_once_renew_a_session_once(make_client: ClientFactory):
+    clock = FakeClock()
+    client = make_client(FakeLLM(), clock=clock)
+    clock.advance(days=1)
+    writing, finish = threading.Event(), threading.Event()
+
+    def held(_: sqlite3.Connection) -> None:
+        writing.set()
+        finish.wait(10)
+
+    # Every write waits behind this one, so that both requests read the session as it was.
+    held_up = asyncio.create_task(backend_of(client).database.write(held))
+    await asyncio.to_thread(writing.wait, 10)
+    both = asyncio.gather(mano_conversations(client), mano_conversations(client))
+    await asyncio.sleep(0.3)
+    finish.set()
+    await held_up
+
+    renewed = ["set-cookie" in res.headers for res in await both]
+    assert sorted(renewed) == [False, True]
 
 
 async def test_signing_out_ends_the_session_on_this_device_only(make_client: ClientFactory):

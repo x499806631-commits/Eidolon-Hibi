@@ -13,8 +13,8 @@
  * 用逗号隔开）给她们开新对话重聊一遍。
  * 通话那几张真的打电话：假麦克风播一段 Windows 语音合成（System.Speech，要装中文语音）念的中文，她听写下来、
  * 用 Fish Audio 的声音回答；每通电话都在她的对话里记下一个回合，所以先拍手机的对话页再打电话。
- * 礼物页那张不真抽奖：直接往开发库（`--database`，默认 backend/data/eidolon.db）里写下固定的背包、一张重置卡和
- * 几次抽奖次数，每次重跑都一样；后端要配判断模型，「好感度和礼物」开着。
+ * 礼物页那张不真抽奖：直接往开发库（`--database`，默认 backend/data/eidolon.db）里写下固定的背包、一张重置卡、
+ * 几次抽奖次数、今天每日任务的进度和合起来的成就，每次重跑都一样；后端要配判断模型，「好感度和礼物」开着。
  * 照片那张要她真发一张：后端要配判断模型和生图（NOVELAI_API_KEY），第一次准备演示对话时花一张图的额度。
  * `--only` 只拍列出的几项，例如 `--only landing,app`；落地页的滚动动图（landing-tour）一步一拍，要十几分钟。
  *
@@ -100,6 +100,13 @@ const BACKPACK: Record<string, number> = {
 /** 礼物页上的抽奖次数和重置卡张数。 */
 const DRAWS = 3;
 const RESET_CARDS = 1;
+/** 礼物页上今天每日任务的进度：回合数、送出的礼物件数。 */
+const TODAY_TASKS = { turns: 3, gifts: 0 };
+/**
+ * 礼物页「成就」里合起来的两项各到第 1 阶段：来过的天数、抽过的奖（往来过几位由演示对话推出来）。键是后端的成就 id，
+ * 数值要落在 backend/src/eidolon/achievements.py `ALL_CHARACTERS` 的第 1、2 阶段门槛之间，改门槛时跟着改。
+ */
+const ACHIEVEMENTS_OF_ALL = { days: 12, draws: 16 };
 
 /** 一项要拍的东西：`name` 给 `--only` 用。 */
 type Item = { name: string; take: (browser: Browser) => Promise<void> };
@@ -482,7 +489,8 @@ async function outfits(browser: Browser): Promise<void> {
 }
 
 /**
- * 把演示用户的礼物换成固定的一套：背包只有 BACKPACK，抽奖次数 DRAWS，重置卡 RESET_CARDS。
+ * 把演示用户的礼物换成固定的一套：背包只有 BACKPACK，抽奖次数 DRAWS，重置卡 RESET_CARDS，今天每日任务做到
+ * TODAY_TASKS，合起来的成就到 ACHIEVEMENTS_OF_ALL。
  * 先读一次礼物状态，让后端建好这位用户的行、把到今天为止的次数发完，今天再读就不会加了。
  */
 async function stockGifts(context: BrowserContext): Promise<void> {
@@ -501,6 +509,24 @@ async function stockGifts(context: BrowserContext): Promise<void> {
       const put = db.prepare("INSERT INTO gift_backpacks (user_id, gift_id, count) VALUES (?, ?, ?)");
       for (const [gift, count] of Object.entries(BACKPACK)) put.run(id, gift, count);
       db.prepare("UPDATE gift_balances SET draws = ?, reset_cards = ? WHERE user_id = ?").run(DRAWS, RESET_CARDS, id);
+      // 每日任务和「来过几天」都按北京时间划天。
+      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
+      db.prepare(
+        "INSERT OR REPLACE INTO daily_task_progress (user_id, day, turns, gifts) VALUES (?, ?, ?, ?)",
+      ).run(id, today, TODAY_TASKS.turns, TODAY_TASKS.gifts);
+      const progress = db.prepare(
+        "INSERT OR REPLACE INTO achievement_progress (user_id, achievement, character_id, count, last_day)" +
+          " VALUES (?, ?, '', ?, ?)",
+      );
+      progress.run(id, "days", ACHIEVEMENTS_OF_ALL.days, today);
+      progress.run(id, "draws", ACHIEVEMENTS_OF_ALL.draws, null);
+      const stage = db.prepare(
+        "INSERT OR IGNORE INTO achievement_stages (user_id, achievement, character_id, stage, unlocked_at)" +
+          " VALUES (?, ?, '', 1, ?)",
+      );
+      // 和后端写的时刻同一种写法（带 +00:00），按字符串比先后才对。
+      const now = new Date().toISOString().replace("Z", "+00:00");
+      for (const achievement of Object.keys(ACHIEVEMENTS_OF_ALL)) stage.run(id, achievement, now);
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
@@ -518,6 +544,11 @@ async function gifts(browser: Browser): Promise<void> {
     const page = await context.newPage();
     await page.goto(`${origin}/gifts`, { waitUntil: "networkidle" });
     await page.getByRole("region", { name: "抽奖" }).waitFor();
+    // 成就一行新解锁时名字旁有点，离开礼物页才记成看过：从导航去一趟对话再回来，拍出来不带点。
+    await page.getByRole("link", { name: "对话" }).click();
+    await page.waitForURL("**/conversations");
+    await page.getByRole("link", { name: "礼物" }).click();
+    await page.getByRole("region", { name: "成就" }).waitFor();
     await settle(page);
     await still(page, "gifts");
   } finally {

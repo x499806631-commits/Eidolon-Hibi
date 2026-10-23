@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { currentNavItem, departure, isInShell, isTyping, navDestination, showsShellCallBar } from "@/lib/navShell";
+import {
+  currentNavItem,
+  departure,
+  isGiftsInView,
+  isInShell,
+  isTyping,
+  navDestination,
+  showsShellCallBar,
+} from "@/lib/navShell";
 
 describe("在不在导航外壳里", () => {
   it.each([
@@ -104,6 +112,21 @@ describe("导航栏和 dock 的当前项", () => {
 
   it("外壳外面没有当前项", () => {
     expect(currentNavItem("/admin")).toBeNull();
+  });
+});
+
+describe("礼物页在不在眼前（到账当场记成看过，「礼物」不出点）", () => {
+  it("在礼物页上就在眼前，带着预选的也是", () => {
+    expect(isGiftsInView("/gifts", false)).toBe(true);
+    expect(isGiftsInView("/gifts?to=mano", false)).toBe(true);
+  });
+
+  it("通话层展开着盖住礼物页时不在眼前", () => {
+    expect(isGiftsInView("/gifts", true)).toBe(false);
+  });
+
+  it("别的页面上不在眼前", () => {
+    expect(isGiftsInView("/conversation/mano", false)).toBe(false);
   });
 });
 

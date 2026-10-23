@@ -12,12 +12,12 @@ import pytest
 
 from eidolon.characters import load_characters
 from eidolon.config import Settings
-from eidolon.corpus import StoryCorpus
 from eidolon.story_import import import_csv_directory
 from tests.conftest import KOGANE_SHEET, MANO_SHEET, CharacterConfig, ClientFactory
 from tests.fakes import FakeEmbedder, FakeJudge, FakeLLM, FakeReranker, KeywordReranker
 from tests.test_recall_story import ANSWER, recall, tool_results
 from tests.test_retrieval import MANO_FACTS, PARK_LINE, REPLY, system_prompt
+from tests.stories import corpus_in
 from tests.test_text_turn import send_turn, start_conversation
 from tests.test_world_setting import CVS, section, write_world
 
@@ -43,12 +43,9 @@ def characters(tmp_path: Path) -> CharacterConfig:
 async def embedder(settings: Settings, story: Path) -> FakeEmbedder:
     """The embedder the sample stories were imported with."""
     embedder = FakeEmbedder()
-    corpus = StoryCorpus(settings.database_path, embedder)
-    try:
+    async with corpus_in(settings.database_path, embedder) as corpus:
         characters = load_characters(settings.characters_path)
         await import_csv_directory(story, corpus, characters.values())
-    finally:
-        corpus.close()
     return embedder
 
 

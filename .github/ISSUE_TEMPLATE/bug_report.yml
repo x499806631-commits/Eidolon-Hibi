@@ -8,6 +8,14 @@ body:
         贴日志和配置前，请删掉 API key、token、OAuth secret、`EIDOLON_SECRET_KEY` 等密钥，以及别人的对话内容。
         术语见 [GLOSSARY.md](https://github.com/Sallyn0225/eidolon-sc/blob/main/GLOSSARY.md)。
 
+  - type: checkboxes
+    id: searched
+    attributes:
+      label: 已有的 issue
+      options:
+        - label: 我在[已有的 issue](https://github.com/Sallyn0225/eidolon-sc/issues?q=is%3Aissue)（含已关闭的）里搜过，没有一样的
+          required: true
+
   - type: dropdown
     id: area
     attributes:

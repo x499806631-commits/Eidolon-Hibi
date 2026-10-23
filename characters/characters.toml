@@ -24,7 +24,7 @@
 #             每一条都要在她的出处文件（facts/<角色标识>.sources.md）的「喜欢的礼物」一节写明剧情出处，
 #             不收推断出来的条目。只在服务器上用，礼物页不透露她喜欢什么
 #   speakers  剧情台词里她的说话人名字，用来识别剧情的出场角色；修改后需要重新导入剧情库
-#   idol_id   原作的偶像编号（可选），即 ShinyColorsDB 的 idolId（整理目录 source/spine_manifest.json 里也有），正整数
+#   idol_id   原作的偶像编号（可选），即 ShinyColorsDB 的 idolId（事务员はづき是 91）（整理目录 source/spine_manifest.json 里也有），正整数
 #   default_outfit 立绘的默认衣装（可选），写成 stand/<enzaId>（这张卡的私服）或 stand_costume/<enzaId>
 #             （这张卡的演出服），enzaId 是卡的十位编号（source/spine_manifest.json 里的 enzaId）。用户没选过衣装时她穿这一套。
 #             idol_id、default_outfit 和后端的 EIDOLON_STAND_ASSETS_URL 都配好了，通话层才显示立绘，
@@ -690,3 +690,26 @@ idol_id = 28
 default_outfit = "stand/1030280010"  # 【漂白花火】
 greeting = "[softly] 郁田はるきです。ふふ……これから、どんな色が見えるのかなぁ"
 greeting_subtitle = "我是郁田はるき。呵呵……接下来，会看到什么样的色彩呢。"
+
+[[characters]]
+id = "hazuki"
+name = "七草はづき"
+name_zh = "七草叶月"
+name_kana = "ななくさ はづき"
+name_romaji = "Nanakusa Hazuki"
+intro = "283プロ的事务员，不是偶像。22 岁，总是困得睡倒在地板上，一工作起来却又快又准；管着事务所的经费、备品和每天的おやつ，还在别处打工，和妹妹にちか两个人过日子；她说自己的工作就是「バリバリサポートすることですから」。"
+voice_id = "a061289170654e1a9dda177a28764651"
+sheet = "sheets/hazuki.md"
+avatar = "avatars/hazuki.jpg"
+scsp_avatar = "avatars-scsp/hazuki.jpg"
+color = "#c3d825"
+background = "backgrounds/hazuki.jpg"
+facts = "facts/hazuki.md"
+liked_gifts = ["cake", "bouquet"]
+photo_tag = "nanakusa hazuki"
+photo_appearance = "green hair, folded ponytail, swept bangs, green eyes"
+speakers = ["はづき"]
+idol_id = 91  # 她不是偶像，这是 ShinyColorsDB 给事务员的编号
+default_outfit = "stand/2040910010"  # 【２８３プロの日常】
+greeting = "[softly] 事務員の七草はづきです～。今日からよろしくお願いしますね、プロデューサーさん"
+greeting_subtitle = "我是事务员七草はづき～。从今天起请多关照，制作人。"

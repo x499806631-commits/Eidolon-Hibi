@@ -273,13 +273,13 @@ async def sync_stories(
             errors.append(str(e))
     report.mirror_error = "；".join(errors) or None
     names = event_names or {}
-    event_files, report.unnamed_events = _untranslated_event_scripts(scripts, corpus, names)
+    event_files, report.unnamed_events = await _untranslated_event_scripts(scripts, corpus, names)
     files = {
         file.source_id: file
         for file in [
             *event_files,
-            *_untranslated_album_scripts(scripts, cache, corpus),
-            *_untranslated_scripts(scripts, cache, corpus),
+            *await _untranslated_album_scripts(scripts, cache, corpus),
+            *await _untranslated_scripts(scripts, cache, corpus),
         ]
     }  # a script both a card and an album list is the card's
     report.untranslated = await import_script_files(
@@ -382,7 +382,7 @@ async def _fetch_events(
 ) -> None:
     known = {
         found[0]
-        for episode_id in corpus.episode_ids(f"{_EVENT_SCRIPTS}/")
+        for episode_id in await corpus.episode_ids(f"{_EVENT_SCRIPTS}/")
         if (found := _event_of(episode_id))
     }
     known.update(event for event, episodes in cache.events.items() if episodes)
@@ -425,7 +425,7 @@ async def _walk_event(scripts: ScriptCache, report: SyncReport, event: int) -> i
     return episode - 1
 
 
-def _untranslated_event_scripts(
+async def _untranslated_event_scripts(
     scripts: ScriptCache, corpus: StoryCorpus, names: Mapping[int, str]
 ) -> tuple[list[ScriptFile], list[int]]:
     """Every event script kept so far that SCTranslationData has not translated, and the
@@ -437,10 +437,10 @@ def _untranslated_event_scripts(
     files = []
     unnamed: set[int] = set()
     for script, path in scripts.kept(_EVENT_SCRIPTS).items():
-        if (found := _event_of(script)) is None or corpus.is_translated(script):
+        if (found := _event_of(script)) is None or await corpus.is_translated(script):
             continue
         event, episode = found
-        name = names.get(event) or _translated_event_name(corpus, event)
+        name = names.get(event) or await _translated_event_name(corpus, event)
         if name is None:
             unnamed.add(event)
         source = name or f"活动剧情 {event:03d}"
@@ -448,14 +448,16 @@ def _untranslated_event_scripts(
     return files, sorted(unnamed)
 
 
-def _translated_event_name(corpus: StoryCorpus, event: int) -> str | None:
-    for episode_id in corpus.episode_ids(f"{_EVENT_SCRIPTS}/4001{event:03d}"):
-        if corpus.is_translated(episode_id) and (episode := corpus.get(episode_id)):
+async def _translated_event_name(corpus: StoryCorpus, event: int) -> str | None:
+    for episode_id in await corpus.episode_ids(f"{_EVENT_SCRIPTS}/4001{event:03d}"):
+        if await corpus.is_translated(episode_id) and (episode := await corpus.get(episode_id)):
             return episode.source
     return None
 
 
-def _untranslated_album_scripts(scripts: ScriptCache, cache: _Cache, corpus: StoryCorpus) -> list[ScriptFile]:
+async def _untranslated_album_scripts(
+    scripts: ScriptCache, cache: _Cache, corpus: StoryCorpus
+) -> list[ScriptFile]:
     """Every album script kept so far that SCTranslationData has not translated, filed
     under the name SCTranslationData files that part of the album under, if it has
     translated any of it, or else the album's."""
@@ -463,13 +465,14 @@ def _untranslated_album_scripts(scripts: ScriptCache, cache: _Cache, corpus: Sto
     for _, album in sorted(cache.albums.items()):
         names: dict[str, str] = {}
         for episode in album.episodes:
-            if episode.script in files or corpus.is_translated(episode.script):
+            if episode.script in files or await corpus.is_translated(episode.script):
                 continue
             if (path := scripts.path(episode.script)) is None:
                 continue
             if episode.section not in names:
                 names[episode.section] = (
-                    _translated_section_name(corpus, album, episode.section) or episode.section
+                    await _translated_section_name(corpus, album, episode.section)
+                    or episode.section
                 )
             files[episode.script] = ScriptFile(
                 path, episode.script, names[episode.section], episode.title
@@ -477,25 +480,29 @@ def _untranslated_album_scripts(scripts: ScriptCache, cache: _Cache, corpus: Sto
     return list(files.values())
 
 
-def _translated_section_name(corpus: StoryCorpus, album: _AlbumState, section: str) -> str | None:
+async def _translated_section_name(
+    corpus: StoryCorpus, album: _AlbumState, section: str
+) -> str | None:
     """The name SCTranslationData files most of its translations of that part of the
     album under."""
     names = Counter(
         translated.source
-        for episode in album.episodes
-        if episode.section == section
-        and corpus.is_translated(episode.script)
-        and (translated := corpus.get(episode.script)) is not None
+        for translated in await corpus.episodes(
+            episode.script for episode in album.episodes if episode.section == section
+        )
+        if translated.translated
     )
     return names.most_common(1)[0][0] if names else None
 
 
-def _untranslated_scripts(scripts: ScriptCache, cache: _Cache, corpus: StoryCorpus) -> list[ScriptFile]:
+async def _untranslated_scripts(
+    scripts: ScriptCache, cache: _Cache, corpus: StoryCorpus
+) -> list[ScriptFile]:
     """Every card script kept so far that SCTranslationData has not translated."""
     files: dict[str, ScriptFile] = {}
     for card in cache.cards.values():
         for episode in card.episodes:
-            if episode.script in files or corpus.is_translated(episode.script):
+            if episode.script in files or await corpus.is_translated(episode.script):
                 continue
             if (path := scripts.path(episode.script)) is not None:
                 files[episode.script] = ScriptFile(path, episode.script, card.name, episode.title)

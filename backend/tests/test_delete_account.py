@@ -3,12 +3,14 @@ producer profile, sign-in methods, sessions and usage are gone for good, from ev
 and they are signed out everywhere. Signing in again with the same identity makes a new
 user; nobody else's data is touched."""
 
+import asyncio
 import sqlite3
 from pathlib import Path
 
 import httpx
 import pytest
 
+import eidolon.data_access
 from eidolon.config import Settings
 from tests.browser import Browser
 from tests.conftest import (
@@ -26,6 +28,8 @@ from tests.fakes import (
     FakeReranker,
     FakeSpeech,
 )
+from tests.test_concurrent_calls import another_user
+from tests.test_data_access import emptied, log_of, reading
 from tests.test_shared_memory import CAT, memorized
 from tests.test_text_turn import send_turn, start_conversation
 
@@ -190,9 +194,34 @@ async def test_deleted_data_is_gone_from_the_database_files_too(
     await client.post("/api/account/delete", json=DELETE)
 
     database = settings.database_path
+    await emptied(database)  # soon after
     for path in (database, database.with_name(database.name + "-wal")):
         if path.exists():
             assert CAT.encode() not in path.read_bytes(), path
+
+
+async def test_a_reader_meanwhile_holds_up_no_one_elses_turn_and_the_log_is_emptied_after_it(
+    make_client: ClientFactory, settings: Settings, monkeypatch: pytest.MonkeyPatch
+):
+    """As when a backup is being copied: deleting waits for it no longer than a moment,
+    and the pages as they were leave the write-ahead log once it is done."""
+    monkeypatch.setattr(eidolon.data_access, "CHECKPOINT_RETRY", 0.1)
+    client = make_client(FakeLLM(REPLY, REPLY))
+    friend = another_user(client, "friend")
+    friends = await start_conversation(friend)
+    await send_turn(client, await start_conversation(client), "早上好")
+    database = settings.database_path
+    reader = reading(database)
+    try:
+        async with asyncio.timeout(5):
+            assert (await client.post("/api/account/delete", json=DELETE)).status_code == 204
+            await send_turn(friend, friends, "在吗")
+        assert log_of(database)  # held up by the reader
+    finally:
+        reader.close()
+
+    await emptied(database)
+    assert len((await friend.get(f"/api/conversations/{friends}/messages")).json()) == 2
 
 
 async def test_memories_cleared_before_deleting_are_gone_from_the_database_files_too(
@@ -204,6 +233,7 @@ async def test_memories_cleared_before_deleting_are_gone_from_the_database_files
 
     await client.post("/api/account/delete", json=DELETE)
 
+    await emptied(settings.database_path)  # soon after
     assert files_holding(settings.database_path, CAT) == []
 
 
@@ -217,4 +247,5 @@ async def test_a_memory_deleted_before_deleting_is_gone_from_the_database_files_
 
     await client.post("/api/account/delete", json=DELETE)
 
+    await emptied(settings.database_path)  # soon after
     assert files_holding(settings.database_path, CAT) == []

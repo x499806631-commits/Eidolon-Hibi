@@ -28,18 +28,17 @@ as reach-outs are, held only while she writes, each with an activity record of i
 
 import asyncio
 import logging
-import threading
-from collections.abc import Callable, Mapping
+import sqlite3
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from eidolon.activity import ActivityLog
 from eidolon.affinity import Affinities, Tier
 from eidolon.characters import Character
 from eidolon.clock import Clock
-from eidolon.database import connect
+from eidolon.data_access import Database
 from eidolon.features import AllOn, Switches
 from eidolon.engine import ConversationEngine
 from eidolon.live_config import LiveConfig
@@ -131,13 +130,13 @@ class _Due:
 
 
 class Letters:
-    """Her letters, on the database at `path` beside the conversations of `store`, written on
+    """Her letters, in `db` beside the conversations of `store` (ADR-0028), written on
     the deployer's models of `config` as `engine` writes them, each recorded in `activity`;
     `random` draws whether and when; `special_days` has the days she writes for."""
 
     def __init__(
         self,
-        path: Path,
+        db: Database,
         store: Store,
         engine: ConversationEngine,
         characters: Mapping[str, Character],
@@ -151,7 +150,7 @@ class Letters:
         features: Switches = AllOn(),
     ) -> None:
         self._features = features
-        self._written: list[Callable[[Conversation, Letter, str], None]] = []
+        self._written: list[Callable[[Conversation, Letter, str], Awaitable[None]]] = []
         self._store = store
         self._engine = engine
         self._characters = characters
@@ -162,12 +161,10 @@ class Letters:
         self._random = random
         self._enabled = enabled
         self._special_days = special_days
-        self._db = connect(path)
-        self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
+        self._db = db
+        db.prepare(_open)
 
-    def on_written(self, listener: Callable[[Conversation, Letter, str], None]) -> None:
+    def on_written(self, listener: Callable[[Conversation, Letter, str], Awaitable[None]]) -> None:
         """Have `listener` told each letter written ahead as it is kept: in which conversation,
         the letter, and what it is about (a holiday's, which)."""
         self._written.append(listener)
@@ -188,9 +185,9 @@ class Letters:
             return
         now = self._clock()
         due: list[_Due] = []
-        for current in await asyncio.to_thread(self._store.current_conversations):
+        for current in await self._store.current_conversations():
             try:
-                due += await asyncio.to_thread(self._due, current, now)
+                due += await self._due(current, now)
             except Exception:
                 log.exception("planning letters in conversation %s failed", current.conversation.id)
         for found in sorted(due, key=lambda d: d.plan.deliver_at or now):
@@ -203,7 +200,10 @@ class Letters:
         """Have her write the user a letter for `occasion` now, in her newest conversation with
         them, coming at once: for trying letters out under the development sign-in, whatever
         the schedule says. False if they have no conversation; raises what the model raises."""
-        newest = [c for c, _, _ in self._store.latest_conversations(user_id) if c.character_id == character_id]
+        newest = [
+            c for c, _, _ in await self._store.latest_conversations(user_id)
+            if c.character_id == character_id
+        ]
         if not newest:
             return False
         now = self._clock()
@@ -212,18 +212,12 @@ class Letters:
             said = await self._engine.write_letter(newest[0], lease.keys.chat_llm, occasion, now, about)
         finally:
             lease.release()
-        letter = await asyncio.to_thread(
-            self._store.add_letter, user_id, character_id, occasion, said, now
-        )
+        letter = await self._store.add_letter(user_id, character_id, occasion, said, now)
         for written in self._written:
-            written(newest[0], letter, about)
+            await written(newest[0], letter, about)
         return True
 
-    def close(self) -> None:
-        with self._lock:
-            self._db.close()
-
-    def _due(self, current: CurrentConversation, now: datetime) -> list[_Due]:
+    async def _due(self, current: CurrentConversation, now: datetime) -> list[_Due]:
         """Her letters in the conversation whose writing time has come: today's, planned
         first if not yet, and tomorrow's, planned ahead if it is the producer's birthday."""
         conversation, contact = current.conversation, current.last_contact
@@ -231,22 +225,22 @@ class Letters:
             return []
         if not current.has_turns or contact is None or now - contact > WINDOW:
             return []
-        if not self._features.on(conversation.user_id, "letters"):  # GLOSSARY.md「玩法开关」
+        if not await self._features.on(conversation.user_id, "letters"):  # GLOSSARY.md「玩法开关」
             return []
-        tier = self._tier(conversation)
+        tier = await self._tier(conversation)
         if tier is None:
             return []
-        profile = self._store.get_profile(conversation.user_id)
+        profile = await self._store.get_profile(conversation.user_id)
         zone = ZoneInfo(effective_timezone(profile, None))
         today = now.astimezone(zone).date()
         due = []
         for day in (today, today + timedelta(days=1)):
-            plan = self._plan(conversation, day)
+            plan = await self._db.read(_plan, conversation, day)
             if plan is None:
                 if day == today:
-                    plan = self._make_plan(conversation, day, profile, tier, now, zone)
-                elif self._birthday(profile, day) and self._close(conversation, tier):
-                    plan = self._make_plan(conversation, day, profile, tier, now, zone)
+                    plan = await self._make_plan(conversation, day, profile, tier, now, zone)
+                elif self._birthday(profile, day) and await self._close(conversation, tier):
+                    plan = await self._make_plan(conversation, day, profile, tier, now, zone)
                 else:
                     continue
             if plan.occasion is None or plan.done or plan.write_at is None:
@@ -255,46 +249,26 @@ class Letters:
                 due.append(_Due(conversation, plan, day, zone))
         return due
 
-    def _plan(self, conversation: Conversation, day: date) -> _Plan | None:
-        with self._lock:
-            row = self._db.execute(
-                "SELECT occasion, about, write_at, deliver_at, done FROM letter_days"
-                " WHERE user_id = ? AND character_id = ? AND day = ?",
-                (conversation.user_id, conversation.character_id, day.isoformat()),
-            ).fetchone()
-        if row is None:
-            return None
-        return _Plan(row[0], row[1], _at(row[2]), _at(row[3]), bool(row[4]))
-
-    def _make_plan(
+    async def _make_plan(
         self, conversation: Conversation, day: date, profile: ProducerProfile, tier: Tier,
         now: datetime, zone: ZoneInfo,
     ) -> _Plan:
         """Plan whether she writes a letter coming on `day`, and when, and keep it."""
-        occasion, about = self._occasion(conversation, day, profile, tier)
+        occasion, about = await self._occasion(conversation, day, profile, tier)
         plan = _Plan(None)
         if occasion is not None:
             deliver_at = self._deliver_at(occasion, day, now, zone)
             if deliver_at is not None:
                 write_at = max(deliver_at - LEAD[occasion], min(now, deliver_at))
                 plan = _Plan(occasion, about, write_at, deliver_at)
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT OR IGNORE INTO letter_days"
-                " (user_id, character_id, day, occasion, about, write_at, deliver_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    conversation.user_id, conversation.character_id, day.isoformat(),
-                    plan.occasion, plan.about, _iso(plan.write_at), _iso(plan.deliver_at),
-                ),
-            )
+        await self._db.write(_keep_plan, conversation, day, plan)
         return plan
 
-    def _occasion(
+    async def _occasion(
         self, conversation: Conversation, day: date, profile: ProducerProfile, tier: Tier
     ) -> tuple[Occasion | None, str]:
         """What she writes for on `day`, if she does, and for a holiday which."""
-        close = self._close(conversation, tier)
+        close = await self._close(conversation, tier)
         days = self._special_days
         if self._birthday(profile, day) and close:
             return "producer_birthday", ""
@@ -304,7 +278,7 @@ class Letters:
         if holidays and close:
             holiday = holidays[0]
             return "holiday", f"{holiday.name}。{holiday.note}"
-        letters = self._store.letters(conversation.user_id, conversation.character_id)
+        letters = await self._store.letters(conversation.user_id, conversation.character_id)
         if letters and self._clock() - datetime.fromisoformat(letters[0].created_at) < GAP:
             return None, ""
         if self._random(CHANCES[tier]) != 0:
@@ -331,36 +305,32 @@ class Letters:
     def _birthday(self, profile: ProducerProfile, day: date) -> bool:
         return profile.birthday is not None and is_birthday(profile.birthday, day)
 
-    def _close(self, conversation: Conversation, tier: Tier) -> bool:
+    async def _close(self, conversation: Conversation, tier: Tier) -> bool:
         """Whether she writes for his birthday and holidays: close or intimate, or affinity off."""
         if tier in ("intimate", "close"):
             return True
-        return self._affinities.status(conversation.user_id, conversation.character_id) is None
+        status = await self._affinities.status(conversation.user_id, conversation.character_id)
+        return status is None
 
-    def _tier(self, conversation: Conversation) -> Tier | None:
+    async def _tier(self, conversation: Conversation) -> Tier | None:
         """The tier she writes by, trust where affinity is off; None if she is not to write,
         in a cooldown or in a tier without a chance."""
-        status = self._affinities.status(conversation.user_id, conversation.character_id)
+        status = await self._affinities.status(conversation.user_id, conversation.character_id)
         if status is None:
             return "trust"
         if status.cooling or status.tier not in CHANCES:
             return None
         return status.tier
 
-    def _done(self, due: _Due) -> None:
-        with self._lock, self._db:
-            self._db.execute(
-                "UPDATE letter_days SET done = 1"
-                " WHERE user_id = ? AND character_id = ? AND day = ?",
-                (due.conversation.user_id, due.conversation.character_id, due.day.isoformat()),
-            )
+    async def _done(self, due: _Due) -> None:
+        await self._db.write(_done, due)
 
-    def _coming_that_day(self, due: _Due) -> int:
+    async def _coming_that_day(self, due: _Due) -> int:
         began = datetime.combine(due.day, time(), due.zone)
         ends = began + timedelta(days=1)
         return sum(
             began <= datetime.fromisoformat(letter.created_at) < ends
-            for letter in self._store.letters(due.conversation.user_id)
+            for letter in await self._store.letters(due.conversation.user_id)
         )
 
     async def _write(self, due: _Due, now: datetime) -> None:
@@ -368,10 +338,8 @@ class Letters:
         day already, or it is past `GIVE_UP`: then never. One that fails is tried again."""
         conversation, plan = due.conversation, due.plan
         assert plan.occasion is not None and plan.deliver_at is not None
-        if now > plan.deliver_at + GIVE_UP or (
-            await asyncio.to_thread(self._coming_that_day, due) >= PER_DAY
-        ):
-            await asyncio.to_thread(self._done, due)
+        if now > plan.deliver_at + GIVE_UP or await self._coming_that_day(due) >= PER_DAY:
+            await self._done(due)
             return
         recording = self._activity.begin(
             "letter", conversation.user_id, conversation.character_id,
@@ -387,22 +355,21 @@ class Letters:
             # Not logged with what was raised: a service's error may repeat what it was asked.
             log.warning("writing a letter in conversation %s failed: %s", conversation.id,
                         type(e).__name__)
-            recording.finish("failed")
+            await recording.finish("failed")
             return
         finally:
             lease.release()
-        letter = await asyncio.to_thread(
-            self._store.add_letter, conversation.user_id, conversation.character_id,
-            plan.occasion, said, plan.deliver_at,
+        letter = await self._store.add_letter(
+            conversation.user_id, conversation.character_id, plan.occasion, said, plan.deliver_at,
         )
-        await asyncio.to_thread(self._done, due)
+        await self._done(due)
         for written in self._written:
             try:
-                written(conversation, letter, plan.about)
+                await written(conversation, letter, plan.about)
             except Exception:
                 log.exception("telling of letter %s failed", letter.id)
 
-        recording.finish("success")
+        await recording.finish("success")
 
 
 def _at(text: str | None) -> datetime | None:
@@ -411,3 +378,37 @@ def _at(text: str | None) -> datetime | None:
 
 def _iso(at: datetime | None) -> str | None:
     return at.isoformat() if at else None
+
+
+def _open(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+
+
+def _plan(db: sqlite3.Connection, conversation: Conversation, day: date) -> _Plan | None:
+    row = db.execute(
+        "SELECT occasion, about, write_at, deliver_at, done FROM letter_days"
+        " WHERE user_id = ? AND character_id = ? AND day = ?",
+        (conversation.user_id, conversation.character_id, day.isoformat()),
+    ).fetchone()
+    if row is None:
+        return None
+    return _Plan(row[0], row[1], _at(row[2]), _at(row[3]), bool(row[4]))
+
+
+def _keep_plan(db: sqlite3.Connection, conversation: Conversation, day: date, plan: _Plan) -> None:
+    db.execute(
+        "INSERT OR IGNORE INTO letter_days"
+        " (user_id, character_id, day, occasion, about, write_at, deliver_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            conversation.user_id, conversation.character_id, day.isoformat(),
+            plan.occasion, plan.about, _iso(plan.write_at), _iso(plan.deliver_at),
+        ),
+    )
+
+
+def _done(db: sqlite3.Connection, due: _Due) -> None:
+    db.execute(
+        "UPDATE letter_days SET done = 1 WHERE user_id = ? AND character_id = ? AND day = ?",
+        (due.conversation.user_id, due.conversation.character_id, due.day.isoformat()),
+    )

@@ -17,9 +17,8 @@ from eidolon.app import create_app
 from eidolon.call import CallOptions, SessionDescription
 from eidolon.config import Settings, UsageLimits
 from eidolon.own_keys import DeployerLease
-from eidolon.store import Store
 from tests.browser import TIMEOUT, Browser, open_browser, until_gone
-from tests.conftest import SITE, ClientFactory, sign_in
+from tests.conftest import SITE, ClientFactory, sign_in, store_in
 from tests.fakes import (
     FakeBackgroundLLM,
     FakeEmbedder,
@@ -184,8 +183,8 @@ async def test_a_call_failing_as_it_is_answered_never_connected_and_lets_go_of_i
         one_call_an_hour, FakeLLM(), background_llm=FakeBackgroundLLM(), speech=speech
     )
     try:
-        user = backend.store.create_user("producer").id
-        conversation = backend.store.create_conversation(user, "mano")
+        user = (await backend.store.create_user("producer")).id
+        conversation = await backend.store.create_conversation(user, "mano")
         released: list[None] = []
         lease = backend.config.lease
 
@@ -210,10 +209,10 @@ async def test_a_call_failing_as_it_is_answered_never_connected_and_lets_go_of_i
                 SessionDescription("v=0", "offer"),
             )
 
-        records, _ = backend.activity.since(backend.clock() - timedelta(hours=1))
+        records, _ = await backend.activity.since(backend.clock() - timedelta(hours=1))
         assert [(r.kind, r.result) for r in records] == [("call", "not_connected")]
         assert released == [None]
-        backend.usage.take(user, "call")  # given back: the hour's one call is still there
+        await backend.usage.take(user, "call")  # given back: the hour's one call is still there
     finally:
         await backend.aclose()
 
@@ -296,11 +295,8 @@ async def test_shutting_down_hangs_up_calls_and_drops_the_reply_in_progress(
     finally:
         await backend.calls.aclose()  # should shutting down leave a call behind
 
-    store = Store(settings.database_path)
-    try:
-        assert store.list_messages(conversation_id) == []
-    finally:
-        store.close()
+    async with store_in(settings.database_path) as store:
+        assert await store.list_messages(conversation_id) == []
 
 
 async def test_a_connection_that_will_not_close_is_given_up_and_the_call_still_ends(

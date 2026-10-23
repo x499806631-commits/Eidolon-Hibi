@@ -10,6 +10,7 @@ image service faked at its transport."""
 import asyncio
 import io
 import json
+import threading
 import zipfile
 from dataclasses import replace
 from pathlib import Path
@@ -18,6 +19,7 @@ import httpx
 import pytest
 from PIL import Image
 
+from eidolon import data_package
 from eidolon.config import Settings
 from tests.conftest import ClientFactory
 from tests.fakes import FAKE_JUDGE, FakeImageService, FakeLLM
@@ -248,6 +250,63 @@ async def test_a_package_made_elsewhere_brings_its_photos_of_any_size(
         {"status": "ready", "reason": None, "size": (64, 96)},
         {"status": "failed", "reason": "used_up"},
     ]
+
+
+async def test_pictures_unzipping_too_large_together_are_refused_as_broken(
+    make_client: ClientFactory, settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    client = deployment(make_client, settings, tmp_path, "here")
+    picture = webp()
+    monkeypatch.setattr(data_package, "MAX_PICTURES_BYTES", 2 * len(picture) - 1)
+
+    res = await import_package(client, with_photos(
+        photo("a"), photo("b"), pictures={"photos/a.webp": picture, "photos/b.webp": picture},
+    ), "conversations,photos")
+
+    assert res.status_code == 422
+    assert res.json()["code"] == "broken"
+    assert await hers(client) == []
+
+
+async def test_others_write_while_a_packages_pictures_are_unzipped(
+    make_client: ClientFactory, settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    client = deployment(make_client, settings, tmp_path, "here")
+    friend = deployment(make_client, settings, tmp_path, "here", user="friend")
+    loop = asyncio.get_running_loop()
+    unzipping: asyncio.Queue[threading.Event] = asyncio.Queue()
+    unzipped_as_is = data_package._unzipped
+
+    def slowly(zipped: zipfile.ZipFile, name: str, limit: int) -> bytes:
+        """Each picture unzipped only once the test lets it."""
+        if name.startswith(data_package.PHOTOS):
+            go = threading.Event()
+            loop.call_soon_threadsafe(unzipping.put_nowait, go)
+            go.wait(10)  # not for ever, should the test fail meanwhile
+        return unzipped_as_is(zipped, name, limit)
+
+    monkeypatch.setattr(data_package, "_unzipped", slowly)
+    importing = asyncio.create_task(import_package(client, with_photos(
+        photo("a"), photo("b"),
+        pictures={"photos/a.webp": webp(), "photos/b.webp": webp()},
+    ), "conversations,photos"))
+    saved = []
+    while True:
+        next_picture = asyncio.create_task(unzipping.get())
+        await asyncio.wait({next_picture, importing}, return_when=asyncio.FIRST_COMPLETED)
+        if not next_picture.done():
+            next_picture.cancel()
+            break
+        go = next_picture.result()
+        try:
+            saved.append(await asyncio.wait_for(
+                friend.put("/api/profile", json={"form_of_address": "P"}), 5
+            ))
+        finally:
+            go.set()
+
+    assert (await importing).status_code == 200
+    assert saved and all(res.status_code == 200 for res in saved)
 
 
 async def test_photos_not_as_the_package_says_are_refused_and_nothing_is_imported(

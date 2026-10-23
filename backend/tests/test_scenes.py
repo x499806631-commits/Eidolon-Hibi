@@ -149,7 +149,7 @@ async def test_she_asks_the_producer_for_a_moment_as_she_reaches_out(
     await talk.start(64)
     await talk.turn()
     backend = backend_of(talk.client)
-    conversation = backend.store.get_conversation(talk.conversation)
+    conversation = await backend.store.get_conversation(talk.conversation)
     assert conversation is not None
 
     await backend.engine.reach_out(conversation, talk.llm)
@@ -163,7 +163,9 @@ async def test_a_gift_at_the_door_is_held_too(make_client: ClientFactory, settin
     me = user_id(settings.database_path, "producer")
     backend = backend_of(talk.client)
 
-    _, status = backend.affinities.receive_gift(me, "mano", "rare", True, lambda change: change)
+    _, status = await backend.database.write(
+        backend.affinities.receive_gift, me, "mano", "rare", True
+    )
 
     assert status.tier == "trust"
     assert scenes(talk.database) == [("close", 0, False)]

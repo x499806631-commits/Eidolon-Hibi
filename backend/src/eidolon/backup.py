@@ -28,7 +28,6 @@ import re
 import shutil
 import sqlite3
 import tempfile
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -39,6 +38,7 @@ import httpx
 import pyrage
 
 from eidolon.clock import Clock
+from eidolon.data_access import Database
 from eidolon.database import connect
 from eidolon.s3 import NEEDED, Bucket, S3Error, S3Settings
 
@@ -315,7 +315,7 @@ class BackupRecord:
     finished_at: str | None
     """None while it is under way."""
     abandoned: bool
-    """Whether it was taken never to finish (`Backups.abandon_unfinished`)."""
+    """Whether it was taken never to finish (`abandon_unfinished`)."""
     exit_code: int | None
     """`eidolon backup`'s; None until it finished, and if it was abandoned."""
     key: str | None
@@ -386,7 +386,7 @@ class BackupStatus:
 
 
 class Backups:
-    """The backups of the database at `database`, and the record of each run kept in it,
+    """The backups of the database `db` is on, and the record of each run kept in it,
     which lets only one run be under way at a time, whether it is `eidolon backup` in a
     process of its own or the admin console's button in the server's. The lock is in the
     database rather than a lock file: the two processes share it, and on Windows, where
@@ -394,19 +394,16 @@ class Backups:
 
     def __init__(
         self,
-        database: Path,
+        db: Database,
         clock: Clock,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self._database = database
+        self._db = db
         self._clock = clock
         self._transport = transport
-        self._db = connect(database)
-        self._lock = threading.Lock()
         self._background: set[asyncio.Task[None]] = set()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
+        db.prepare(_create)
 
     async def run(
         self,
@@ -421,14 +418,14 @@ class Backups:
             loaded = settings()
         except RuntimeError as e:
             report = BackupReport(config_error=str(e))
-            self._finish(self._begin(source), report)
+            await self._finish(await self._begin(source), report)
             return report
-        run = self.start(source)
+        run = await self.start(source)
         if run is None:
             return BackupReport(busy=True)
         return await self._carry_out(run, loaded)
 
-    def begin(
+    async def begin(
         self,
         source: Source,
         settings: Callable[[], BackupSettings] = BackupSettings.from_env,
@@ -438,7 +435,7 @@ class Backups:
         Raises RuntimeError, having recorded nothing, if the settings will not do. `aclose`
         abandons it if it has not finished."""
         loaded = settings()
-        run = self.start(source)
+        run = await self.start(source)
         if run is None:
             return False
         task = asyncio.create_task(self._in_background(run, loaded))
@@ -446,7 +443,7 @@ class Backups:
         task.add_done_callback(self._background.discard)
         return True
 
-    def status(self) -> BackupStatus:
+    async def status(self) -> BackupStatus:
         """The backups as they are now, with their settings read from the environment
         now. A run begun over `STALE` ago and not finished is taken never to finish, as
         the next run to begin will take it."""
@@ -459,7 +456,7 @@ class Backups:
                 config_error = str(e)
         stale = (self._clock() - STALE).isoformat()
         under_way, finished = None, []
-        for record in self.records():
+        for record in await self.records():
             if record.finished_at is not None:
                 finished.append(record)
             elif record.started_at > stale:
@@ -487,46 +484,32 @@ class Backups:
             problem=problem,
         )
 
-    def start(self, source: Source) -> int | None:
+    async def start(self, source: Source) -> int | None:
         """Record a run begun now, unless another is under way (begun within `STALE` and
         not finished): its id, or None if there was one. Takes those begun before that
         and not finished never to finish, and forgets the records older than
         `RECORDS_KEPT`."""
-        return self._begin(source, exclusive=True)
+        return await self._begin(source, exclusive=True)
 
-    def records(self) -> list[BackupRecord]:
+    async def records(self) -> list[BackupRecord]:
         """Every run recorded, the latest first."""
-        with self._lock:
-            rows = self._db.execute(
-                f"SELECT {_COLUMNS} FROM backup_runs ORDER BY started_at DESC, id DESC"
-            ).fetchall()
-        return [_record(*row) for row in rows]
-
-    def abandon_unfinished(self) -> int:
-        """Take every run not finished never to finish, as after the database is restored
-        from a backup, which was made while its own run was under way; how many there
-        were."""
-        return self._abandon(None)
-
-    def close(self) -> None:
-        self._db.close()
+        return await self._db.read(_records)
 
     async def aclose(self) -> None:
-        """`close`, the runs begun in the background and not finished abandoned first."""
+        """Abandon the runs begun in the background and not finished."""
         for task in self._background:
             task.cancel()
         await asyncio.gather(*self._background, return_exceptions=True)
-        self.close()
 
     async def _carry_out(self, run: int, settings: BackupSettings) -> BackupReport:
         try:
             report = await back_up(
-                self._database, settings, now=self._clock(), transport=self._transport
+                self._db.path, settings, now=self._clock(), transport=self._transport
             )
         except BaseException:  # cancelled, as when the server shuts down
-            self._abandon(run)
+            await self._db.write(_abandon, self._clock().isoformat(), run)
             raise
-        self._finish(run, report)
+        await self._finish(run, report)
         return report
 
     async def _in_background(self, run: int, settings: BackupSettings) -> None:
@@ -538,55 +521,83 @@ class Backups:
         for wrong, line in describe(report):
             (log.warning if wrong else log.info)("backup: %s", line)
 
-    def _begin(self, source: Source, *, exclusive: bool = False) -> int | None:
-        now = self._clock()
-        unless = (
-            " WHERE NOT EXISTS (SELECT 1 FROM backup_runs"
-            " WHERE finished_at IS NULL AND started_at > :stale)"
+    async def _begin(self, source: Source, *, exclusive: bool = False) -> int | None:
+        return await self._db.write(_begin, source, self._clock(), exclusive)
+
+    async def _finish(self, run: int | None, report: BackupReport) -> None:
+        await self._db.write(_finish, run, report, self._clock().isoformat())
+
+
+def abandon_unfinished(database: Path, clock: Clock) -> int:
+    """Take every run not finished never to finish in the database at `database`, on a
+    connection of its own, as after it is restored from a backup, which was made while
+    its own run was under way; how many there were."""
+    db = connect(database)
+    try:
+        with db:
+            _create(db)
+            return _abandon(db, clock().isoformat(), None)
+    finally:
+        db.close()
+
+
+def _create(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+
+
+def _records(db: sqlite3.Connection) -> list[BackupRecord]:
+    rows = db.execute(
+        f"SELECT {_COLUMNS} FROM backup_runs ORDER BY started_at DESC, id DESC"
+    ).fetchall()
+    return [_record(*row) for row in rows]
+
+
+def _begin(db: sqlite3.Connection, source: Source, now: datetime, exclusive: bool) -> int | None:
+    unless = (
+        " WHERE NOT EXISTS (SELECT 1 FROM backup_runs"
+        " WHERE finished_at IS NULL AND started_at > :stale)"
+    )
+    times = {"now": now.isoformat(), "stale": (now - STALE).isoformat()}
+    db.execute(
+        "DELETE FROM backup_runs WHERE started_at < ?", ((now - RECORDS_KEPT).isoformat(),)
+    )
+    if exclusive:  # their processes were killed
+        db.execute(
+            "UPDATE backup_runs SET finished_at = :now, abandoned = 1"
+            " WHERE finished_at IS NULL AND started_at <= :stale",
+            times,
         )
-        times = {"now": now.isoformat(), "stale": (now - STALE).isoformat()}
-        with self._lock, self._db:
-            self._db.execute(
-                "DELETE FROM backup_runs WHERE started_at < ?",
-                ((now - RECORDS_KEPT).isoformat(),),
-            )
-            if exclusive:  # their processes were killed
-                self._db.execute(
-                    "UPDATE backup_runs SET finished_at = :now, abandoned = 1"
-                    " WHERE finished_at IS NULL AND started_at <= :stale",
-                    times,
-                )
-            # One statement, so that two processes cannot both find none under way.
-            begun = self._db.execute(
-                "INSERT INTO backup_runs (source, started_at) SELECT :source, :now"
-                + (unless if exclusive else ""),
-                times | {"source": source},
-            )
-        return begun.lastrowid if begun.rowcount == 1 else None
+    # One statement, so that two processes cannot both find none under way.
+    begun = db.execute(
+        "INSERT INTO backup_runs (source, started_at) SELECT :source, :now"
+        + (unless if exclusive else ""),
+        times | {"source": source},
+    )
+    return begun.lastrowid if begun.rowcount == 1 else None
 
-    def _finish(self, run: int | None, report: BackupReport) -> None:
-        with self._lock, self._db:
-            self._db.execute(
-                "UPDATE backup_runs SET finished_at = ?, exit_code = ?, key = ?, size = ?,"
-                " kept = ?, total = ?, over_warning = ?, config_error = ?, export_error = ?,"
-                " upload_error = ?, prune_error = ? WHERE id = ?",
-                (
-                    self._clock().isoformat(), report.exit_code, report.key,
-                    report.size if report.key is not None else None, report.kept,
-                    report.total, report.space_warning is not None, report.config_error,
-                    report.export_error, report.upload_error, report.prune_error, run,
-                ),
-            )
 
-    def _abandon(self, run: int | None) -> int:
-        """Take the run `run`, or every one if None, never to finish, if it has not."""
-        with self._lock, self._db:
-            abandoned = self._db.execute(
-                "UPDATE backup_runs SET finished_at = ?, abandoned = 1"
-                " WHERE finished_at IS NULL AND (? IS NULL OR id = ?)",
-                (self._clock().isoformat(), run, run),
-            )
-        return abandoned.rowcount
+def _finish(db: sqlite3.Connection, run: int | None, report: BackupReport, now: str) -> None:
+    db.execute(
+        "UPDATE backup_runs SET finished_at = ?, exit_code = ?, key = ?, size = ?,"
+        " kept = ?, total = ?, over_warning = ?, config_error = ?, export_error = ?,"
+        " upload_error = ?, prune_error = ? WHERE id = ?",
+        (
+            now, report.exit_code, report.key,
+            report.size if report.key is not None else None, report.kept,
+            report.total, report.space_warning is not None, report.config_error,
+            report.export_error, report.upload_error, report.prune_error, run,
+        ),
+    )
+
+
+def _abandon(db: sqlite3.Connection, now: str, run: int | None) -> int:
+    """Take the run `run`, or every one if None, never to finish, if it has not."""
+    abandoned = db.execute(
+        "UPDATE backup_runs SET finished_at = ?, abandoned = 1"
+        " WHERE finished_at IS NULL AND (? IS NULL OR id = ?)",
+        (now, run, run),
+    )
+    return abandoned.rowcount
 
 
 def _record(

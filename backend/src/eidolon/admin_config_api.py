@@ -22,6 +22,7 @@ from eidolon.config import (
     ImageFormat,
     JudgeProvider,
     LLMProtocol,
+    checked_base_url,
     SttProvider,
 )
 from eidolon.live_config import (
@@ -72,7 +73,19 @@ class LLMInput(BaseModel):
     extra_body: Any = None
     api_key: str | None = ApiKey
 
-    _trim = field_validator("base_url", "model")(_trimmed)
+    _trim = field_validator("model")(_trimmed)
+    _base_url = field_validator("base_url")(checked_base_url)
+
+
+class LLMListInput(BaseModel):
+    """Where a model slot's service is, for it to list the models it offers the key;
+    without `api_key`, the key in effect now, at the address it is in effect for."""
+
+    protocol: LLMProtocol
+    base_url: str = Field(min_length=1, max_length=500)
+    api_key: str | None = ApiKey
+
+    _base_url = field_validator("base_url")(checked_base_url)
 
 
 class ChatLLMInput(LLMInput):
@@ -152,6 +165,7 @@ class LimitsInput(BaseModel):
     photos_per_hour: Any
     call_minutes: Any
     turns_per_call: Any
+    concurrent_calls: Any
     history_turns: Any
     exempting_llm: Any
     exempting_tts: Any
@@ -277,6 +291,20 @@ def add_admin_config_routes(app: FastAPI, backend: Backend) -> None:
         except ConfigRejected as e:
             raise HTTPException(422, f"试调失败，没有保存：{e}") from None
         return config.describe()
+
+    @app.post("/api/admin/config/{item}/models")
+    async def list_models(item: str, body: LLMListInput, _: Admin) -> dict:
+        """The models the service offers the key, as it lists them, for the model slot
+        `item` to pick one from; 422 saying why not."""
+        if item not in (CHAT_LLM, MEMORY_LLM):
+            raise HTTPException(404, "这一项不是模型")
+        try:
+            models = await config.list_models(
+                item, body.protocol, body.base_url, _trimmed_if_given(body.api_key)
+            )
+        except ConfigRejected as e:
+            raise HTTPException(422, f"获取模型失败：{e}") from None
+        return {"models": models}
 
     @app.delete("/api/admin/config/{item}")
     async def restore(item: str, _: Admin) -> dict:

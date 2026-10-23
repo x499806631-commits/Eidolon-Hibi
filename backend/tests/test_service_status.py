@@ -41,7 +41,7 @@ def backend_of(client: httpx.AsyncClient) -> Backend:
     return client._transport.app.state.backend  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def made(
+async def made(
     client: httpx.AsyncClient,
     service: ServiceName,
     calls: int = 1,
@@ -53,7 +53,7 @@ def made(
     """Record `calls` calls to `service` made `ago`, the first `failed` of them failing."""
     backend = backend_of(client)
     for i in range(calls):
-        backend.activity.record(
+        await backend.activity.record(
             ServiceCall(
                 Origin(service, "provider.example", "model", own_key=own_key),
                 backend.clock() - ago, "timeout" if i < failed else None, 100.0, Billing(),
@@ -72,11 +72,11 @@ async def test_each_service_goes_by_the_share_of_its_calls_on_the_deployers_keys
     make_client: ClientFactory,
 ):
     client = make_client(FakeLLM(), clock=FakeClock())
-    made(client, "chat_llm", 20)
-    made(client, "chat_llm", 10, failed=10, own_key=True)  # a user's own key says nothing
-    made(client, "memory_llm", 20, failed=1)
-    made(client, "tts", 2, failed=1)
-    made(client, "stt", 3, failed=3, ago=timedelta(minutes=31))  # before the window
+    await made(client, "chat_llm", 20)
+    await made(client, "chat_llm", 10, failed=10, own_key=True)  # a user's own key says nothing
+    await made(client, "memory_llm", 20, failed=1)
+    await made(client, "tts", 2, failed=1)
+    await made(client, "stt", 3, failed=3, ago=timedelta(minutes=31))  # before the window
 
     res = await client.get(STATUS)
 
@@ -111,7 +111,7 @@ async def test_a_service_without_calls_is_tried_twice_before_it_is_down_and_once
         reranker=reranker,
     )
     backend = backend_of(client)
-    made(client, "memory_llm", 3)
+    await made(client, "memory_llm", 3)
     speech.rejects[DEPLOYER_FISH_KEY] = "Fish Audio 返回 503"
     reranker.down = True
 
@@ -137,7 +137,7 @@ async def test_a_service_without_calls_is_tried_twice_before_it_is_down_and_once
     assert len(embedder.queries) == 2
     assert len(reranker.calls) == 4
     # Nothing tried is recorded: neither the dashboard's usage nor its costs count it.
-    _, calls = backend.activity.since(clock() - timedelta(hours=1))
+    _, calls = await backend.activity.since(clock() - timedelta(hours=1))
     assert [c.service for c in calls] == ["memory_llm"] * 3
 
 

@@ -149,12 +149,9 @@ async def test_she_is_told_whether_the_turn_is_typed_or_in_a_call_after_what_is_
     client = make_client(typed_llm)
     conversation = await start_conversation(client, "mano")
     await send_turn(client, conversation, "早上好")
-    call = CallUnderTest(settings, client, conversation)
+    call = await CallUnderTest.of(settings, client, conversation)
     call_llm = FakeLLM(MANO_REPLY)
-    try:
-        await call.run(call_llm, [spoken("早上好")])
-    finally:
-        call.close()
+    await call.run(call_llm, [spoken("早上好")])
 
     [typed], [in_call] = typed_llm.prompts, call_llm.prompts
     assert TYPING in context_of(typed) and IN_A_CALL not in context_of(typed)
@@ -177,12 +174,9 @@ async def test_an_asmr_calls_turns_are_told_to_speak_softly_whispering_as_the_vo
     conversation = await start_conversation(client, "mano")
     told = []
     for asmr in (True, False):
-        call = CallUnderTest(settings, client, conversation)
+        call = await CallUnderTest.of(settings, client, conversation)
         llm = FakeLLM(MANO_REPLY)
-        try:
-            await call.run(llm, [spoken("晚上好")], asmr=asmr)
-        finally:
-            call.close()
+        await call.run(llm, [spoken("晚上好")], asmr=asmr)
         [prompt] = llm.prompts
         told.append(ASMR in context_of(prompt))
         if asmr:

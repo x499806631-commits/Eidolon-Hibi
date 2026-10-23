@@ -73,7 +73,7 @@ async def draft_sheet(
     if budget < MIN_BUDGET:
         raise ValueError(f"budget must be at least {MIN_BUDGET}")
     path = check_output(output or _sheet_path(character), overwrite)
-    episodes = corpus.list_episodes(character.id)
+    episodes = await corpus.list_episodes(character.id)
     if not episodes:
         raise NoEpisodes(f"剧情库里没有 {character.name} 出场的剧情，请先导入剧情并检查 speakers")
 

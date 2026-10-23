@@ -211,7 +211,7 @@ async def test_conversation_with_a_character_removed_from_the_configuration_is_g
     assert res.json()["detail"] == "角色不存在"
 
 
-def test_repository_configures_its_idols_with_their_voices():
+def test_repository_configures_its_characters_with_their_voices():
     loaded = load_characters(REPO_CHARACTERS / "characters.toml")
 
     assert {id: c.voice_id for id, c in loaded.items()} == {
@@ -243,6 +243,7 @@ def test_repository_configures_its_idols_with_their_voices():
         "luca": "79e3dd87aa7649dab07350896ce995ae",
         "hana": "ccfce7160c664853813988cea175d1ab",
         "haruki": "5dd68541a9a04f50b9332572e0d266ff",
+        "hazuki": "a061289170654e1a9dda177a28764651",
     }
     assert {id: c.name for id, c in loaded.items()} == {
         "mano": "櫻木真乃",
@@ -273,6 +274,7 @@ def test_repository_configures_its_idols_with_their_voices():
         "luca": "斑鳩ルカ",
         "hana": "鈴木羽那",
         "haruki": "郁田はるき",
+        "hazuki": "七草はづき",  # the office's clerk, not an idol
     }
     assert {id: c.speakers for id, c in loaded.items()} == {
         "mano": ("真乃",),
@@ -303,6 +305,7 @@ def test_repository_configures_its_idols_with_their_voices():
         "luca": ("ルカ",),
         "hana": ("羽那",),
         "haruki": ("はるき",),
+        "hazuki": ("はづき",),
     }
     assert all(c.sheet and c.facts and c.avatar and c.scsp_avatar for c in loaded.values())  # committed (ADR-0003)
     assert {id: c.color for id, c in loaded.items()} == {
@@ -334,6 +337,7 @@ def test_repository_configures_its_idols_with_their_voices():
         "luca": "#24130d",
         "hana": "#e0b5d3",
         "haruki": "#ead7a4",
+        "hazuki": "#c3d825",
     }
 
 
@@ -527,13 +531,14 @@ def test_other_names_must_each_be_a_line_of_text(tmp_path: Path, field: str, val
         load_characters(config.path)
 
 
-def test_repository_gives_each_idol_her_other_names():
+def test_repository_gives_each_character_her_other_names():
     """Her reading has a space between her family name and her given name, and is the
-    world setting's reading of her name but for it."""
+    world setting's reading of her name but for it (an idol's, or the office staff's for the
+    clerk)."""
     loaded = load_characters(REPO_CHARACTERS / "characters.toml")
+    world = json.loads((REPO_CHARACTERS / "world.json").read_text(encoding="utf-8"))
     readings = {
-        idol["name"]: idol["reading"]
-        for idol in json.loads((REPO_CHARACTERS / "world.json").read_text(encoding="utf-8"))["idols"]
+        person["name"]: person["reading"] for person in world["idols"] + world["office"]["staff"]
     }
 
     for c in loaded.values():
@@ -542,7 +547,7 @@ def test_repository_gives_each_idol_her_other_names():
         assert re.fullmatch(r"[A-Z][a-z]+ [A-Z][a-z]+", c.name_romaji), c.id
 
 
-def test_repository_gives_each_idol_her_photo_tags():
+def test_repository_gives_each_character_her_photo_tags():
     """Her character tag in lower case, and her looks with one eye colour among them."""
     loaded = load_characters(REPO_CHARACTERS / "characters.toml")
 
@@ -554,7 +559,7 @@ def test_repository_gives_each_idol_her_photo_tags():
         assert len(eye_colours) == 1, c.id  # `hair between eyes` is how her bangs fall
 
 
-def test_repository_gives_its_idols_their_idol_ids_and_default_outfits():
+def test_repository_gives_its_characters_their_idol_ids_and_default_outfits():
     loaded = load_characters(REPO_CHARACTERS / "characters.toml")
 
     assert {id: (c.idol_id, c.default_outfit) for id, c in loaded.items()} == {
@@ -586,6 +591,7 @@ def test_repository_gives_its_idols_their_idol_ids_and_default_outfits():
         "luca": (26, "stand/1030260010"),
         "hana": (27, "stand/1030270010"),
         "haruki": (28, "stand/1030280010"),
+        "hazuki": (91, "stand/2040910010"),
     }
 
 

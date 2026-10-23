@@ -15,11 +15,11 @@ def add_promise_routes(app: FastAPI, backend: Backend) -> None:
         return
 
     @app.get("/api/promises")
-    def list_promises(user_id: UserId) -> list[dict]:
-        return [promise.shown() for promise in promises.open_for(user_id)]
+    async def list_promises(user_id: UserId) -> list[dict]:
+        return [promise.shown() for promise in await promises.open_for(user_id)]
 
     @app.post("/api/promises/{promise_id}/fulfil")
-    def fulfil(user_id: UserId, promise_id: int) -> dict:
-        if not promises.fulfil(user_id, promise_id):
+    async def fulfil(user_id: UserId, promise_id: int) -> dict:
+        if not await promises.fulfil(user_id, promise_id):
             raise HTTPException(404, "没有这个约定")
         return {"ok": True}

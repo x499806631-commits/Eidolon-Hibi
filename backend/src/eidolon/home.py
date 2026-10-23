@@ -12,13 +12,12 @@ import asyncio
 import json
 import logging
 import sqlite3
-import threading
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Literal, get_args
 
 from eidolon.activity import ActivityLog, image_origin, timed
-from eidolon.database import connect
+from eidolon.data_access import Database
+from eidolon.database import by_name
 from eidolon.image_generation import TIME_LIMIT, ImageFailed
 from eidolon.live_config import LiveConfig
 from eidolon.photo_prompt import home_prompt
@@ -78,27 +77,24 @@ class NoSuchPhoto(Exception):
 
 
 class Home:
-    def __init__(self, path: Path, config: LiveConfig, activity: ActivityLog) -> None:
+    def __init__(self, db: Database, config: LiveConfig, activity: ActivityLog) -> None:
         self._config = config
         self._activity = activity
-        self._db = connect(path)
-        self._db.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
-            if "layouts" not in {r[1] for r in self._db.execute("PRAGMA table_info(homes)")}:
-                self._db.execute("ALTER TABLE homes ADD COLUMN layouts TEXT")
+        self._db = db
+        db.prepare(_open)
 
-    def of(self, user_id: str) -> HomeState:
+    async def of(self, user_id: str) -> HomeState:
         """The user's home as they set it out; an apartment with nothing framed if never."""
-        with self._lock:
-            row = self._db.execute(
-                "SELECT room, framed_photo, layouts FROM homes WHERE user_id = ?", (user_id,)
-            ).fetchone()
+        return await self._db.read(self._of_body, user_id)
+
+    def _of_body(self, db: sqlite3.Connection, user_id: str) -> HomeState:
+        row = by_name(db).execute(
+            "SELECT room, framed_photo, layouts FROM homes WHERE user_id = ?", (user_id,)
+        ).fetchone()
         if row is None:
             return HomeState()
         framed = row["framed_photo"]
-        if framed is not None and not self._sent(user_id, framed):
+        if framed is not None and not self._sent_in(db, user_id, framed):
             framed = None  # its conversation deleted since
         layouts = {
             room: {thing: (float(at[0]), float(at[1])) for thing, at in layout.items()}
@@ -106,7 +102,7 @@ class Home:
         }
         return HomeState(row["room"], framed, layouts)
 
-    def set(
+    async def set(
         self, user_id: str, room: Room | None = None, framed_photo: str | None = None,
         unframe: bool = False, layout: Layout | None = None,
     ) -> HomeState:
@@ -114,9 +110,16 @@ class Home:
         `unframe`, and the room (as it is then) set out as `layout` if given: the things it
         names, each kept within the picture, those it does not where they were. Raises
         NoSuchPhoto for a photo not sent them."""
-        if framed_photo is not None and not self._sent(user_id, framed_photo):
+        return await self._db.write(self._set_body, user_id, room, framed_photo, unframe, layout)
+
+    def _set_body(
+        self,
+        db: sqlite3.Connection, user_id: str, room: Room | None = None, framed_photo: str | None = None,
+        unframe: bool = False, layout: Layout | None = None,
+    ) -> HomeState:
+        if framed_photo is not None and not self._sent_in(db, user_id, framed_photo):
             raise NoSuchPhoto()
-        now = self.of(user_id)
+        now = self._of_body(db, user_id)
         room = room or now.room
         framed = None if unframe else (framed_photo or now.framed_photo)
         layouts = dict(now.layouts)
@@ -126,32 +129,35 @@ class Home:
                 if thing in THINGS:
                     set_out[thing] = (min(max(x, 0.0), 1.0), min(max(y, 0.0), 1.0))
             layouts[room] = set_out
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT INTO homes (user_id, room, framed_photo, layouts) VALUES (?, ?, ?, ?)"
-                " ON CONFLICT (user_id) DO UPDATE SET room = excluded.room,"
-                " framed_photo = excluded.framed_photo, layouts = excluded.layouts",
-                (user_id, room, framed, json.dumps(layouts)),
-            )
+        by_name(db).execute(
+            "INSERT INTO homes (user_id, room, framed_photo, layouts) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT (user_id) DO UPDATE SET room = excluded.room,"
+            " framed_photo = excluded.framed_photo, layouts = excluded.layouts",
+            (user_id, room, framed, json.dumps(layouts)),
+        )
         return HomeState(room, framed, layouts)
 
     def can_draw(self) -> bool:
         """Whether rooms' pictures are drawn: on the deployer's image generation."""
         return self._config.image_generator() is not None
 
-    def drawn(self, user_id: str, room: Room) -> int | None:
+    async def drawn(self, user_id: str, room: Room) -> int | None:
         """How many times the room's picture has been drawn for the user; None if never."""
-        with self._lock:
-            row = self._db.execute(
-                "SELECT drawn FROM home_backgrounds WHERE user_id = ? AND room = ?", (user_id, room)
-            ).fetchone()
+        return await self._db.read(self._drawn_body, user_id, room)
+
+    def _drawn_body(self, db: sqlite3.Connection, user_id: str, room: Room) -> int | None:
+        row = by_name(db).execute(
+            "SELECT drawn FROM home_backgrounds WHERE user_id = ? AND room = ?", (user_id, room)
+        ).fetchone()
         return row["drawn"] if row else None
 
-    def background(self, user_id: str, room: Room) -> bytes | None:
-        with self._lock:
-            row = self._db.execute(
-                "SELECT image FROM home_backgrounds WHERE user_id = ? AND room = ?", (user_id, room)
-            ).fetchone()
+    async def background(self, user_id: str, room: Room) -> bytes | None:
+        return await self._db.read(self._background_body, user_id, room)
+
+    def _background_body(self, db: sqlite3.Connection, user_id: str, room: Room) -> bytes | None:
+        row = by_name(db).execute(
+            "SELECT image FROM home_backgrounds WHERE user_id = ? AND room = ?", (user_id, room)
+        ).fetchone()
         return row["image"] if row else None
 
     async def draw(self, user_id: str, room: Room) -> bool:
@@ -171,42 +177,52 @@ class Home:
                 )).webp
         except (ImageFailed, TimeoutError) as e:
             log.warning("a room's picture was not drawn: %s", e)
-            recording.finish("failed")
+            await recording.finish("failed")
             return False
-        recording.finish("success")
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT INTO home_backgrounds (user_id, room, image, drawn) VALUES (?, ?, ?, 1)"
-                " ON CONFLICT (user_id, room) DO UPDATE SET image = excluded.image,"
-                " drawn = drawn + 1",
-                (user_id, room, image),
-            )
+        await recording.finish("success")
+        await self._db.write(_keep_background, user_id, room, image)
         return True
 
-    def album(self, user_id: str) -> list[AlbumPhoto]:
+    async def album(self, user_id: str) -> list[AlbumPhoto]:
         """The photos sent the user that came out, newest first, `ALBUM_SIZE` at most."""
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT p.id, c.character_id, p.created_at FROM (SELECT id, status,"
-                " conversation_id, created_at FROM photos UNION ALL SELECT id, status,"
-                " conversation_id, created_at FROM reach_out_photos) p"
-                " JOIN conversations c ON c.id = p.conversation_id"
-                " WHERE c.user_id = ? AND p.status = 'ready'"
-                " ORDER BY p.created_at DESC LIMIT ?",
-                (user_id, ALBUM_SIZE),
-            ).fetchall()
+        return await self._db.read(self._album_body, user_id)
+
+    def _album_body(self, db: sqlite3.Connection, user_id: str) -> list[AlbumPhoto]:
+        rows = by_name(db).execute(
+            "SELECT p.id, c.character_id, p.created_at FROM (SELECT id, status,"
+            " conversation_id, created_at FROM photos UNION ALL SELECT id, status,"
+            " conversation_id, created_at FROM reach_out_photos) p"
+            " JOIN conversations c ON c.id = p.conversation_id"
+            " WHERE c.user_id = ? AND p.status = 'ready'"
+            " ORDER BY p.created_at DESC LIMIT ?",
+            (user_id, ALBUM_SIZE),
+        ).fetchall()
         return [AlbumPhoto(r["id"], r["character_id"], r["created_at"]) for r in rows]
 
-    def _sent(self, user_id: str, photo_id: str) -> bool:
-        with self._lock:
-            return self._db.execute(
-                "SELECT 1 FROM (SELECT id, status, conversation_id FROM photos UNION ALL"
-                " SELECT id, status, conversation_id FROM reach_out_photos) p"
-                " JOIN conversations c ON c.id = p.conversation_id"
-                " WHERE p.id = ? AND c.user_id = ? AND p.status = 'ready'",
-                (photo_id, user_id),
-            ).fetchone() is not None
+    async def _sent(self, user_id: str, photo_id: str) -> bool:
+        return await self._db.read(self._sent_in, user_id, photo_id)
 
-    def close(self) -> None:
-        with self._lock:
-            self._db.close()
+    def _sent_in(self, db: sqlite3.Connection, user_id: str, photo_id: str) -> bool:
+        return by_name(db).execute(
+            "SELECT 1 FROM (SELECT id, status, conversation_id FROM photos UNION ALL"
+            " SELECT id, status, conversation_id FROM reach_out_photos) p"
+            " JOIN conversations c ON c.id = p.conversation_id"
+            " WHERE p.id = ? AND c.user_id = ? AND p.status = 'ready'",
+            (photo_id, user_id),
+        ).fetchone() is not None
+
+
+
+def _open(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+    if "layouts" not in {r[1] for r in db.execute("PRAGMA table_info(homes)")}:
+        db.execute("ALTER TABLE homes ADD COLUMN layouts TEXT")
+
+
+def _keep_background(db: sqlite3.Connection, user_id: str, room: str, image: bytes) -> None:
+    db.execute(
+        "INSERT INTO home_backgrounds (user_id, room, image, drawn) VALUES (?, ?, ?, 1)"
+        " ON CONFLICT (user_id, room) DO UPDATE SET image = excluded.image,"
+        " drawn = drawn + 1",
+        (user_id, room, image),
+    )

@@ -11,8 +11,8 @@ as it turned out once, by `settle`: a text turn's `Admission`, which keeps the u
 gives it back and writes its record, or the record of a turn in a call.
 """
 
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 
 from eidolon.activity import Recording, Result
 from eidolon.engine import TurnDone, TurnEvent, TurnFailed, TurnJudged, TurnRejected
@@ -21,21 +21,21 @@ from eidolon.engine import TurnDone, TurnEvent, TurnFailed, TurnJudged, TurnReje
 class TurnOutcome:
     """One turn, recorded in `recording`, until it is over and settled by `settle`."""
 
-    def __init__(self, recording: Recording, settle: Callable[[Result], None]) -> None:
+    def __init__(self, recording: Recording, settle: Callable[[Result], Awaitable[None]]) -> None:
         self._recording = recording
         self._settle = settle
         self._result: Result | None = None
         self._over = False
 
-    @contextmanager
-    def running(self) -> Iterator[None]:
+    @asynccontextmanager
+    async def running(self) -> AsyncIterator[None]:
         """While a text turn runs: its service calls are recorded under it, and once it
         is over, however it ended, so is the turn."""
         try:
             with self.current():
                 yield
         finally:
-            self.over(cut_short_by_failure=False)
+            await self.over(cut_short_by_failure=False)
 
     @contextmanager
     def current(self) -> Iterator[None]:
@@ -58,11 +58,13 @@ class TurnOutcome:
         """The character began to speak (only the first time counts)."""
         self._recording.spoke()
 
-    def over(self, cut_short_by_failure: bool) -> None:
+    async def over(self, cut_short_by_failure: bool) -> None:
         """The turn is over: settled as it turned out, once. One over without a result
         failed if a failure cut it short, and was left by the user otherwise, as is one
-        the user left before it began, which never ran."""
+        the user left before it began, which never ran. Its record is handed in to be
+        written with the service calls made in it so far; those made after, as a photo's
+        that comes out later, are written under it apart."""
         if self._over:
             return
         self._over = True
-        self._settle(self._result or ("failed" if cut_short_by_failure else "left"))
+        await self._settle(self._result or ("failed" if cut_short_by_failure else "left"))

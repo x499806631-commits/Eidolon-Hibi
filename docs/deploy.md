@@ -56,7 +56,7 @@ cp .env.example .env
   - 免费层每分钟最多向量化 100 条文本（一次批量请求里的每条文本都各算一次请求）。同步、导入和 `eidolon reembed` 碰到限流会按 Google 给的时间自动等待再继续，所以能跑完，只是整个剧情库要花上几十分钟以上；免费层可能还有每天的上限（在 AI Studio 的 Rate Limit 页面查看），碰到时命令会报错退出，第二天重新运行即可接着做。对话中的查询不等待：限流时这一回合不带检索结果照常回复。
   - **公开部署不要用免费层**（ADR-0005 的修订）：免费层的内容会被 Google 用于改进产品，送去向量化的包括剧情库（没有许可证的剧情文本，ADR-0003）和陌生用户的记忆。在 AI Studio 开通计费（付费层的内容不用于训练；文本约 $0.20 / 百万 token，全量剧情库重新向量化一次只要几美元），然后在 `.env` 里填 `GEMINI_BILLING_ENABLED=1` 声明已开计费；没有声明时，公开部署的后端每次启动都会在日志里警告。不想开计费就改用硅基流动。
 
-28 位偶像的人设、资料和头像都已随仓库提交，新增角色的步骤见[配置指南](configuration.md)的「角色」。启动：
+28 位偶像和事务员七草はづき的人设、资料和头像都已随仓库提交，新增角色的步骤见[配置指南](configuration.md)的「角色」。启动：
 
 ```sh
 docker compose -f docker-compose.prod.yml pull
@@ -66,6 +66,10 @@ docker compose -f docker-compose.prod.yml up -d
 前端和后端用 CI 发布到 GHCR 的镜像（`ghcr.io/sallyn0225/eidolon-sc-frontend`、`-backend`），服务器上不用构建。镜像只有 linux/amd64 一种。arm64 的服务器，或者想用自己改过的代码时，改用 `up -d --build` 在服务器上构建。
 
 第一次启动时 Caddy 会申请证书，稍等片刻后用浏览器打开 `https://你的域名`。后端启动失败时（缺少人设文件、对话模型检查不通过等），用 `docker compose -f docker-compose.prod.yml logs backend` 查看原因。
+
+- **日志**：每个容器的日志最多留 5 个 10 MB 的文件，旧的自动删掉。后端每行都带时间和来源；访问日志不记查询字符串。事件循环比预期晚醒 200 ms 以上时，后端会记一条 `the event loop ran … ms late, … calls in progress`，可以用来判断机器是否忙不过来。
+- **健康检查**：后端的 `/api/health` 读不了数据库时返回 503，`docker compose ps` 里显示为 unhealthy，但不会自动重启。
+- **停止和更新**：后端停止时，先给进行中的请求 20 秒（比如正在生成的文字回复），然后挂断所有通话。所以更新时正在进行的通话会断开，但都会正常结算。
 
 不用自带的 Caddy、自己配反向代理（nginx 等）的，要给 `/api/account/data-package` 这一个地址放开请求体的大小上限到 200 MiB：用户导入的数据包就是这个地址的请求体，nginx 默认只放 1 MB（`client_max_body_size 200m;`）。后端自己也会拒绝超过 200 MiB 的数据包。
 
@@ -496,7 +500,7 @@ uv run eidolon reading draft
 
 ## 后台
 
-后台是同一个网站上的 `/admin`，只有管理者能进入（ADR-0013）：看板（各项服务是否正常、用量、估算的花费）、配置（模型、key、限额、单价）和用户（搜索、封禁、单独限额、删除）。管理者在后台里看不到任何用户的对话、记忆和制作人档案，也看不到、改不了某位用户的好感度、礼物和抽奖次数，只能看到所有用户合起来的统计；判断模型误判时，可以在配置页给所有现有用户各发一张重置卡（见[配置指南](configuration.md#好感度和礼物)）。其他人看不到入口，访问 `/admin` 和后台接口都得到 404。
+后台是同一个网站上的 `/admin`，只有管理者能进入（ADR-0013）：看板（各项服务是否正常、用量、估算的花费）、配置（模型、key、限额、单价）和用户（搜索、封禁、单独限额、删除）。管理者在后台里看不到任何用户的对话、记忆和制作人档案，也看不到、改不了某位用户的好感度、礼物、抽奖次数、每日任务和成就，只能看到所有用户合起来的统计；判断模型误判时，可以在配置页给所有现有用户各发一张重置卡（见[配置指南](configuration.md#好感度和礼物)）。其他人看不到入口，访问 `/admin` 和后台接口都得到 404。
 
 ### 开启后台
 
@@ -572,7 +576,7 @@ docker compose -f docker-compose.prod.yml restart backend
 
 ## 升级
 
-等 main 上这次提交的 CI 跑完（GitHub 的 Actions 页面显示通过；镜像只在检查全部通过后才发布），然后：
+等 main 上这次提交的 CI 跑完（GitHub 的 Actions 页面显示通过；镜像只在检查全部通过后才发布）。这次升级要改数据库结构（加表、加列，或者像看板的汇总表那样启动时要回填）的，先手动备份一次（`deploy/db-backup.sh`，见「备份」），然后：
 
 ```sh
 git pull
@@ -582,9 +586,57 @@ docker compose -f docker-compose.prod.yml up -d
 
 `git pull` 不能省：人设、`deploy/` 下的脚本和 compose 配置本身都来自仓库，不在镜像里。
 
+加上成就的那次升级，新版本启动时会补算一次：从已有的回合、通话、送礼和好感度记录算出每位用户已经到了哪些成就阶段，把抽奖次数和重置卡发到账上；抽过几次奖以前没有记，从 0 算起。不管「好感度和礼物」开没开都算，只跑这一次。升级前照上面先手动备份；启动后在日志里找 `achievements launched: …` 这一行，看补了多少位用户、多少个阶段、发出多少次抽奖和几张重置卡。
+
 `deploy/Caddyfile` 变了的那次升级（比如加了数据包导入地址的大小上限），`up -d` 不会让 Caddy 重新读它，要再执行一次 `docker compose -f docker-compose.prod.yml restart caddy`。服务器上另有叠加的 Caddyfile 的，同样改过去。
 
 CI 在 main 上的每次推送都发布 `:main`（默认用的就是它）和 `:sha-<7 位提交哈希>`，推送 `v1.2.3` 这样的标签时另外发布 `:1.2.3` 和 `:latest`。升级后出了问题，在 `.env` 里把 `EIDOLON_IMAGE_TAG` 设为上一版的 `sha-…`（在仓库的 Packages 页面或 `git log --oneline` 里找），再 `up -d` 即可回滚；之后删掉这一行，回到跟随 main。只回滚镜像不回滚数据库：新版本改过数据库结构时，旧版本不一定能用，回滚前看一眼这次升级的提交说明。
+
+看板读的是运行记录写入时顺手累加的汇总表，加上汇总表以前的版本写运行记录时不累加。回滚到那样的旧版本、过一阵再升级回来，中间那段就不会进看板。所以升级回来之前（旧版本还在跑的时候），先把汇总表删掉，新版本启动时会发现汇总表是空的，从运行记录重新汇总一遍（线上 20 多万条服务调用约 3 秒）：
+
+```sh
+docker compose -f docker-compose.prod.yml exec -T backend python -c "
+import sqlite3
+db = sqlite3.connect('/data/eidolon.db')
+db.execute('DROP TRIGGER IF EXISTS record_rollups_answered')
+for t in ['record_rollups', 'taken_rollups', 'user_rollups', 'call_rollups', 'spread_rollups']:
+    db.execute(f'DROP TABLE IF EXISTS {t}')
+db.commit()
+"
+```
+
+### 发版本
+
+平时部署跟随 main，不用发版本。想给一批改动定一个版本号、写一份更新说明时，在 GitHub 的 Actions 页面选 Release，点 Run workflow 手动触发（只能选 main）：
+
+- **版本号升哪一位**：patch / minor / major，从最新的 `v*` 标签往上加；还没有标签时是 `v0.1.0`。也可以直接填一个版本号。
+- **先存草稿**：不勾时直接发布；勾了只存一份草稿 Release，在网页上看过、改过再点发布。
+
+它会在 main 的最新提交上发 Release，更新说明由 LLM 根据上一个版本以来合进 main 的 PR 和提交来写（[`scripts/release_notes.py`](../scripts/release_notes.py)）；首个版本写的是功能总览。然后把这个提交在 main 上测过的镜像重新打成 `:1.2.3` 和 `:latest`，不重新构建。所以要等 main 上这次提交的 CI 跑完再触发，没跑完时会直接失败。勾了草稿的，标签在你发布时才打，CI 会照常跑一遍并发布这两个镜像标签。
+
+第一次用之前，在仓库的 Settings → Secrets and variables → Actions 里配好 LLM（OpenAI 兼容的 `/chat/completions` 接口）：
+
+| 名字 | 放在 | 填什么 |
+| --- | --- | --- |
+| `RELEASE_LLM_BASE_URL` | Variables | 服务地址，如 `https://api.openai.com/v1` |
+| `RELEASE_LLM_MODEL` | Variables | 模型名 |
+| `RELEASE_LLM_API_KEY` | Secrets | API 密钥 |
+
+想先看看会给 LLM 什么材料：`python3 scripts/release_notes.py --version v0.2.0 --prev v0.1.0 --dry-run`（要装好 `gh` 并登录）。
+
+### issue 查重
+
+有人新开 issue 时，Issue duplicates workflow 会让 LLM 在以前的 issue（含已关闭的）里找同一个问题，找到就评论列出最多三个（[`scripts/issue_duplicates.py`](../scripts/issue_duplicates.py)）。它只评论，不打标签、不关 issue。LLM 用上面发版本的那三项配置，没配就跳过。
+
+想先试效果：在 Actions 页面选 Issue duplicates，点 Run workflow，填一个 issue 编号，不勾「找到了就评论」，结果只出现在运行日志里。本机看给 LLM 的材料：`python3 scripts/issue_duplicates.py 159 --dry-run`。
+
+### 玩法仓库登记
+
+有人用「玩法仓库登记」模板开 issue 时，Fork showcase workflow 会检查仓库地址：能不能打开、是不是公开、仓库名是不是还叫 eidolon-sc（[`scripts/fork_showcase.py`](../scripts/fork_showcase.py)）。结果写在一条评论里，对方编辑 issue 后会更新这条评论；没通过就打 `needs-info`，通过了就摘掉。
+
+看过对方仓库、觉得可以收录，就给 issue 打上 `accepted` 标签。workflow 会再查一遍，然后把这一条写进 [`docs/community-forks.md`](community-forks.md) 里对应分级的一节，提交到 main，评论并关闭 issue。这次提交不会触发 CI。之后要改简介或下线某一条，直接改这份文档，每一条行末的注释里记着登记 issue 的编号。
+
+本机看会写进文档的那一行：`python3 scripts/fork_showcase.py accept 171 --dry-run`。
 
 ### 镜像的可见性
 

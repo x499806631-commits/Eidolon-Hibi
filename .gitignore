@@ -34,3 +34,5 @@ deploy/event-names.toml
 # 照片 tag 校对用的脸部对照图和缩略图拼版（.scratch/photos 票 13），是原作立绘，不进仓库（ADR-0003）
 /.scratch/_faces/
 /.scratch/photos/prototype/tags/contact_sheet.png
+
+__pycache__/

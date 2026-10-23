@@ -2,7 +2,7 @@
 forgotten `KEPT` after nothing recalled them — with what the background model writes down of
 them, read on its own from the same answer as the memories and promises."""
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -18,7 +18,7 @@ from eidolon.experiences import (
 )
 from eidolon import data_package
 from eidolon.config import Settings
-from tests.conftest import ClientFactory
+from tests.conftest import ClientFactory, database_in
 from tests.fakes import FakeEmbedder, FakeJudge, FakeLLM, FakeReranker
 from tests.test_delete_account import user_id
 from tests.test_producer_profile import REPLY, start_conversation
@@ -29,7 +29,7 @@ FIRST = datetime(2026, 10, 21, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture
-def experiences(tmp_path: Path) -> Iterator[Experiences]:
+async def experiences(tmp_path: Path) -> AsyncIterator[Experiences]:
     import sqlite3
 
     database = tmp_path / "experiences.db"
@@ -37,9 +37,8 @@ def experiences(tmp_path: Path) -> Iterator[Experiences]:
         db.execute("CREATE TABLE users (id TEXT PRIMARY KEY)")
         db.execute("INSERT INTO users (id) VALUES ('u')")
         db.execute("INSERT INTO users (id) VALUES ('别人')")
-    kept = Experiences(database, lambda: FIRST)
-    yield kept
-    kept.close()
+    async with database_in(database) as db:
+        yield Experiences(db, lambda: FIRST)
 
 
 def test_what_the_background_model_wrote_of_her_doings():
@@ -62,82 +61,82 @@ def test_at_most_two_are_written_a_turn():
     assert [e.text for e in parse_experiences(many)] == ["第 0 件事", "第 1 件事"]
 
 
-def test_each_character_keeps_her_own(experiences: Experiences):
-    experiences.record("u", "tenka", [NewExperience("甜花去看过花道展")], FIRST)
-    experiences.record("u", "rinze", [NewExperience("凛世去过和服店")], FIRST)
+async def test_each_character_keeps_her_own(experiences: Experiences):
+    await experiences.record("u", "tenka", [NewExperience("甜花去看过花道展")], FIRST)
+    await experiences.record("u", "rinze", [NewExperience("凛世去过和服店")], FIRST)
 
-    assert [e.text for e in experiences.of("u", "tenka")] == ["甜花去看过花道展"]
-    assert [e.text for e in experiences.of("u", "rinze")] == ["凛世去过和服店"]  # 互相看不到
+    assert [e.text for e in await experiences.of("u", "tenka")] == ["甜花去看过花道展"]
+    assert [e.text for e in await experiences.of("u", "rinze")] == ["凛世去过和服店"]  # 互相看不到
 
 
-def test_the_same_thing_is_kept_once_and_a_fuller_telling_replaces_it(experiences: Experiences):
-    experiences.record("u", "tenka", [NewExperience("甜花去看过花道展", "三月")], FIRST)
-    experiences.record(
+async def test_the_same_thing_is_kept_once_and_a_fuller_telling_replaces_it(experiences: Experiences):
+    await experiences.record("u", "tenka", [NewExperience("甜花去看过花道展", "三月")], FIRST)
+    await experiences.record(
         "u", "tenka", [NewExperience("甜花去看过花道展", "三月，在某某美术馆")], FIRST
     )
 
-    [kept] = experiences.of("u", "tenka")
+    [kept] = await experiences.of("u", "tenka")
     assert kept.summary == "三月，在某某美术馆"  # 更完整的覆盖了旧的，不是又多一条
 
 
-def test_what_was_shown_before_writing_is_her_own_newest(experiences: Experiences):
+async def test_what_was_shown_before_writing_is_her_own_newest(experiences: Experiences):
     for n in range(SHOWN_BEFORE_WRITING + 3):
-        experiences.record("u", "tenka", [NewExperience(f"第 {n} 件事")], FIRST + timedelta(minutes=n))
+        await experiences.record("u", "tenka", [NewExperience(f"第 {n} 件事")], FIRST + timedelta(minutes=n))
 
-    shown = experiences.recent("u", "tenka")
+    shown = await experiences.recent("u", "tenka")
 
     assert len(shown) == SHOWN_BEFORE_WRITING
     assert shown[0].text == f"第 {SHOWN_BEFORE_WRITING + 2} 件事"  # 新的在前
 
 
-def test_kept_thirty_days_after_it_was_last_recalled_then_forgotten(experiences: Experiences):
-    experiences.record("u", "tenka", [NewExperience("甜花去看过花道展")], FIRST)
-    [kept] = experiences.of("u", "tenka")
+async def test_kept_thirty_days_after_it_was_last_recalled_then_forgotten(experiences: Experiences):
+    await experiences.record("u", "tenka", [NewExperience("甜花去看过花道展")], FIRST)
+    [kept] = await experiences.of("u", "tenka")
 
     assert kept.left(FIRST) == KEPT
-    experiences.remember_used([kept.id])
+    await experiences.remember_used([kept.id])
     later = FIRST + timedelta(days=29)
     left = kept.left(later)  # 被想起过，从想起那一刻重新算
     assert left is not None and left > timedelta(0)
 
-    experiences.sweep(FIRST + KEPT - timedelta(minutes=1))
-    assert len(experiences.of("u", "tenka")) == 1  # 还没到三十天
+    await experiences.sweep(FIRST + KEPT - timedelta(minutes=1))
+    assert len(await experiences.of("u", "tenka")) == 1  # 还没到三十天
 
-    experiences.sweep(FIRST + KEPT)
-    assert experiences.of("u", "tenka") == []  # 到了就忘掉
-
-
-def test_a_pinned_one_is_never_forgotten(experiences: Experiences):
-    experiences.record("u", "tenka", [NewExperience("甜花去看过花道展")], FIRST)
-    [kept] = experiences.of("u", "tenka")
-
-    assert experiences.pin("u", kept.id, True) is True
-    assert experiences.of("u", "tenka")[0].left(FIRST) is None  # 不计时
-
-    experiences.sweep(FIRST + KEPT * 3)
-    assert len(experiences.of("u", "tenka")) == 1
-
-    assert experiences.pin("别人", kept.id, False) is False  # 不是他的
-    assert experiences.delete("u", kept.id) is True  # 手动删，pin 的也删得掉
-    assert experiences.of("u", "tenka") == []
+    await experiences.sweep(FIRST + KEPT)
+    assert await experiences.of("u", "tenka") == []  # 到了就忘掉
 
 
-def test_keeping_one_pushes_it_thirty_days_out(experiences: Experiences):
-    experiences.record("u", "tenka", [NewExperience("甜花去看过花道展")], FIRST)
-    [kept] = experiences.of("u", "tenka")
+async def test_a_pinned_one_is_never_forgotten(experiences: Experiences):
+    await experiences.record("u", "tenka", [NewExperience("甜花去看过花道展")], FIRST)
+    [kept] = await experiences.of("u", "tenka")
 
-    assert experiences.keep("u", kept.id) is True
-    [again] = experiences.of("u", "tenka")
+    assert await experiences.pin("u", kept.id, True) is True
+    assert (await experiences.of("u", "tenka"))[0].left(FIRST) is None  # 不计时
+
+    await experiences.sweep(FIRST + KEPT * 3)
+    assert len(await experiences.of("u", "tenka")) == 1
+
+    assert await experiences.pin("别人", kept.id, False) is False  # 不是他的
+    assert await experiences.delete("u", kept.id) is True  # 手动删，pin 的也删得掉
+    assert await experiences.of("u", "tenka") == []
+
+
+async def test_keeping_one_pushes_it_thirty_days_out(experiences: Experiences):
+    await experiences.record("u", "tenka", [NewExperience("甜花去看过花道展")], FIRST)
+    [kept] = await experiences.of("u", "tenka")
+
+    assert await experiences.keep("u", kept.id) is True
+    [again] = await experiences.of("u", "tenka")
     assert again.last_used_at == FIRST
 
 
-def test_what_is_about_to_be_forgotten_across_characters(experiences: Experiences):
-    experiences.record("u", "tenka", [NewExperience("甜花去看过花道展")], FIRST)
-    experiences.record("u", "rinze", [NewExperience("凛世去过和服店")], FIRST)
+async def test_what_is_about_to_be_forgotten_across_characters(experiences: Experiences):
+    await experiences.record("u", "tenka", [NewExperience("甜花去看过花道展")], FIRST)
+    await experiences.record("u", "rinze", [NewExperience("凛世去过和服店")], FIRST)
     soon = FIRST + KEPT - timedelta(days=1)
 
-    assert experiences.due_soon("u") == []  # 还早
-    experience = experiences.of("u", "tenka")[0]
+    assert await experiences.due_soon("u") == []  # 还早
+    experience = (await experiences.of("u", "tenka"))[0]
     left = experience.left(soon)
     assert left is not None and left <= SOON
     assert experience.shown(soon)["due_soon"] is True

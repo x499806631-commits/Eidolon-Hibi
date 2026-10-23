@@ -32,19 +32,18 @@ import asyncio
 import logging
 import re
 import sqlite3
-import threading
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from eidolon.activity import ActivityLog, image_origin, timed
 from eidolon.affinity import Affinities
 from eidolon.characters import Character
 from eidolon.clock import Clock
-from eidolon.database import connect
+from eidolon.data_access import Database
+from eidolon.database import by_name
 from eidolon.engine import ConversationEngine, EmptyReply
 from eidolon.features import AllOn, Switches
 from eidolon.image_generation import TIME_LIMIT, ImageFailed
@@ -135,71 +134,77 @@ class Dates:
     """The days out the producer invited each character to (GLOSSARY.md「邀约」), in the
     database at `path`; their schedules read them as they are written."""
 
-    def __init__(self, path: Path) -> None:
-        self._db = connect(path)
-        self._db.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
+    def __init__(self, db: Database) -> None:
+        self._db = db
+        db.prepare(_open)
 
-    def plan(self, user_id: str, character_id: str, day: date, what: str, due_at: datetime) -> None:
+    async def plan(self, user_id: str, character_id: str, day: date, what: str, due_at: datetime) -> None:
         """Keep the day out. Raises DateTaken if there is one with her that day already."""
-        with self._lock, self._db:
-            cursor = self._db.execute(
-                "INSERT OR IGNORE INTO dates (user_id, character_id, day, what, due_at, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (user_id, character_id, day.isoformat(), what,
-                 due_at.astimezone(UTC).isoformat(), datetime.now(UTC).isoformat()),
-            )
+        return await self._db.write(self._plan_body, user_id, character_id, day, what, due_at)
+
+    def _plan_body(self, db: sqlite3.Connection, user_id: str, character_id: str, day: date, what: str, due_at: datetime) -> None:
+        cursor = by_name(db).execute(
+            "INSERT OR IGNORE INTO dates (user_id, character_id, day, what, due_at, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, character_id, day.isoformat(), what,
+             due_at.astimezone(UTC).isoformat(), datetime.now(UTC).isoformat()),
+        )
         if cursor.rowcount == 0:
             raise DateTaken()
 
-    def forget(self, user_id: str, character_id: str, day: date) -> None:
-        with self._lock, self._db:
-            self._db.execute(
-                "DELETE FROM dates WHERE user_id = ? AND character_id = ? AND day = ?",
-                (user_id, character_id, day.isoformat()),
-            )
+    async def forget(self, user_id: str, character_id: str, day: date) -> None:
+        return await self._db.write(self._forget_body, user_id, character_id, day)
 
-    def on(self, user_id: str, character_id: str, day: date) -> str | None:
+    def _forget_body(self, db: sqlite3.Connection, user_id: str, character_id: str, day: date) -> None:
+        by_name(db).execute(
+            "DELETE FROM dates WHERE user_id = ? AND character_id = ? AND day = ?",
+            (user_id, character_id, day.isoformat()),
+        )
+
+    async def on(self, user_id: str, character_id: str, day: date) -> str | None:
         """What she is to do with the producer on `day`, if anything."""
-        with self._lock:
-            row = self._db.execute(
-                "SELECT what FROM dates WHERE user_id = ? AND character_id = ? AND day = ?",
-                (user_id, character_id, day.isoformat()),
-            ).fetchone()
+        return await self._db.read(self._on_body, user_id, character_id, day)
+
+    def _on_body(self, db: sqlite3.Connection, user_id: str, character_id: str, day: date) -> str | None:
+        row = by_name(db).execute(
+            "SELECT what FROM dates WHERE user_id = ? AND character_id = ? AND day = ?",
+            (user_id, character_id, day.isoformat()),
+        ).fetchone()
         return row["what"] if row else None
 
-    def due(self, now: datetime) -> list[sqlite3.Row]:
+    async def due(self, now: datetime) -> list[sqlite3.Row]:
         """The days out over whose telling is due and not told, nor tried too often lately."""
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT * FROM dates WHERE told = 0 AND tries < ? AND due_at <= ?",
-                (TRIES, now.astimezone(UTC).isoformat()),
-            ).fetchall()
+        return await self._db.read(self._due_body, now)
+
+    def _due_body(self, db: sqlite3.Connection, now: datetime) -> list[sqlite3.Row]:
+        rows = by_name(db).execute(
+            "SELECT * FROM dates WHERE told = 0 AND tries < ? AND due_at <= ?",
+            (TRIES, now.astimezone(UTC).isoformat()),
+        ).fetchall()
         return [
             r for r in rows
             if r["last_at"] is None or now - datetime.fromisoformat(r["last_at"]) >= RETRY_AFTER
         ]
 
-    def told(self, user_id: str, character_id: str, day: str) -> None:
-        with self._lock, self._db:
-            self._db.execute(
-                "UPDATE dates SET told = 1 WHERE user_id = ? AND character_id = ? AND day = ?",
-                (user_id, character_id, day),
-            )
+    async def told(self, user_id: str, character_id: str, day: str) -> None:
+        return await self._db.write(self._told_body, user_id, character_id, day)
 
-    def tried(self, user_id: str, character_id: str, day: str, now: datetime) -> None:
-        with self._lock, self._db:
-            self._db.execute(
-                "UPDATE dates SET tries = tries + 1, last_at = ?"
-                " WHERE user_id = ? AND character_id = ? AND day = ?",
-                (now.astimezone(UTC).isoformat(), user_id, character_id, day),
-            )
+    def _told_body(self, db: sqlite3.Connection, user_id: str, character_id: str, day: str) -> None:
+        by_name(db).execute(
+            "UPDATE dates SET told = 1 WHERE user_id = ? AND character_id = ? AND day = ?",
+            (user_id, character_id, day),
+        )
 
-    def close(self) -> None:
-        with self._lock:
-            self._db.close()
+    async def tried(self, user_id: str, character_id: str, day: str, now: datetime) -> None:
+        return await self._db.write(self._tried_body, user_id, character_id, day, now)
+
+    def _tried_body(self, db: sqlite3.Connection, user_id: str, character_id: str, day: str, now: datetime) -> None:
+        by_name(db).execute(
+            "UPDATE dates SET tries = tries + 1, last_at = ?"
+            " WHERE user_id = ? AND character_id = ? AND day = ?",
+            (now.astimezone(UTC).isoformat(), user_id, character_id, day),
+        )
+
 
 
 def _when(today: date, day: date) -> str:
@@ -222,7 +227,7 @@ class _Due:
 class TripPhotos:
     def __init__(
         self,
-        path: Path,
+        db: Database,
         store: Store,
         engine: ConversationEngine,
         characters: Mapping[str, Character],
@@ -250,20 +255,17 @@ class TripPhotos:
         self._in_call = in_call
         self._features = features
         self._drawing: set[asyncio.Task] = set()
-        self._dates = dates if dates is not None else Dates(path)
-        self._db = connect(path)
-        self._db.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
+        self._dates = dates if dates is not None else Dates(db)
+        self._db = db
+        db.prepare(_open)
 
     def available(self) -> bool:
         """Whether the deployer has them: schedules, and image generation now."""
         return self._enabled and self._config.image_generator() is not None
 
-    def _on(self, user_id: str, character: Character) -> bool:
+    async def _on(self, user_id: str, character: Character) -> bool:
         return (
-            self.available() and self._features.on(user_id, "trip_photos")
+            self.available() and await self._features.on(user_id, "trip_photos")
             and character.photo_tag is not None and character.photo_appearance is not None
         )
 
@@ -280,14 +282,14 @@ class TripPhotos:
         """Plan the day's, and send those whose time has come; tell how the days out over
         were; one going wrong keeps none of the others from it."""
         now = self._clock()
-        for row in await asyncio.to_thread(self._dates.due, now):
+        for row in await self._dates.due(now):
             try:
                 await self._tell_date(row, now)
             except Exception:
                 log.exception("telling of a day out in %s failed", row["character_id"])
         if not self.available():
             return
-        for conversation, day in await asyncio.to_thread(self._plan, now):
+        for conversation, day in await self._plan(now):
             try:
                 await self._send(conversation, day, now)
             except Exception:
@@ -300,7 +302,7 @@ class TripPhotos:
         """Have her send the user a photo from a trip to `place` now, with `trip_with` there
         too, whatever her schedule says: for trying it out under the development sign-in.
         False if they have no conversation, or image generation is off."""
-        conversation = self._current(user_id, character_id)
+        conversation = await self._current(user_id, character_id)
         if conversation is None or not self.available():
             return False
         await self._send(conversation, None, self._clock(), place, trip_with, all_together)
@@ -313,7 +315,7 @@ class TripPhotos:
         a date (GLOSSARY.md「邀约」), the producer in it, `with_you`, whatever she writes:
         for trying it out under the development sign-in.
         False if they have no conversation, or image generation is off."""
-        conversation = self._current(user_id, character_id)
+        conversation = await self._current(user_id, character_id)
         if conversation is None or not self.available():
             return False
         attempt = 0
@@ -329,12 +331,12 @@ class TripPhotos:
                         conversation, lease.keys.chat_llm, what, True, with_you
                     )
             except EmptyReply:
-                recording.finish("failed")
+                await recording.finish("failed")
                 if attempt >= DATE_NOW_TRIES:
                     raise
                 continue
             except Exception:
-                recording.finish("failed")
+                await recording.finish("failed")
                 raise
             finally:
                 lease.release()
@@ -345,36 +347,30 @@ class TripPhotos:
         await self._sent_with_photo(conversation, said, tag, [], recording, producer_there=True)
         return True
 
-    def _plan(self, now: datetime) -> list[tuple[Conversation, date]]:
+    async def _plan(self, now: datetime) -> list[tuple[Conversation, date]]:
         """Draw a time for each day's trip not drawn for yet; those whose time has come."""
         due: list[tuple[Conversation, date]] = []
-        for current in self._store.current_conversations():
+        for current in await self._store.current_conversations():
             conversation, contact = current.conversation, current.last_contact
             character = self._characters.get(conversation.character_id)
             if character is None or current.ended or not current.has_turns:
                 continue
-            if contact is None or now - contact > WINDOW or not self._on(conversation.user_id, character):
+            if contact is None or now - contact > WINDOW:
                 continue
-            zone = self._zone(conversation.user_id)
+            if not await self._on(conversation.user_id, character):
+                continue
+            zone = await self._zone(conversation.user_id)
             day = now.astimezone(zone).date()
-            schedule = self._schedules.of(conversation.user_id, character.id, day)
+            schedule = await self._schedules.of(conversation.user_id, character.id, day)
             if schedule is None or schedule.trip is None:
                 continue
-            row = self._row(conversation.user_id, character.id, day)
+            row = await self._db.read(_row, conversation.user_id, character.id, day)
             if row is None:
                 minutes = (UNTIL.hour - FROM.hour) * 60
                 at = datetime.combine(day, FROM, zone) + timedelta(
                     minutes=5 * self._random(minutes // 5)
                 )
-                with self._lock, self._db:
-                    self._db.execute(
-                        "INSERT OR IGNORE INTO trip_photo_due (user_id, character_id, day, due_at)"
-                        " VALUES (?, ?, ?, ?)",
-                        (conversation.user_id, character.id, day.isoformat(),
-                         at.astimezone(UTC).isoformat()),
-                    )
-                row = self._row(conversation.user_id, character.id, day)
-                assert row is not None
+                row = await self._db.write(_planned, conversation.user_id, character.id, day, at)
             if row["sent"] or row["tries"] >= TRIES:
                 continue
             if datetime.fromisoformat(row["due_at"]) > now:
@@ -389,13 +385,13 @@ class TripPhotos:
         trip_with: tuple[str, ...] = (), all_together: bool = False,
     ) -> None:
         user_id, character_id = conversation.user_id, conversation.character_id
-        status = self._affinities.status(user_id, character_id)
+        status = await self._affinities.status(user_id, character_id)
         if status is not None and (status.tier in NOT_NOW or status.cooling):
             return
         if self._store.is_taking_turn(conversation.id) or self._in_call(conversation.id):
             return
         if day is not None:
-            schedule = self._schedules.of(user_id, character_id, day)
+            schedule = await self._schedules.of(user_id, character_id, day)
             if schedule is None or schedule.trip is None:
                 return
             place, trip_with = schedule.trip, schedule.trip_with
@@ -419,14 +415,14 @@ class TripPhotos:
         except Exception as e:
             # Not logged with what was raised: a service's error may repeat what it was asked.
             log.warning("a trip photo in conversation %s failed: %s", conversation.id, type(e).__name__)
-            recording.finish("failed")
+            await recording.finish("failed")
             if day is not None:
-                self._tried(user_id, character_id, day, now)
+                await self._db.write(_tried, user_id, character_id, day, now)
             return
         finally:
             lease.release()
         if day is not None:
-            self._sent(user_id, character_id, day)
+            await self._db.write(_sent, user_id, character_id, day)
         await self._sent_with_photo(conversation, said, tag, others, recording)
 
     async def send_with_photo(
@@ -455,12 +451,14 @@ class TripPhotos:
         in the background if `background`, the recording finished as it is."""
         character = self._characters[conversation.character_id]
         photo_id = uuid.uuid4().hex
-        reach_out = self._store.add_photo_reach_out(conversation.id, said, NewPhoto(photo_id, tag))
+        reach_out = await self._store.add_photo_reach_out(
+            conversation.id, said, NewPhoto(photo_id, tag)
+        )
         generator = self._config.image_generator()
         if reach_out is None or generator is None:
             if reach_out is not None:
-                self._store.finish_photo(photo_id, None, "service_error")
-            recording.finish("failed")
+                await self._store.finish_photo(photo_id, None, "service_error")
+            await recording.finish("failed")
             return
         settings = generator.settings
         read = read_tag(tag)
@@ -469,7 +467,8 @@ class TripPhotos:
         if not producer_there:
             read = replace(read, you=None)
         look: ProducerLook = (
-            "female" if self._store.get_profile(conversation.user_id).gender == "female" else "male"
+            "female" if (await self._store.get_profile(conversation.user_id)).gender == "female"
+            else "male"
         )
         together = others if _GROUP.search(tag) else []
         prompt = group_prompt([character, *together], read, settings.style, look)
@@ -498,8 +497,8 @@ class TripPhotos:
         except Exception:
             log.exception("generating trip photo %s failed", photo_id)
             reason = "service_error"
-        self._store.finish_photo(photo_id, image, reason)
-        recording.finish("success" if image is not None else "failed")
+        await self._store.finish_photo(photo_id, image, reason)
+        await recording.finish("success" if image is not None else "failed")
 
     async def ask_photo(
         self, user_id: str, character_id: str, wish: str, outfit_tags: str | None = None
@@ -508,8 +507,8 @@ class TripPhotos:
         they asked for, in the outfit `outfit_tags` says if any: the conversation it is in.
         Its picture is drawn after this returns. Raises NoConversation, NoImages, and what
         the model raises."""
-        conversation = self._current(user_id, character_id)
-        if conversation is None or self._store.ended(conversation.id) is not None:
+        conversation = await self._current(user_id, character_id)
+        if conversation is None or await self._store.ended(conversation.id) is not None:
             raise NoConversation()
         generator = self._config.image_generator()
         if generator is None:
@@ -522,7 +521,7 @@ class TripPhotos:
                     conversation, lease.keys.chat_llm, wish, outfit_tags
                 )
         except Exception:
-            recording.finish("failed")
+            await recording.finish("failed")
             raise
         finally:
             lease.release()
@@ -536,10 +535,10 @@ class TripPhotos:
         answers at once; the conversation it is in. Raises NoConversation, DateTaken (one
         with her that day already, or a day not from tomorrow to `MAX_DAYS_AHEAD` days on),
         and what the model raises, the day out forgotten then."""
-        conversation = self._current(user_id, character_id)
-        if conversation is None or self._store.ended(conversation.id) is not None:
+        conversation = await self._current(user_id, character_id)
+        if conversation is None or await self._store.ended(conversation.id) is not None:
             raise NoConversation()
-        zone = self._zone(user_id)
+        zone = await self._zone(user_id)
         today = self._clock().astimezone(zone).date()
         if not 1 <= (day - today).days <= MAX_DAYS_AHEAD:
             raise DateTaken("只能约明天到一周以内")
@@ -547,7 +546,7 @@ class TripPhotos:
             AFTER_DATE.hour * 60 + AFTER_DATE.minute
         )
         due = datetime.combine(day, AFTER_DATE, zone) + timedelta(minutes=5 * self._random(minutes // 5))
-        await asyncio.to_thread(self._dates.plan, user_id, character_id, day, what, due)
+        await self._dates.plan(user_id, character_id, day, what, due)
         when = _when(today, day)
         recording = self._activity.begin("trip_photo", user_id, character_id, own_llm=False, exempt=False)
         lease = self._config.lease()
@@ -555,29 +554,29 @@ class TripPhotos:
             with recording.current():
                 said = await self._engine.accept_date(conversation, lease.keys.chat_llm, when, what)
         except Exception:
-            recording.finish("failed")
-            await asyncio.to_thread(self._dates.forget, user_id, character_id, day)
+            await recording.finish("failed")
+            await self._dates.forget(user_id, character_id, day)
             raise
         finally:
             lease.release()
-        self._store.add_photo_reach_out(conversation.id, said, None)
-        recording.finish("success")
+        await self._store.add_photo_reach_out(conversation.id, said, None)
+        await recording.finish("success")
         return conversation.id
 
     async def _tell_date(self, row: sqlite3.Row, now: datetime) -> None:
         """Once the day out is over, have her tell the producer how it was, with a photo
         where there is image generation and the user has photos on."""
         user_id, character_id, day = row["user_id"], row["character_id"], row["day"]
-        conversation = self._current(user_id, character_id)
-        if conversation is None or self._store.ended(conversation.id) is not None:
-            self._dates.told(user_id, character_id, day)  # nowhere to tell it
+        conversation = await self._current(user_id, character_id)
+        if conversation is None or await self._store.ended(conversation.id) is not None:
+            await self._dates.told(user_id, character_id, day)  # nowhere to tell it
             return
         if self._store.is_taking_turn(conversation.id) or self._in_call(conversation.id):
             return
         character = self._characters.get(character_id)
         with_photo = (
             self._config.image_generator() is not None
-            and self._features.on(user_id, "photos")
+            and await self._features.on(user_id, "photos")
             and character is not None and character.photo_tag is not None
             and character.photo_appearance is not None
         )
@@ -590,51 +589,71 @@ class TripPhotos:
                 )
         except Exception as e:
             log.warning("telling of a day out failed: %s", type(e).__name__)
-            recording.finish("failed")
-            self._dates.tried(user_id, character_id, day, now)
+            await recording.finish("failed")
+            await self._dates.tried(user_id, character_id, day, now)
             return
         finally:
             lease.release()
-        self._dates.told(user_id, character_id, day)
+        await self._dates.told(user_id, character_id, day)
         if tag is None:
-            self._store.add_photo_reach_out(conversation.id, said, None)
-            recording.finish("success")
+            await self._store.add_photo_reach_out(conversation.id, said, None)
+            await recording.finish("success")
             return
         await self._sent_with_photo(conversation, said, tag, [], recording, producer_there=True)
 
-    def _current(self, user_id: str, character_id: str) -> Conversation | None:
+    async def _current(self, user_id: str, character_id: str) -> Conversation | None:
         return next(
-            (c for c, _, _ in self._store.latest_conversations(user_id) if c.character_id == character_id),
+            (
+                c for c, _, _ in await self._store.latest_conversations(user_id)
+                if c.character_id == character_id
+            ),
             None,
         )
 
-    def _row(self, user_id: str, character_id: str, day: date) -> sqlite3.Row | None:
-        with self._lock:
-            return self._db.execute(
-                "SELECT * FROM trip_photo_due WHERE user_id = ? AND character_id = ? AND day = ?",
-                (user_id, character_id, day.isoformat()),
-            ).fetchone()
-
-    def _sent(self, user_id: str, character_id: str, day: date) -> None:
-        with self._lock, self._db:
-            self._db.execute(
-                "UPDATE trip_photo_due SET sent = 1 WHERE user_id = ? AND character_id = ? AND day = ?",
-                (user_id, character_id, day.isoformat()),
-            )
-
-    def _tried(self, user_id: str, character_id: str, day: date, now: datetime) -> None:
-        with self._lock, self._db:
-            self._db.execute(
-                "UPDATE trip_photo_due SET tries = tries + 1, last_at = ?"
-                " WHERE user_id = ? AND character_id = ? AND day = ?",
-                (now.astimezone(UTC).isoformat(), user_id, character_id, day.isoformat()),
-            )
-
-    def _zone(self, user_id: str) -> ZoneInfo:
-        return ZoneInfo(effective_timezone(self._store.get_profile(user_id), None))
+    async def _zone(self, user_id: str) -> ZoneInfo:
+        return ZoneInfo(effective_timezone(await self._store.get_profile(user_id), None))
 
     def close(self) -> None:
         for task in self._drawing:
             task.cancel()
-        with self._lock:
-            self._db.close()
+
+
+def _open(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+
+
+def _row(db: sqlite3.Connection, user_id: str, character_id: str, day: date) -> sqlite3.Row | None:
+    return by_name(db).execute(
+        "SELECT * FROM trip_photo_due WHERE user_id = ? AND character_id = ? AND day = ?",
+        (user_id, character_id, day.isoformat()),
+    ).fetchone()
+
+
+def _planned(
+    db: sqlite3.Connection, user_id: str, character_id: str, day: date, at: datetime
+) -> sqlite3.Row:
+    db.execute(
+        "INSERT OR IGNORE INTO trip_photo_due (user_id, character_id, day, due_at)"
+        " VALUES (?, ?, ?, ?)",
+        (user_id, character_id, day.isoformat(), at.astimezone(UTC).isoformat()),
+    )
+    row = _row(db, user_id, character_id, day)
+    assert row is not None
+    return row
+
+
+def _sent(db: sqlite3.Connection, user_id: str, character_id: str, day: date) -> None:
+    db.execute(
+        "UPDATE trip_photo_due SET sent = 1 WHERE user_id = ? AND character_id = ? AND day = ?",
+        (user_id, character_id, day.isoformat()),
+    )
+
+
+def _tried(
+    db: sqlite3.Connection, user_id: str, character_id: str, day: date, now: datetime
+) -> None:
+    db.execute(
+        "UPDATE trip_photo_due SET tries = tries + 1, last_at = ?"
+        " WHERE user_id = ? AND character_id = ? AND day = ?",
+        (now.astimezone(UTC).isoformat(), user_id, character_id, day.isoformat()),
+    )

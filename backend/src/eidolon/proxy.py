@@ -29,6 +29,16 @@ OwnAddressed = Literal["own_llm", "own_image"]
 REACH_TIMEOUT = httpx.Timeout(10)
 """How long trying whether a provider can be reached may take."""
 
+MAX_CONNECTIONS = 300
+"""How many connections each way a service has to its provider (direct, or through a
+proxy) may have open at once. Every user's turns and calls share them: httpx's own
+100 are for one program's requests, and with replies streamed for up to a minute, a busy
+hour would wait on them."""
+
+POOL_LIMITS = httpx.Limits(max_connections=MAX_CONNECTIONS, max_keepalive_connections=60)
+"""`MAX_CONNECTIONS`, of which as many as 60 are kept open between requests (httpx's own
+20)."""
+
 
 def open_client(proxy: str | None, timeout: httpx.Timeout) -> httpx.AsyncClient:
     """A client of its own, through `proxy`, or direct for None."""
@@ -140,12 +150,13 @@ def _transport(proxy: str | None) -> httpx.AsyncHTTPTransport:
 
 
 class _Transport(httpx.AsyncHTTPTransport):
-    """httpx's own, with a SOCKS proxy's reply it cannot read raised as the proxy's error,
-    as httpx raises any other's, not as socksio's; and an HTTP proxy's tunnels that fail,
-    or are given up on, before TLS through them is set up closed (`_Tunnel`)."""
+    """httpx's own, on `POOL_LIMITS`, with a SOCKS proxy's reply it cannot read raised as
+    the proxy's error, as httpx raises any other's, not as socksio's; and an HTTP proxy's
+    tunnels that fail, or are given up on, before TLS through them is set up closed
+    (`_Tunnel`)."""
 
     def __init__(self, proxy: str | None) -> None:
-        super().__init__(proxy=proxy)
+        super().__init__(proxy=proxy, limits=POOL_LIMITS)
         if type(self._pool) is httpcore.AsyncHTTPProxy:
             self._pool.__class__ = _HTTPProxy
 

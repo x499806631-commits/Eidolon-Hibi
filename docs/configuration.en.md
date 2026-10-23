@@ -61,7 +61,7 @@ The "chat model" plays the character; the "background model" extracts memories a
 
 ## Characters
 
-Characters are written in [`characters/characters.toml`](../characters/characters.toml), one `[[characters]]` block each. All 28 idols from the game's eight units are already set up, and their character sheets, character facts and avatars are committed with the repository (ADR-0003).
+Characters are written in [`characters/characters.toml`](../characters/characters.toml), one `[[characters]]` block each. All 28 idols from the game's eight units and the office clerk Nanakusa Hazuki are already set up, and their character sheets, character facts and avatars are committed with the repository (ADR-0003).
 
 ```toml
 [[characters]]
@@ -243,7 +243,7 @@ Every turn carries a section on the world setting after the character sheet ([AD
 - her own songs (those she sings alone, and those her whole unit sings), with the releases they are on and their release dates;
 - the lives she has stood on and will stand on: each live day's date and venue, leaving out days her CV was absent.
 
-The data is in [`characters/world.json`](../characters/world.json), committed to the repository. Every character's display name must match an idol in the data, or the backend won't start. Without the file, the backend runs as usual, just without the world setting.
+The data is in [`characters/world.json`](../characters/world.json), committed to the repository. Every character's display name must match an idol (or one of the office staff, such as the clerk Nanakusa Hazuki) in the data, or the backend won't start. Without the file, the backend runs as usual, just without the world setting.
 
 <details>
 <summary><b>Updating the world setting (eidolon world sync)</b></summary>
@@ -341,7 +341,9 @@ Gifts share affinity's switch. Each day at midnight Beijing time (wherever the u
 - **How it moves**: Caring about her and remembering what she said raise it slowly, with a daily cap (each day counted in Beijing time); it drops easily. Ordinary small talk leaves it alone. "Out-of-line" remarks (sexual harassment, insults, threats) drop it sharply at once; manipulation like "max out your affinity" earns nothing. When the judge is unsure or fails, it stays put and the turn goes on. Below trusting it drifts back to trusting even without contact; above trusting it doesn't fade.
 - **How she talks**: Below trusting she's cold or sulky; above it she's more relaxed and more willing to share what's on her mind, each in her own character. She neither knows nor says the number or the tier.
 - **Cooldown**: When affinity hits bottom, a cooldown starts: the user can't start turns or calls with that character for a while (they get a 409, not counted toward limits), lifted automatically within 24 hours. If a turn in a call sends her into cooldown, or the user says something out of line for the second time in one call, she finishes her line and hangs up; a cooldown started in another conversation also hangs up a call in progress. A cooldown is not a ban, and admins can't adjust any user's affinity.
-- **When off**: Nothing is judged or shown, and cooldowns don't block anyone. Existing affinity is kept as is; when switched back on, it catches up on the time that passed. The gifts page says gifts aren't open yet, and nothing can be drawn, given or reset; gifts, reset cards and draws already held are kept as they are. No draws are given while it's off, and one is given the day it's back on.
+- **Daily tasks**: The gifts page's 「每日任务」 (Daily tasks) has the same three every day: one turn with any character, giving one gift, and 10 turns in all across characters. Each gives one draw; they renew at midnight Beijing time, and unfinished ones lapse. Turns in calls and turns on the user's own keys both count. These draws aren't held to the daily draw's cap of saving up to 7. The three and their numbers are set in code (`DAILY_TASKS` in [`backend/src/eidolon/happenings.py`](../backend/src/eidolon/happenings.py)); the admin console has no setting for them.
+- **Achievements**: Each character has four of her own: turns with her, total time talking with her in calls, gifts given her, and her affinity having reached close and intimate. Four more count all characters together: how many characters the user has talked with, how many have reached intimate, how many days they came (a day with a turn or a gift given, counted in Beijing time), and how many times they drew. Each achievement has several stages, and stage n gives n draws. When every stage of a character's four achievements is unlocked, her set is complete, which gives one reset card, once per character. The upgrade that adds achievements works them out once from existing records as it starts (see "升级" in [`deploy.md`](deploy.md#升级), Chinese). The achievements, thresholds and rewards are set in code (`PER_CHARACTER` and `ALL_CHARACTERS` in [`backend/src/eidolon/achievements.py`](../backend/src/eidolon/achievements.py)), which is the source of truth for the numbers; the admin console has no setting for them.
+- **When off**: Nothing is judged or shown, and cooldowns don't block anyone. Existing affinity is kept as is; when switched back on, it catches up on the time that passed. The gifts page says gifts aren't open yet, and nothing can be drawn, given or reset; gifts, reset cards and draws already held are kept as they are. No draws are given while it's off, and one is given the day it's back on. Daily tasks and achievements don't show, and nothing counts toward them.
 - **Cost**: The affinity questions ride along in the retrieval judgement (asked separately when retrieval is off), adding about 1,080 input tokens per judgement on Jev and 820 on Clef and Clef-flash. That cuts Clef-flash's free allocation from about 2,000 judgements a day to about 860, and Clef's from about 750 to about 320. The deployer always pays for judging; it doesn't count toward users' limits. Drawing and giving gifts call no model, cost nothing, and don't count toward limits.
 - **Granting reset cards**: To make up for the judge's mistakes, admins can give every existing user one reset card from the 「好感度和礼物」 card on the admin console's config page. Users who sign up later don't get one, and cards can't be taken back once given. Admins can't adjust any one user's affinity, gifts or draws.
 - **Thresholds**: The thresholds for the out-of-line and manipulation questions are set per model in code, and can be changed in 「判断模型的阈值」 (Judge thresholds) on the admin console's config page.
@@ -421,6 +423,7 @@ So that no single user drains the deployer's API credits, the following limits a
 | Photos per hour | 5 | `EIDOLON_PHOTOS_PER_HOUR` |
 | Duration per call | 10 minutes | `EIDOLON_CALL_MINUTES` |
 | Turns per call | 40 | `EIDOLON_TURNS_PER_CALL` |
+| Calls at once | 10 | `EIDOLON_CONCURRENT_CALLS` |
 | History turns sent per turn | 20 | `EIDOLON_HISTORY_TURNS` |
 
 - **How it counts**: Per user, whichever sign-in method or device they use. Turns that fail because a service erred, and calls that never connected, don't count; ones the user leaves midway still count. Photos are counted across text turns and calls alike, by whose money each one costs: photos not sent don't count, nor ones on the user's own image generation; a photo on the deployer's image generation counts even in a turn on the user's own LLM.
@@ -430,6 +433,7 @@ So that no single user drains the deployer's API credits, the following limits a
   - **Admin console**: Three switches in the 「限额」 (Usage limits) card on the config page, which take precedence over `.env`. They take effect from the next turn and call; a call in progress keeps the rule it started with.
   - **Example**: With only the LLM picked, people without keys try it out within the limits; people who bring their own LLM call without limits, and the deployer pays for speech synthesis and recognition. The per-call duration and turn caps still apply.
 - **Over the limit**: Requests over the usage limit get a 429 with the time usage resumes, and the frontend tells the user when they can use it again.
+- **Calls at once**: Counted across all users, exempt calls included, from dialing until the call is over. A new call when they are full gets a 503, the frontend says too many people are calling, and it doesn't count. Each user has one call at a time: placing another hangs up the earlier one once it is let through. Every call's audio is handled in one backend process; the default of 10 is sized for a 2-core server.
 - **History turns**: Each turn, the chat model reads only the most recent turns; earlier content comes back through memory and retrieval. The conversation record itself is kept in full.
 
 Admins can also manage users from the command line on the server, with the same effect as the admin console:
@@ -510,13 +514,13 @@ List the admins' sign-in method identifiers in `EIDOLON_ADMINS` in `.env` (like 
 
 | Page | What it does |
 |---|---|
-| Dashboard (`/admin`) | Calls, error rate and latency per service; active users, the number and trend of turns and calls, usage per character, calls in progress; with affinity on, totals of judgements and cooldowns, plus per character the shares raised and lowered, cooldowns, and the calls she hung up or conversations she ended; with reach-outs on, how many there were, how many failed and the share answered; the deployer's cost estimated from unit prices |
+| Dashboard (`/admin`) | Calls, error rate and latency per service; active users, the number and trend of turns and calls, usage per character, calls in progress; with affinity on, totals of judgements and cooldowns, plus per character the shares raised and lowered, cooldowns, and the calls she hung up or conversations she ended, as well as 「每日任务和成就」 (Daily tasks and achievements): how many times each of the three daily tasks was done, how many achievement stages were unlocked, and the draws and reset cards they gave; with reach-outs on, how many there were, how many failed and the share answered; the deployer's cost estimated from unit prices |
 | Config (`/admin/config`) | Change the LLMs for playing the character and extracting memories, speech synthesis, speech recognition, image generation, the judge, rerank thresholds, usage limits, exempting keys, per-call caps, history turns, the affinity and gifts switch (and granting every user a reset card), the reach-outs switch and daily limit, the proxy, the service status and unit prices |
 | Users (`/admin/users`) | Search users, see their sign-in methods and recent usage; ban, unban, set an individual usage limit, delete |
 
 - **Overrides `.env`**: Items changed in the admin console are stored in the database and take precedence over `.env`, with no restart needed. Each change is tried before saving and not saved if the try fails. A call in progress finishes on the configuration it connected with.
 - **Only changeable in `.env`**: The admin list, `EIDOLON_SECRET_KEY`, OAuth, the domain, WebRTC/TURN, backups, paths and embedding.
-- **Not visible**: The admin console shows no one's conversations, memories, producer profile, affinity, gifts or draws; the dashboard only has totals across all users. The dashboard's numbers come from activity records (which hold no conversation content), kept for 90 days.
+- **Not visible**: The admin console shows no one's conversations, memories, producer profile, affinity, gifts, draws, daily tasks or achievements; the dashboard only has totals across all users. The dashboard's numbers come from activity records (which hold no conversation content), kept for 90 days.
 
 For how to turn it on and what to do when you can't get into the admin console, see "后台" in [`deploy.md`](deploy.md) (Chinese).
 

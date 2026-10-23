@@ -1,19 +1,26 @@
+import asyncio
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
 import pytest
 
 import eidolon.bailian
+import eidolon.data_access
 from eidolon.__main__ import main
+from eidolon.activity import ActivityLog
 from eidolon.app import create_app
 from eidolon.assembly import Backend
+from eidolon.clock import Clock
 from eidolon.config import LLMSettings, Settings
+from eidolon.data_access import Database
 from eidolon.gift_catalog import GIFTS_FILE
 from eidolon.identity import Identity
 from eidolon.sessions import SESSION_COOKIE
@@ -24,6 +31,7 @@ from tests.fakes import (
     DEPLOYER_SONIOX_KEY,
     START,
     FakeCatalog,
+    FakeClock,
     FakeDashScope,
     FakeIdentityProvider,
     FakeLLM,
@@ -32,6 +40,61 @@ from tests.fakes import (
     build_faked,
 )
 from tests.stories import write_sample_stories
+
+# A connection to the database taken on the event loop's thread fails the test, so that
+# every path the tests run keeps the database off the loop.
+eidolon.data_access.ON_THE_LOOP_RAISES = True
+
+T = TypeVar("T")
+
+
+def aside(work: Coroutine[Any, Any, T]) -> T:
+    """What `work` comes to, run on an event loop of its own on a thread of its own and
+    waited for here, blocking: for what is done where nothing can be awaited, as a test
+    client is made, or as in another process."""
+    with ThreadPoolExecutor(1) as thread:
+        return thread.submit(asyncio.run, work).result()
+
+
+@asynccontextmanager
+async def store_in(database: Path) -> AsyncIterator[Store]:
+    """The store of the database at `database`, on a data access layer of its own, as in
+    another process."""
+    db = Database(database)
+    try:
+        yield Store(db)
+    finally:
+        await db.close()
+
+
+@asynccontextmanager
+async def database_in(database: Path) -> AsyncIterator[Database]:
+    """A data access layer of its own on the database at `database`, as in another process."""
+    db = Database(database)
+    try:
+        yield db
+    finally:
+        await db.close()
+
+
+@asynccontextmanager
+async def activity_in(
+    database: Path, clock: Clock | None = None
+) -> AsyncIterator[ActivityLog]:
+    """The activity log of the database at `database`, on a data access layer of its own,
+    as in another process, by `clock` (a fake one's by default)."""
+    db = Database(database)
+    try:
+        yield ActivityLog(db, clock or FakeClock())
+    finally:
+        await db.close()
+
+
+async def users_in(database: Path, *names: str) -> list[str]:
+    """The ids of new users with these names, made in the database at `database` as in
+    another process."""
+    async with store_in(database) as store:
+        return [(await store.create_user(name)).id for name in names]
 
 
 class Admin:
@@ -57,7 +120,9 @@ class Admin:
 
     def _invoke(self, args: tuple[str, ...]) -> tuple[int, str, str]:
         self._capsys.readouterr()
-        code = main(["--db", str(self._database_path), *args])
+        # On a thread of its own, as in a process of its own: it runs an event loop.
+        with ThreadPoolExecutor(1) as thread:
+            code = thread.submit(main, ["--db", str(self._database_path), *args]).result()
         captured = self._capsys.readouterr()
         return code, captured.out, captured.err
 
@@ -220,12 +285,17 @@ without a dot."""
 
 def sign_in(store: Store, name: str, now: datetime) -> httpx.Cookies:
     """The cookies of a new session for the first user named `name`, who is made, having
-    agreed to the terms, if there is none."""
-    user = store.first_user_named(name) or store.create_user(name)
+    agreed to the terms, if there is none; blocking, so that a client is made signed in
+    without awaiting anything."""
+    return aside(_signed_in(store, name, now))
+
+
+async def _signed_in(store: Store, name: str, now: datetime) -> httpx.Cookies:
+    user = await store.first_user_named(name) or await store.create_user(name)
     if user.consented_at is None:
-        store.consent(user.id, now)
+        await store.consent(user.id, now)
     cookies = httpx.Cookies()
-    cookies.set(SESSION_COOKIE, store.create_session(user.id, now), domain=COOKIE_DOMAIN)
+    cookies.set(SESSION_COOKIE, await store.create_session(user.id, now), domain=COOKIE_DOMAIN)
     return cookies
 
 

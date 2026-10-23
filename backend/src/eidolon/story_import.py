@@ -241,10 +241,10 @@ async def _import(
 
         if is_failure_ending(source_id):
             report.skipped_failures += 1
-            if corpus.remove(source_id):
+            if await corpus.remove(source_id):
                 report.removed += 1
             continue
-        if imported_from != "csv" and corpus.is_translated(source_id):
+        if imported_from != "csv" and await corpus.is_translated(source_id):
             report.csv_versions_kept += 1
             continue
         episode = Episode(
@@ -256,7 +256,7 @@ async def _import(
             lines=tuple(lines),
             imported_from=imported_from,
         )
-        existing = corpus.get(source_id)
+        existing = await corpus.get(source_id)
         if existing == episode:
             episodes.pop(source_id, None)  # a shorter copy seen earlier is not wanted either
             report.unchanged += 1

@@ -35,11 +35,9 @@ import json
 import re
 import logging
 import sqlite3
-import threading
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
-from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -47,7 +45,8 @@ from eidolon import anniversaries
 from eidolon.activity import ActivityLog, image_origin, timed
 from eidolon.characters import Character
 from eidolon.clock import Clock
-from eidolon.database import connect
+from eidolon.data_access import Database
+from eidolon.database import by_name
 from eidolon.engine import ConversationEngine, KeepsakeDraft, describe_keepsake
 from eidolon.features import AllOn, Switches
 from eidolon.image_generation import TIME_LIMIT, ImageFailed
@@ -58,7 +57,7 @@ from eidolon.promises import Promise
 from eidolon.randomness import Random
 from eidolon.reply_format import Segment
 from eidolon.schedules import Schedules
-from eidolon.store import Conversation, Letter, Store
+from eidolon.store import Conversation, Letter, Store, give_keepsake
 
 log = logging.getLogger(__name__)
 
@@ -183,7 +182,7 @@ class _Due:
 class Keepsakes:
     def __init__(
         self,
-        path: Path,
+        db: Database,
         store: Store,
         engine: ConversationEngine,
         characters: Mapping[str, Character],
@@ -193,10 +192,11 @@ class Keepsakes:
         random: Random,
         enabled: bool,
         schedules: Schedules | None = None,
-        letters_on: Callable[[str], bool] = lambda _: False,
+        letters_on: Callable[[sqlite3.Connection, str], bool] = lambda _db, _user: False,
         features: Switches = AllOn(),
     ) -> None:
-        """`letters_on` says whether a user's birthday keepsake comes with a letter."""
+        """`letters_on` says, through the connection given, whether a user's birthday keepsake
+        comes with a letter."""
         self._store = store
         self._engine = engine
         self._characters = characters
@@ -208,50 +208,45 @@ class Keepsakes:
         self._schedules = schedules
         self._letters_on = letters_on
         self._features = features
-        self._given: list[Callable[[str, str, str, datetime], None]] = []
+        self._given: list[Callable[[str, str, str, datetime], Awaitable[None]]] = []
         self._filling: dict[str, asyncio.Task] = {}
-        self._db = connect(path)
-        self._db.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
-            if "drawn" not in {r[1] for r in self._db.execute("PRAGMA table_info(keepsakes)")}:
-                self._db.execute("ALTER TABLE keepsakes ADD COLUMN drawn INTEGER NOT NULL DEFAULT 0")
+        self._db = db
+        db.prepare(_open)
 
-    def on_given(self, listener: Callable[[str, str, str, datetime], None]) -> None:
+    def on_given(self, listener: Callable[[str, str, str, datetime], Awaitable[None]]) -> None:
         """Have `listener` told the user, the character, the keepsake's name and when, as she
         gives one."""
         self._given.append(listener)
 
-    def _on(self, user_id: str) -> bool:
-        return self._enabled and self._features.on(user_id, "keepsakes")
+    def _on(self, db: sqlite3.Connection, user_id: str) -> bool:
+        return self._enabled and self._features.read_on(db, user_id, "keepsakes")
 
     # What she gives one for.
 
-    def scene_played(self, user_id: str, character_id: str, tier: str, at: datetime) -> None:
-        self._put_down(user_id, character_id, f"scene:{tier}", "scene",
-                       TIER_NAMES.get(tier, tier), at + timedelta(minutes=10))
+    async def scene_played(self, user_id: str, character_id: str, tier: str, at: datetime) -> None:
+        await self._put_down(user_id, character_id, f"scene:{tier}", "scene",
+                             TIER_NAMES.get(tier, tier), at + timedelta(minutes=10))
 
-    def gift_given(
+    async def gift_given(
         self, user_id: str, character_id: str, gift_name: str, liked: bool, _: object,
         at: datetime,
     ) -> None:
         if not liked or self._random(GIFT_ODDS) != 0:
             return
-        zone = self._zone(user_id)
+        zone = await self._zone(user_id)
         tomorrow = at.astimezone(zone).date() + timedelta(days=1)
         due = datetime.combine(tomorrow, MORNING, zone) + timedelta(minutes=self._random(240))
-        self._put_down(user_id, character_id, f"gift:{tomorrow}", "gift", gift_name, due)
+        await self._put_down(user_id, character_id, f"gift:{tomorrow}", "gift", gift_name, due)
 
-    def promise_settled(self, promise: Promise, settled: str, at: datetime) -> None:
+    async def promise_settled(self, promise: Promise, settled: str, at: datetime) -> None:
         if settled not in ("kept", "kept_late") or self._random(PROMISE_ODDS) != 0:
             return
-        self._put_down(
+        await self._put_down(
             promise.user_id, promise.character_id, f"promise:{promise.id}", "promise",
             promise.text, at + timedelta(minutes=30 + self._random(120)),
         )
 
-    def letter_written(self, conversation: Conversation, letter: Letter, about: str) -> None:
+    async def letter_written(self, conversation: Conversation, letter: Letter, about: str) -> None:
         """A letter of hers was written: a birthday's comes with a keepsake, a holiday's now
         and then."""
         if letter.occasion == "producer_birthday":
@@ -260,51 +255,64 @@ class Keepsakes:
             occasion = "holiday"
         else:
             return
-        self._put_down(
+        await self._put_down(
             conversation.user_id, conversation.character_id, f"letter:{letter.id}", occasion,
             about, self._clock(), letter.id, letter.created_at,
         )
 
-    def favor_done(
+    async def favor_done(
         self, user_id: str, character_id: str, key: str, occasion: Occasion, about: str,
         due: datetime,
     ) -> None:
         """A favor of the producer's she gives a keepsake for (GLOSSARY.md「拜托」) is done:
         give one at `due`, once for `key`."""
-        self._put_down(user_id, character_id, f"favor:{key}", occasion, about, due)
+        await self._put_down(user_id, character_id, f"favor:{key}", occasion, about, due)
 
-    def _put_down(
+    async def _put_down(
         self, user_id: str, character_id: str, key: str, occasion: Occasion, about: str,
         due: datetime, letter_id: int | None = None, given_at: str | None = None,
     ) -> None:
-        if not self._on(user_id) or character_id not in self._characters:
+        if character_id not in self._characters:
             return
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT OR IGNORE INTO keepsake_due"
-                " (user_id, character_id, key, occasion, about, due_at, letter_id, given_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (user_id, character_id, key, occasion, about, due.astimezone(UTC).isoformat(),
-                 letter_id, given_at),
-            )
+        await self._db.write(
+            self._put_down_body, user_id, character_id, key, occasion, about, due, letter_id,
+            given_at,
+        )
 
-    def _plan(self, now: datetime) -> None:
+    def _put_down_body(
+        self, db: sqlite3.Connection, user_id: str, character_id: str, key: str,
+        occasion: Occasion, about: str, due: datetime, letter_id: int | None,
+        given_at: str | None,
+    ) -> None:
+        if not self._on(db, user_id):
+            return
+        db.execute(
+            "INSERT OR IGNORE INTO keepsake_due"
+            " (user_id, character_id, key, occasion, about, due_at, letter_id, given_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, character_id, key, occasion, about, due.astimezone(UTC).isoformat(),
+             letter_id, given_at),
+        )
+
+    async def _plan(self, now: datetime) -> None:
         """Put down the keepsakes of the day for each current conversation: an anniversary's,
         a birthday's without a letter, a trip's the day after."""
-        for current in self._store.current_conversations():
+        for current in await self._store.current_conversations():
             conversation, contact = current.conversation, current.last_contact
             user_id, character_id = conversation.user_id, conversation.character_id
             if character_id not in self._characters or current.ended or not current.has_turns:
                 continue
-            if contact is None or now - contact > WINDOW or not self._on(user_id):
+            if contact is None or now - contact > WINDOW:
                 continue
-            profile = self._store.get_profile(user_id)
+            if not self._enabled or not await self._features.on(user_id, "keepsakes"):
+                continue
+            profile = await self._store.get_profile(user_id)
             timezone = effective_timezone(profile, None)
             local = now.astimezone(ZoneInfo(timezone))
             if local.time() < MORNING:
                 continue
             today = local.date()
-            first = self._store.first_records(user_id).get(character_id)
+            first = (await self._store.first_records(user_id)).get(character_id)
             found = (
                 anniversaries.of(anniversaries.day_of(first, timezone), today) if first else None
             )
@@ -313,19 +321,21 @@ class Keepsakes:
                     f"你们认识满 {found.years} 年的日子" if found.years
                     else f"你们认识的第 {found.days} 天"
                 )
-                self._put_down(user_id, character_id, f"anniversary:{today}", "anniversary",
-                               about, now)
+                await self._put_down(user_id, character_id, f"anniversary:{today}",
+                                     "anniversary", about, now)
             if (
                 profile.birthday is not None and is_birthday(profile.birthday, today)
-                and not self._letters_on(user_id)
+                and not await self._db.read(self._letters_on, user_id)
             ):
-                self._put_down(user_id, character_id, f"birthday:{today.year}", "birthday", "",
-                               now)
-            if self._schedules is not None and self._features.on(user_id, "schedules"):
-                yesterday = self._schedules.of(user_id, character_id, today - timedelta(days=1))
+                await self._put_down(user_id, character_id, f"birthday:{today.year}", "birthday",
+                                     "", now)
+            if self._schedules is not None and await self._features.on(user_id, "schedules"):
+                yesterday = await self._schedules.of(
+                    user_id, character_id, today - timedelta(days=1)
+                )
                 if yesterday is not None and yesterday.trip:
-                    self._put_down(user_id, character_id, f"souvenir:{yesterday.day}",
-                                   "souvenir", yesterday.trip, now)
+                    await self._put_down(user_id, character_id, f"souvenir:{yesterday.day}",
+                                         "souvenir", yesterday.trip, now)
 
     # Giving them.
 
@@ -344,8 +354,8 @@ class Keepsakes:
         if not self._enabled:
             return
         now = self._clock()
-        await asyncio.to_thread(self._plan, now)
-        for due in (await asyncio.to_thread(self._due, now))[:PER_TICK]:
+        await self._plan(now)
+        for due in (await self._db.read(_due, now))[:PER_TICK]:
             try:
                 await self._give(due, now)
             except Exception:
@@ -354,45 +364,34 @@ class Keepsakes:
     async def give_now(self, user_id: str, character_id: str, occasion: Occasion, about: str) -> bool:
         """Have her give the user a keepsake for `occasion` now: for trying it out under the
         development sign-in. False if they have no conversation."""
-        if not any(c.character_id == character_id for c, _, _ in self._store.latest_conversations(user_id)):
+        if not any(
+            c.character_id == character_id
+            for c, _, _ in await self._store.latest_conversations(user_id)
+        ):
             return False
         now = self._clock()
-        key = f"now:{now.isoformat()}"
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT INTO keepsake_due (user_id, character_id, key, occasion, about, due_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (user_id, character_id, key, occasion, about, now.astimezone(UTC).isoformat()),
-            )
-            row = self._db.execute("SELECT * FROM keepsake_due WHERE key = ?", (key,)).fetchone()
-        await self._give(_due_of(row), now, anyway=True)
+        due = await self._db.write(_due_now, user_id, character_id, occasion, about, now)
+        await self._give(due, now, anyway=True)
         return True
-
-    def _due(self, now: datetime) -> list[_Due]:
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT * FROM keepsake_due WHERE due_at <= ? AND tries < ? ORDER BY due_at",
-                (now.astimezone(UTC).isoformat(), TRIES),
-            ).fetchall()
-        return [
-            _due_of(r) for r in rows
-            if r["last_at"] is None or now - datetime.fromisoformat(r["last_at"]) >= RETRY_AFTER
-        ]
 
     async def _give(self, due: _Due, now: datetime, anyway: bool = False) -> None:
         conversation = next(
-            (c for c, _, _ in self._store.latest_conversations(due.user_id)
+            (c for c, _, _ in await self._store.latest_conversations(due.user_id)
              if c.character_id == due.character_id),
             None,
         )
         if (
-            conversation is None or not self._on(due.user_id)
-            or self._store.ended(conversation.id) is not None
+            conversation is None or not self._enabled
+            or not await self._features.on(due.user_id, "keepsakes")
+            or await self._store.ended(conversation.id) is not None
         ):
-            self._drop(due.id)
+            await self._db.write(_drop, due.id)
             return
-        if not anyway and due.occasion not in ANYWAY and self._given_today(due.user_id, now) >= PER_DAY:
-            self._put_off(due.id, now + timedelta(days=1))
+        if (
+            not anyway and due.occasion not in ANYWAY
+            and await self._given_today(due.user_id, now) >= PER_DAY
+        ):
+            await self._db.write(_put_off, due.id, now + timedelta(days=1))
             return
         recording = self._activity.begin(
             "keepsake", due.user_id, due.character_id, own_llm=False, exempt=False
@@ -402,41 +401,44 @@ class Keepsakes:
             with recording.current():
                 draft = await self._engine.write_keepsake(
                     conversation, lease.keys.chat_llm, due.occasion, due.about,
-                    self._names(due.user_id, due.character_id),
+                    await self._db.read(_names, due.user_id, due.character_id),
                 )
                 image = await self._draw(due.user_id, draft.tags)
         except Exception as e:
             # Not logged with what was raised: a service's error may repeat what it was asked.
             log.warning("giving keepsake %s failed: %s", due.id, type(e).__name__)
-            recording.finish("failed")
-            self._tried(due.id, now)
+            await recording.finish("failed")
+            await self._db.write(_tried, due.id, now)
             return
         finally:
             lease.release()
-        recording.finish("success")
+        await recording.finish("success")
         given_at = due.given_at or now.astimezone(UTC).isoformat()
-        keepsake_id = self._keep(due, draft, image, given_at)
-        if due.letter_id is None:
-            self._store.give_keepsake(conversation.id, keepsake_id, draft.name)
+        keepsake_id = await self._db.write(
+            _keep, due, draft, image, given_at,
+            conversation.id if due.letter_id is None else None,
+        )
         for listener in self._given:
             try:
-                listener(due.user_id, due.character_id, draft.name, datetime.fromisoformat(given_at))
+                await listener(
+                    due.user_id, due.character_id, draft.name, datetime.fromisoformat(given_at)
+                )
             except Exception:
                 log.exception("telling of keepsake %s failed", keepsake_id)
 
-    def can_draw(self, user_id: str) -> bool:
+    async def can_draw(self, user_id: str) -> bool:
         """Whether the user's keepsakes' pictures are drawn: on the deployer's image generation,
         the user not having switched them off (GLOSSARY.md「玩法开关」)."""
         return (
             self._config.image_generator() is not None
-            and self._features.on(user_id, "keepsake_images")
+            and await self._features.on(user_id, "keepsake_images")
         )
 
     async def _draw(self, user_id: str, tags: str) -> bytes | None:
         """Its picture, on the deployer's image generation; None without one, the user having
         switched them off, or failing."""
         generator = self._config.image_generator()
-        if generator is None or not self._features.on(user_id, "keepsake_images"):
+        if generator is None or not await self._features.on(user_id, "keepsake_images"):
             return None
         settings = generator.settings
         prompt, stripped = keepsake_prompt(tags, settings.style)
@@ -450,113 +452,35 @@ class Keepsakes:
             return None
         return image.webp
 
-    def _keep(self, due: _Due, draft: KeepsakeDraft, image: bytes | None, given_at: str) -> int:
-        with self._lock, self._db:
-            cursor = self._db.execute(
-                "INSERT INTO keepsakes (user_id, character_id, occasion, about, name, look, emoji,"
-                " tags, said, image, letter_id, given_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    due.user_id, due.character_id, due.occasion, due.about, draft.name,
-                    draft.look, draft.emoji, draft.tags,
-                    json.dumps([{"ja": s.ja, "zh": s.zh} for s in draft.said], ensure_ascii=False),
-                    image, due.letter_id, given_at,
-                ),
-            )
-            self._db.execute("DELETE FROM keepsake_due WHERE id = ?", (due.id,))
-        assert cursor.lastrowid is not None
-        return cursor.lastrowid
+    async def _given_today(self, user_id: str, now: datetime) -> int:
+        zone = await self._zone(user_id)
+        start = datetime.combine(now.astimezone(zone).date(), time(), zone)
+        return await self._db.read(_given_since, user_id, start)
 
-    def _drop(self, due_id: int) -> None:
-        with self._lock, self._db:
-            self._db.execute("DELETE FROM keepsake_due WHERE id = ?", (due_id,))
-
-    def _put_off(self, due_id: int, to: datetime) -> None:
-        with self._lock, self._db:
-            self._db.execute(
-                "UPDATE keepsake_due SET due_at = ? WHERE id = ?",
-                (to.astimezone(UTC).isoformat(), due_id),
-            )
-
-    def _tried(self, due_id: int, now: datetime) -> None:
-        with self._lock, self._db:
-            self._db.execute(
-                "UPDATE keepsake_due SET tries = tries + 1, last_at = ? WHERE id = ?",
-                (now.isoformat(), due_id),
-            )
-
-    def _given_today(self, user_id: str, now: datetime) -> int:
-        start = datetime.combine(now.astimezone(self._zone(user_id)).date(), time(), self._zone(user_id))
-        with self._lock:
-            [count] = self._db.execute(
-                "SELECT COUNT(*) FROM keepsakes WHERE user_id = ? AND given_at >= ?",
-                (user_id, start.astimezone(UTC).isoformat()),
-            ).fetchone()
-        return count
-
-    def _names(self, user_id: str, character_id: str) -> list[str]:
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT name FROM keepsakes WHERE user_id = ? AND character_id = ?"
-                " ORDER BY id DESC LIMIT 10",
-                (user_id, character_id),
-            ).fetchall()
-        return [name for (name,) in rows]
-
-    def _zone(self, user_id: str) -> ZoneInfo:
-        return ZoneInfo(effective_timezone(self._store.get_profile(user_id), None))
+    async def _zone(self, user_id: str) -> ZoneInfo:
+        return ZoneInfo(effective_timezone(await self._store.get_profile(user_id), None))
 
     # The cabinet.
 
-    def of(self, user_id: str, now: datetime) -> list[Keepsake]:
+    async def of(self, user_id: str, now: datetime) -> list[Keepsake]:
         """The keepsakes she gave the user by `now`, the newest first."""
-        with self._lock:
-            rows = self._db.execute(
-                f"SELECT {_COLUMNS} FROM keepsakes WHERE user_id = ? AND given_at <= ?"
-                " ORDER BY given_at DESC, id DESC",
-                (user_id, now.astimezone(UTC).isoformat()),
-            ).fetchall()
-        return [_keepsake(r) for r in rows]
+        return await self._db.read(_of, user_id, now)
 
-    def one(self, user_id: str, keepsake_id: int) -> Keepsake | None:
-        with self._lock:
-            row = self._db.execute(
-                f"SELECT {_COLUMNS} FROM keepsakes WHERE id = ? AND user_id = ?",
-                (keepsake_id, user_id),
-            ).fetchone()
-        return _keepsake(row) if row else None
+    async def one(self, user_id: str, keepsake_id: int) -> Keepsake | None:
+        return await self._db.read(_one, user_id, keepsake_id)
 
-    def for_letter(self, user_id: str, letter_id: int) -> Keepsake | None:
-        with self._lock:
-            row = self._db.execute(
-                f"SELECT {_COLUMNS} FROM keepsakes WHERE letter_id = ? AND user_id = ?",
-                (letter_id, user_id),
-            ).fetchone()
-        return _keepsake(row) if row else None
+    async def for_letter(self, user_id: str, letter_id: int) -> Keepsake | None:
+        return await self._db.read(read_for_letter, user_id, letter_id)
 
-    def image(self, user_id: str, keepsake_id: int) -> bytes | None:
-        with self._lock:
-            row = self._db.execute(
-                "SELECT image FROM keepsakes WHERE id = ? AND user_id = ?", (keepsake_id, user_id)
-            ).fetchone()
-        return row[0] if row else None
+    async def image(self, user_id: str, keepsake_id: int) -> bytes | None:
+        return await self._db.read(_image, user_id, keepsake_id)
 
-    def unseen(self, user_id: str, now: datetime) -> int:
-        with self._lock:
-            [count] = self._db.execute(
-                "SELECT COUNT(*) FROM keepsakes WHERE user_id = ? AND given_at <= ?"
-                " AND seen_at IS NULL",
-                (user_id, now.astimezone(UTC).isoformat()),
-            ).fetchone()
-        return count
+    async def unseen(self, user_id: str, now: datetime) -> int:
+        return await self._db.read(_unseen, user_id, now)
 
-    def seen(self, user_id: str, now: datetime) -> None:
+    async def seen(self, user_id: str, now: datetime) -> None:
         """The user opened the cabinet: all given by `now` are seen."""
-        with self._lock, self._db:
-            self._db.execute(
-                "UPDATE keepsakes SET seen_at = ? WHERE user_id = ? AND given_at <= ?"
-                " AND seen_at IS NULL",
-                (now.isoformat(), user_id, now.astimezone(UTC).isoformat()),
-            )
+        await self._db.write(_seen, user_id, now)
 
     # Redrawing and taking out.
 
@@ -565,13 +489,9 @@ class Keepsakes:
         described it in a sentence is described anew first, on the deployer's chat model,
         from its name and look. False if there is no such keepsake of the user's, nothing to
         draw on, or the picture could not be drawn (the old one kept then)."""
-        if not self.can_draw(user_id):
+        if not await self.can_draw(user_id):
             return False
-        with self._lock:
-            row = self._db.execute(
-                "SELECT character_id, name, look, tags FROM keepsakes WHERE id = ? AND user_id = ?",
-                (keepsake_id, user_id),
-            ).fetchone()
+        row = await self._db.read(_to_redraw, user_id, keepsake_id)
         if row is None:
             return False
         character_id, name, look, tags = row
@@ -594,60 +514,36 @@ class Keepsakes:
         except Exception as e:
             log.warning("redrawing keepsake %s failed: %s", keepsake_id, type(e).__name__)
             image = None
-        recording.finish("success" if image else "failed")
+        await recording.finish("success" if image else "failed")
         if image is None:
             return False
-        with self._lock, self._db:
-            self._db.execute(
-                "UPDATE keepsakes SET image = ?, tags = ?, drawn = drawn + 1"
-                " WHERE id = ? AND user_id = ?",
-                (image, tags, keepsake_id, user_id),
-            )
+        await self._db.write(_redrawn, user_id, keepsake_id, image, tags)
         return True
 
-    def take_out(self, user_id: str, keepsake_id: int) -> bool:
+    async def take_out(self, user_id: str, keepsake_id: int) -> bool:
         """Take the keepsake out of the cabinet, and its card out of the conversation it was
         given in; False if there is no such keepsake of the user's."""
-        with self._lock, self._db:
-            cursor = self._db.execute(
-                "DELETE FROM keepsakes WHERE id = ? AND user_id = ?", (keepsake_id, user_id)
-            )
-            if cursor.rowcount == 0:
-                return False
-            self._db.execute(
-                "DELETE FROM conversation_events WHERE kind = 'keepsake' AND keepsake_id = ?",
-                (keepsake_id,),
-            )
-        return True
+        return await self._db.write(_take_out, user_id, keepsake_id)
 
     # Drawing the pictures missing.
 
-    def missing(self, user_id: str) -> int:
-        with self._lock:
-            [count] = self._db.execute(
-                "SELECT COUNT(*) FROM keepsakes WHERE user_id = ? AND image IS NULL", (user_id,)
-            ).fetchone()
-        return count
+    async def missing(self, user_id: str) -> int:
+        return await self._db.read(_missing, user_id)
 
     def filling(self, user_id: str) -> bool:
         task = self._filling.get(user_id)
         return task is not None and not task.done()
 
-    def fill_images(self, user_id: str) -> bool:
+    async def fill_images(self, user_id: str) -> bool:
         """Begin drawing the pictures of all the user's keepsakes without one, one at a time,
         on the deployer's image generation; False if there is none, or it is under way."""
-        if not self.can_draw(user_id) or self.filling(user_id):
+        if not await self.can_draw(user_id) or self.filling(user_id):
             return False
         self._filling[user_id] = asyncio.create_task(self._fill(user_id))
         return True
 
     async def _fill(self, user_id: str) -> None:
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT id, character_id, tags FROM keepsakes WHERE user_id = ? AND image IS NULL"
-                " ORDER BY id",
-                (user_id,),
-            ).fetchall()
+        rows = await self._db.read(_without_images, user_id)
         for keepsake_id, character_id, tags in rows:
             recording = self._activity.begin(
                 "keepsake", user_id, character_id, own_llm=False, exempt=False
@@ -658,20 +554,200 @@ class Keepsakes:
             except Exception:
                 log.exception("drawing keepsake %s failed", keepsake_id)
                 image = None
-            recording.finish("success" if image else "failed")
+            await recording.finish("success" if image else "failed")
             if image is None:
                 continue
-            with self._lock, self._db:
-                self._db.execute(
-                    "UPDATE keepsakes SET image = ? WHERE id = ? AND user_id = ?",
-                    (image, keepsake_id, user_id),
-                )
+            await self._db.write(_drawn_in, user_id, keepsake_id, image)
 
     def close(self) -> None:
         for task in self._filling.values():
             task.cancel()
-        with self._lock:
-            self._db.close()
+
+
+def _open(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+    if "drawn" not in {r[1] for r in db.execute("PRAGMA table_info(keepsakes)")}:
+        db.execute("ALTER TABLE keepsakes ADD COLUMN drawn INTEGER NOT NULL DEFAULT 0")
+
+
+def _due(db: sqlite3.Connection, now: datetime) -> list[_Due]:
+    rows = by_name(db).execute(
+        "SELECT * FROM keepsake_due WHERE due_at <= ? AND tries < ? ORDER BY due_at",
+        (now.astimezone(UTC).isoformat(), TRIES),
+    ).fetchall()
+    return [
+        _due_of(r) for r in rows
+        if r["last_at"] is None or now - datetime.fromisoformat(r["last_at"]) >= RETRY_AFTER
+    ]
+
+
+def _due_now(
+    db: sqlite3.Connection, user_id: str, character_id: str, occasion: Occasion, about: str,
+    now: datetime,
+) -> _Due:
+    key = f"now:{now.isoformat()}"
+    db.execute(
+        "INSERT INTO keepsake_due (user_id, character_id, key, occasion, about, due_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, character_id, key, occasion, about, now.astimezone(UTC).isoformat()),
+    )
+    return _due_of(by_name(db).execute("SELECT * FROM keepsake_due WHERE key = ?", (key,)).fetchone())
+
+
+def _keep(
+    db: sqlite3.Connection, due: _Due, draft: KeepsakeDraft, image: bytes | None, given_at: str,
+    conversation_id: str | None,
+) -> int:
+    """Keep the keepsake given, and, given in `conversation_id`, its card there."""
+    cursor = db.execute(
+        "INSERT INTO keepsakes (user_id, character_id, occasion, about, name, look, emoji,"
+        " tags, said, image, letter_id, given_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            due.user_id, due.character_id, due.occasion, due.about, draft.name,
+            draft.look, draft.emoji, draft.tags,
+            json.dumps([{"ja": s.ja, "zh": s.zh} for s in draft.said], ensure_ascii=False),
+            image, due.letter_id, given_at,
+        ),
+    )
+    db.execute("DELETE FROM keepsake_due WHERE id = ?", (due.id,))
+    assert cursor.lastrowid is not None
+    if conversation_id is not None:
+        give_keepsake(db, conversation_id, cursor.lastrowid, draft.name)
+    return cursor.lastrowid
+
+
+def _drop(db: sqlite3.Connection, due_id: int) -> None:
+    db.execute("DELETE FROM keepsake_due WHERE id = ?", (due_id,))
+
+
+def _put_off(db: sqlite3.Connection, due_id: int, to: datetime) -> None:
+    db.execute(
+        "UPDATE keepsake_due SET due_at = ? WHERE id = ?", (to.astimezone(UTC).isoformat(), due_id)
+    )
+
+
+def _tried(db: sqlite3.Connection, due_id: int, now: datetime) -> None:
+    db.execute(
+        "UPDATE keepsake_due SET tries = tries + 1, last_at = ? WHERE id = ?",
+        (now.isoformat(), due_id),
+    )
+
+
+def _given_since(db: sqlite3.Connection, user_id: str, start: datetime) -> int:
+    [count] = db.execute(
+        "SELECT COUNT(*) FROM keepsakes WHERE user_id = ? AND given_at >= ?",
+        (user_id, start.astimezone(UTC).isoformat()),
+    ).fetchone()
+    return count
+
+
+def _names(db: sqlite3.Connection, user_id: str, character_id: str) -> list[str]:
+    rows = db.execute(
+        "SELECT name FROM keepsakes WHERE user_id = ? AND character_id = ?"
+        " ORDER BY id DESC LIMIT 10",
+        (user_id, character_id),
+    ).fetchall()
+    return [name for (name,) in rows]
+
+
+def _of(db: sqlite3.Connection, user_id: str, now: datetime) -> list[Keepsake]:
+    rows = db.execute(
+        f"SELECT {_COLUMNS} FROM keepsakes WHERE user_id = ? AND given_at <= ?"
+        " ORDER BY given_at DESC, id DESC",
+        (user_id, now.astimezone(UTC).isoformat()),
+    ).fetchall()
+    return [_keepsake(r) for r in rows]
+
+
+def _one(db: sqlite3.Connection, user_id: str, keepsake_id: int) -> Keepsake | None:
+    row = db.execute(
+        f"SELECT {_COLUMNS} FROM keepsakes WHERE id = ? AND user_id = ?", (keepsake_id, user_id)
+    ).fetchone()
+    return _keepsake(row) if row else None
+
+
+def read_for_letter(db: sqlite3.Connection, user_id: str, letter_id: int) -> Keepsake | None:
+    """The keepsake that came with the user's letter `letter_id`, if any, read through `db`."""
+    row = db.execute(
+        f"SELECT {_COLUMNS} FROM keepsakes WHERE letter_id = ? AND user_id = ?",
+        (letter_id, user_id),
+    ).fetchone()
+    return _keepsake(row) if row else None
+
+
+def _image(db: sqlite3.Connection, user_id: str, keepsake_id: int) -> bytes | None:
+    row = db.execute(
+        "SELECT image FROM keepsakes WHERE id = ? AND user_id = ?", (keepsake_id, user_id)
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _unseen(db: sqlite3.Connection, user_id: str, now: datetime) -> int:
+    [count] = db.execute(
+        "SELECT COUNT(*) FROM keepsakes WHERE user_id = ? AND given_at <= ? AND seen_at IS NULL",
+        (user_id, now.astimezone(UTC).isoformat()),
+    ).fetchone()
+    return count
+
+
+def _seen(db: sqlite3.Connection, user_id: str, now: datetime) -> None:
+    db.execute(
+        "UPDATE keepsakes SET seen_at = ? WHERE user_id = ? AND given_at <= ? AND seen_at IS NULL",
+        (now.isoformat(), user_id, now.astimezone(UTC).isoformat()),
+    )
+
+
+def _to_redraw(
+    db: sqlite3.Connection, user_id: str, keepsake_id: int
+) -> tuple[str, str, str, str] | None:
+    return db.execute(
+        "SELECT character_id, name, look, tags FROM keepsakes WHERE id = ? AND user_id = ?",
+        (keepsake_id, user_id),
+    ).fetchone()
+
+
+def _redrawn(
+    db: sqlite3.Connection, user_id: str, keepsake_id: int, image: bytes, tags: str
+) -> None:
+    db.execute(
+        "UPDATE keepsakes SET image = ?, tags = ?, drawn = drawn + 1 WHERE id = ? AND user_id = ?",
+        (image, tags, keepsake_id, user_id),
+    )
+
+
+def _take_out(db: sqlite3.Connection, user_id: str, keepsake_id: int) -> bool:
+    cursor = db.execute(
+        "DELETE FROM keepsakes WHERE id = ? AND user_id = ?", (keepsake_id, user_id)
+    )
+    if cursor.rowcount == 0:
+        return False
+    db.execute(
+        "DELETE FROM conversation_events WHERE kind = 'keepsake' AND keepsake_id = ?",
+        (keepsake_id,),
+    )
+    return True
+
+
+def _missing(db: sqlite3.Connection, user_id: str) -> int:
+    [count] = db.execute(
+        "SELECT COUNT(*) FROM keepsakes WHERE user_id = ? AND image IS NULL", (user_id,)
+    ).fetchone()
+    return count
+
+
+def _without_images(db: sqlite3.Connection, user_id: str) -> list[tuple[int, str, str]]:
+    return db.execute(
+        "SELECT id, character_id, tags FROM keepsakes WHERE user_id = ? AND image IS NULL"
+        " ORDER BY id",
+        (user_id,),
+    ).fetchall()
+
+
+def _drawn_in(db: sqlite3.Connection, user_id: str, keepsake_id: int, image: bytes) -> None:
+    db.execute(
+        "UPDATE keepsakes SET image = ? WHERE id = ? AND user_id = ?",
+        (image, keepsake_id, user_id),
+    )
 
 
 _COLUMNS = (

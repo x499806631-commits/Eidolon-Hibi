@@ -38,10 +38,12 @@ function ComboboxTrigger({
 
 // eidolon: 长得和 SelectTrigger 一样的触发键，里面是当前值；搜索框放进弹出层（ComboboxInput 放在 ComboboxContent 里）。
 // 选项很多、要能搜的选择框（例如时区）用它，外观和别的选择框一致，不在调用处拼按钮样式。
+// eidolon: placeholder，没选时触发键里显示的字。
 function ComboboxSelectTrigger({
   className,
+  placeholder,
   ...props
-}: Omit<ComboboxPrimitive.Trigger.Props, "children">) {
+}: Omit<ComboboxPrimitive.Trigger.Props, "children"> & { placeholder?: React.ReactNode }) {
   return (
     <ComboboxPrimitive.Trigger
       data-slot="combobox-select-trigger"
@@ -52,7 +54,7 @@ function ComboboxSelectTrigger({
       {...props}
     >
       <span className="line-clamp-1 flex-1 text-left">
-        <ComboboxPrimitive.Value />
+        <ComboboxPrimitive.Value placeholder={placeholder && <span className="text-muted-foreground">{placeholder}</span>} />
       </span>
       <ChevronDownIcon className="pointer-events-none size-4 text-muted-foreground" />
     </ComboboxPrimitive.Trigger>

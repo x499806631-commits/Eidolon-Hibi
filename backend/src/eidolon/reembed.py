@@ -19,6 +19,7 @@ from pathlib import Path
 from eidolon.characters import Character
 from eidolon.clock import utc_now
 from eidolon.corpus import REEMBED_BATCH
+from eidolon.data_access import Database
 from eidolon.embedding import Embedder, Reembeddable
 from eidolon.memory import Memories
 from eidolon.retrieval import open_reference_sources
@@ -64,19 +65,20 @@ async def reembed(
     service fails."""
     by_id = {c.id: c for c in characters}
     # Passages missing vectors are what this is for; no need to warn of them.
-    sources = open_reference_sources(path, embedder, by_id.values(), world, warn=False)
-    memories = Memories(path, by_id, utc_now, embedder=embedder)
-    everything: list[Reembeddable] = [*sources.embedded(), memories]
+    db = Database(path)
+    memories = Memories(db, by_id, utc_now, embedder=embedder)
     try:
+        sources = open_reference_sources(db, embedder, by_id.values(), world, warn=False)
+        everything: list[Reembeddable] = [*sources.embedded(), memories]
         embedded = []
         for each in everything:
             count = await each.embed_missing(batch, _progress(each))
             log.info("%s：新向量化 %d %s", each.label, count, each.unit)
             embedded.append(EmbeddedCount(each.label, each.unit, count))
-        forgotten = sum(each.forget_other_models() for each in everything)
+        forgotten = sum([await each.forget_other_models() for each in everything])
     finally:
-        sources.close()
         await memories.aclose()
+        await db.close()
     return ReembedReport(tuple(embedded), forgotten)
 
 

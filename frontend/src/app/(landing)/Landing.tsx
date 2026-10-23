@@ -132,12 +132,19 @@ export function Landing({
 function unitsOf(spectrum: SpectrumModel, characters: Character[]): SpectrumUnit[] {
   const outfitOf = new Map(characters.map((c) => [c.id, c.stand?.default_outfit ?? null]));
   const greetingOf = new Map(characters.map((c) => [c.id, c.greeting]));
+  // 没有组合的那一段（事务员はづき）的偶像编号不是 1–28 这样连着的，名牌接着组合里的人数往下编。
+  const inUnits = spectrum.units.filter((unit) => unit.name !== null).reduce((n, unit) => n + unit.idols.length, 0);
   return spectrum.units.map((unit, u) => ({
     name: unit.name,
     plates: unit.idols.map((idol, slot) => ({
       id: idol.id,
       name: idol.name,
-      number: idol.idolId === null ? null : String(idol.idolId).padStart(2, "0"),
+      number:
+        unit.name === null
+          ? String(inUnits + slot + 1).padStart(2, "0")
+          : idol.idolId === null
+            ? null
+            : String(idol.idolId).padStart(2, "0"),
       unit: u,
       slot,
       unitSize: unit.idols.length,

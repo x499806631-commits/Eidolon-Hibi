@@ -10,12 +10,12 @@ from datetime import timedelta
 import httpx
 import pytest
 
-from eidolon.backup import Backups, Source
+from eidolon.backup import Source, abandon_unfinished
 from eidolon.config import Settings
 from tests.conftest import ClientFactory
 from tests.fakes import START, FakeClock, FakeIdentityProvider, FakeLLM
 from tests.test_activity_records import admin_client, settings  # noqa: F401  (with an admin)
-from tests.test_backup import BACKUP_ENV, backup_env  # noqa: F401  (the fixture)
+from tests.test_backup import BACKUP_ENV, backup_env, begun_in, records_in  # noqa: F401
 from tests.test_stand_upload import FakeBucket
 
 
@@ -66,12 +66,10 @@ async def back_up_now(client: httpx.AsyncClient) -> dict:
     raise AssertionError("the backup never finished")
 
 
-def begun_elsewhere(settings: Settings, clock: FakeClock, source: Source = "cron") -> None:  # noqa: F811
+async def begun_elsewhere(settings: Settings, clock: FakeClock, source: Source = "cron") -> None:  # noqa: F811
     """A run begun now in another process, as the cron's `eidolon backup` is, and not
     finished."""
-    backups = Backups(settings.database_path, clock)
-    backups.start(source)
-    backups.close()
+    await begun_in(settings.database_path, source, clock)
 
 
 async def test_only_admins_see_the_backups_or_begin_one(
@@ -149,9 +147,7 @@ async def test_the_button_backs_up_in_the_background_as_the_admins_run(
     assert success["size"] == len(storage.objects[key][0])
     assert board["last"]["errors"] == []
     assert board["bucket"] == {"kept": 1, "total": success["size"], "over_warning": False}
-    backups = Backups(settings.database_path, FakeClock())
-    assert [record.source for record in backups.records()] == ["admin"]
-    backups.close()
+    assert [record.source for record in await records_in(settings.database_path)] == ["admin"]
 
 
 async def test_a_backup_over_26_hours_ago_is_overdue(
@@ -188,10 +184,8 @@ async def test_a_failed_run_after_the_last_success_says_why_and_who_began_it(
 async def test_a_run_abandoned_last_is_the_last_and_says_so(
     admin: httpx.AsyncClient, set_up: pytest.MonkeyPatch, settings: Settings, clock: FakeClock  # noqa: F811
 ):
-    begun_elsewhere(settings, clock)
-    backups = Backups(settings.database_path, clock)
-    backups.abandon_unfinished()
-    backups.close()
+    await begun_elsewhere(settings, clock)
+    abandon_unfinished(settings.database_path, clock)
 
     board = await status(admin)
 
@@ -205,7 +199,7 @@ async def test_a_run_begun_over_an_hour_ago_and_never_finished_is_abandoned_befo
 ):
     await back_up_now(admin)
     clock.advance(hours=2)
-    begun_elsewhere(settings, clock)
+    await begun_elsewhere(settings, clock)
     clock.advance(hours=1, seconds=1)
 
     board = await status(admin)
@@ -220,7 +214,7 @@ async def test_while_a_backup_is_under_way_the_button_answers_conflict(
     admin: httpx.AsyncClient, set_up: pytest.MonkeyPatch, settings: Settings,  # noqa: F811
     storage: FakeBucket, clock: FakeClock,
 ):
-    begun_elsewhere(settings, clock)
+    await begun_elsewhere(settings, clock)
 
     board = await status(admin)
     res = await admin.post("/api/admin/backups")

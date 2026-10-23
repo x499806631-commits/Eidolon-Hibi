@@ -16,14 +16,18 @@ The `Admission` it hands out settles it, once: given back unless its result coun
 (`_COUNTED`), the record written, the deployer's keys let go.
 """
 
-from collections.abc import Callable
+import asyncio
+import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from eidolon.activity import ActivityLog, CallEndReason, Recording, Result
 from eidolon.llm import TurnLLMs
 from eidolon.own_keys import BroughtKeys, CallKeys, OwnKeys, TurnKeys
 from eidolon.usage import OverLimit, UsageLimiter, Use
+
+log = logging.getLogger(__name__)
 
 Admitted = Literal["turn", "call"]
 """What is let begin: a turn or a call, which the user takes; never a reach-out."""
@@ -81,7 +85,7 @@ class Admission(Generic[K]):
         """Whether it counts towards the user's limit, turning out as `result`."""
         return not self.exempt and result in self._counted
 
-    def settle(
+    async def settle(
         self,
         result: Result,
         duration: float | None = None,
@@ -95,10 +99,10 @@ class Admission(Generic[K]):
         self._settled = True
         try:
             if result not in self._counted:
-                self._use.give_back()  # an exempt use is kept for the admin to see
+                await self._use.give_back()  # an exempt use is kept for the admin to see
         finally:
             try:
-                self.recording.finish(result, duration, end_reason)
+                await self.recording.finish(result, duration, end_reason)
             finally:
                 self.keys.release()
 
@@ -111,7 +115,7 @@ class Admissions:
         usage: UsageLimiter,
         activity: ActivityLog,
         own_keys: OwnKeys,
-        cooldown_until: Callable[[str, str], datetime | None],
+        cooldown_until: Callable[[str, str], Awaitable[datetime | None]],
     ) -> None:
         """`cooldown_until` tells when the cooldown a character (by id) is in with a user
         ends, None if she is in none or affinity is off."""
@@ -119,25 +123,27 @@ class Admissions:
         self._activity = activity
         self._own_keys = own_keys
         self._cooldown_until = cooldown_until
+        self._settling: set[asyncio.Future[Any]] = set()
+        """What was let in as no one waited for it any more, till it is settled."""
 
-    def refuse_while_cooling(self, user_id: str, character_id: str) -> None:
+    async def refuse_while_cooling(self, user_id: str, character_id: str) -> None:
         """Raise CoolingDown if the character is in a cooldown with the user: as each turn
         or call begins, before anything else is asked, and before a call is placed."""
-        until = self._cooldown_until(user_id, character_id)
+        until = await self._cooldown_until(user_id, character_id)
         if until is not None:
             raise CoolingDown(until)
 
-    def turn(
+    async def turn(
         self, user_id: str, character_id: str, brought: BroughtKeys
     ) -> Admission[TurnKeys]:
         """Let the user's next text turn with `character_id`, bringing `brought`, begin.
         Raises CoolingDown, recording nothing, while she is in a cooldown with them;
         OverLimit when they have no turns left this hour; then, and whatever else fails before it
         begins, it is recorded and takes no use of the limit."""
-        self.refuse_while_cooling(user_id, character_id)
-        return self._admit("turn", user_id, character_id, self._own_keys.for_turn(brought))
+        await self.refuse_while_cooling(user_id, character_id)
+        return await self._admit("turn", user_id, character_id, self._own_keys.for_turn(brought))
 
-    def call(
+    async def call(
         self, user_id: str, character_id: str, brought: BroughtKeys
     ) -> Admission[CallKeys]:
         """Let the user's next call with `character_id`, bringing `brought`, begin. Raises
@@ -145,23 +151,61 @@ class Admissions:
         before it begins, it is recorded and takes no use of the limit. Raises
         CallsUnavailable, recording nothing, when the deployment has no keys for calls and
         neither does the call bring them; CoolingDown as a turn does."""
-        self.refuse_while_cooling(user_id, character_id)
-        return self._admit("call", user_id, character_id, self._own_keys.for_call(brought))
+        await self.refuse_while_cooling(user_id, character_id)
+        return await self._admit("call", user_id, character_id, self._own_keys.for_call(brought))
 
-    def _admit(self, kind: Admitted, user_id: str, character_id: str, keys: K) -> Admission[K]:
+    async def admitted(
+        self,
+        admitting: Awaitable[Admission[K]],
+        never_began: Callable[[Admission[K]], Awaitable[None]],
+    ) -> Admission[K]:
+        """What `admitting` (`turn`, `call`) lets begin. Should the wait be cancelled,
+        admitting goes on all the same, as what it writes would be written all the same
+        (ADR-0028): what it lets begin then never does, and is settled by `never_began`."""
+        task = asyncio.ensure_future(admitting)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            self._settling.add(task)
+
+            def settle(done: "asyncio.Future[Admission[K]]") -> None:
+                self._settling.discard(done)
+                if done.cancelled() or done.exception() is not None:
+                    return  # nothing let in: refused or failed, as recorded
+                settling = asyncio.ensure_future(never_began(done.result()))
+                self._settling.add(settling)
+                settling.add_done_callback(self._settled)
+
+            task.add_done_callback(settle)
+            raise
+
+    async def aclose(self) -> None:
+        """Wait for what was let in as no one waited for it any more to be settled."""
+        while self._settling:
+            await asyncio.gather(*self._settling, return_exceptions=True)
+
+    def _settled(self, settling: "asyncio.Future[Any]") -> None:
+        self._settling.discard(settling)
+        if not settling.cancelled() and (error := settling.exception()) is not None:
+            log.error("settling what never began failed", exc_info=error)
+
+    async def _admit(
+        self, kind: Admitted, user_id: str, character_id: str, keys: K
+    ) -> Admission[K]:
         try:
             recording = self._activity.begin(
                 kind, user_id, character_id, own_llm=keys.own_llm, exempt=keys.exempt
             )
             try:
-                use = self._usage.take(user_id, kind, exempt=keys.exempt)
+                use = await self._usage.take(user_id, kind, exempt=keys.exempt)
             except OverLimit:
-                recording.finish("rejected")
+                await recording.finish("rejected")
                 raise
             except BaseException:
-                recording.finish(_FAILED[kind])
+                await recording.finish(_FAILED[kind])
                 raise
         except BaseException:
             keys.release()
             raise
         return Admission(kind, keys, recording, use)
+

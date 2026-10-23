@@ -30,11 +30,17 @@ from eidolon.identity import Identity
 from eidolon.memory import Memories
 from eidolon.store import IdentityTaken, SignInMethod, Store, User
 
-def is_admin(store: Store, settings: Settings, user_id: str) -> bool:
+async def is_admin(store: Store, settings: Settings, user_id: str) -> bool:
     """Whether any identity the user signs in with is one the deployer lists as an admin's."""
-    return bool(settings.admins) and any(
-        (m.provider, m.subject) in settings.admins for m in store.sign_in_methods(user_id)
+    return bool(settings.admins) and signs_in_as_admin(
+        await store.sign_in_methods(user_id), settings
     )
+
+
+def signs_in_as_admin(methods: list[SignInMethod], settings: Settings) -> bool:
+    """Whether any of a user's sign-in methods, `methods`, is one the deployer lists as an
+    admin's."""
+    return any((m.provider, m.subject) in settings.admins for m in methods)
 
 
 MIN_GITHUB_ACCOUNT_AGE = timedelta(days=365)
@@ -70,39 +76,43 @@ class Accounts:
     def __post_init__(self) -> None:
         self._ban_key = _ban_list_key(self.secret_key) if self.secret_key else None
 
-    def sign_in(self, identity: Identity) -> User:
+    async def sign_in(self, identity: Identity) -> User:
         """The user this identity signs in as, made the first time. Raises SignInRefused."""
-        self._check(identity)
-        user_id = self.store.user_signing_in_with(identity.provider, identity.subject)
+        await self._check(identity)
+        user_id = await self.store.user_signing_in_with(identity.provider, identity.subject)
         if user_id is None:
             try:
-                return self.store.create_user_signing_in_with(
+                return await self.store.create_user_signing_in_with(
                     identity.display_name, self._method(identity)
                 )
             except IdentityTaken:  # signed in twice at once; the other made the user
-                user_id = self.store.user_signing_in_with(identity.provider, identity.subject)
+                user_id = await self.store.user_signing_in_with(
+                    identity.provider, identity.subject
+                )
                 assert user_id is not None
-        user = self.store.get_user(user_id)
+        user = await self.store.get_user(user_id)
         if user.banned_at is not None:
             raise SignInRefused("banned")
-        self.store.update_sign_in_method(
+        await self.store.update_sign_in_method(
             identity.provider, identity.subject, identity.display_name, identity.email
         )
         return user
 
-    def link(self, user_id: str, identity: Identity) -> None:
+    async def link(self, user_id: str, identity: Identity) -> None:
         """Let the user sign in with this identity too; nothing happens if they already do.
         Raises SignInRefused."""
-        self._check(identity)
-        owner = self.store.user_signing_in_with(identity.provider, identity.subject)
+        await self._check(identity)
+        owner = await self.store.user_signing_in_with(identity.provider, identity.subject)
         if owner == user_id:
             return
         if owner is not None:
             raise SignInRefused("taken")
-        if any(m.provider == identity.provider for m in self.store.sign_in_methods(user_id)):
+        if any(
+            m.provider == identity.provider for m in await self.store.sign_in_methods(user_id)
+        ):
             raise SignInRefused("already_linked")
         try:
-            self.store.add_sign_in_method(user_id, self._method(identity))
+            await self.store.add_sign_in_method(user_id, self._method(identity))
         except IdentityTaken:
             raise SignInRefused("taken") from None
 
@@ -112,15 +122,14 @@ class Accounts:
         list."""
         await self.calls.hang_up(user_id)
         await self.memories.forget(user_id)
-        banned = self.store.get_user(user_id).banned_at is not None
-        self.store.delete_user(user_id, [
+        await self.store.delete_user(user_id, [
             identity_hash(self._ban_key, m.provider, m.subject)
-            for m in self.store.sign_in_methods(user_id)
-        ] if banned else None)
+            for m in await self.store.sign_in_methods(user_id)
+        ])
         await self.calls.hang_up(user_id)  # any placed while memory was settling
 
-    def _check(self, identity: Identity) -> None:
-        if self.store.is_banned_identity(
+    async def _check(self, identity: Identity) -> None:
+        if await self.store.is_banned_identity(
             identity_hash(self._ban_key, identity.provider, identity.subject)
         ):
             raise SignInRefused("banned")

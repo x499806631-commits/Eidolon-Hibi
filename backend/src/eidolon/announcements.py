@@ -15,14 +15,13 @@ unpins it for good. Pinning leaves when it was published, so it does not make it
 Whether a user has read them is kept in their browser, not here.
 """
 
-import threading
+import sqlite3
 import uuid
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Literal
 
 from eidolon.clock import Clock
-from eidolon.database import connect
+from eidolon.data_access import Database
 
 MAX_BODY = 5000
 """The most characters an announcement's body may have."""
@@ -87,31 +86,25 @@ class Announcement:
 
 
 class Announcements:
-    def __init__(self, path: Path, clock: Clock) -> None:
-        self._db = connect(path)
-        self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
-            columns = {
-                row[1] for row in self._db.execute("PRAGMA table_info(announcements)")
-            }
-            if "pinned" not in columns:  # kept from before pinning: none pinned
-                self._db.execute(
-                    "ALTER TABLE announcements ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
-                )
+    def __init__(self, db: Database, clock: Clock) -> None:
+        self._db = db
+        db.prepare(_create)
         self._clock = clock
 
-    def all(self) -> list[Announcement]:
+    async def all(self) -> list[Announcement]:
         """Every announcement: the drafts, last written first, then those published, the
         one pinned first, then last published first."""
-        return self._select(
+        return await self._db.read(
+            _select,
             " ORDER BY published_at IS NOT NULL, pinned DESC, published_at DESC,"
-            " created_at DESC, rowid DESC"
+            " created_at DESC, rowid DESC",
+            (),
         )
 
-    def published(self) -> list[Announcement]:
+    async def published(self) -> list[Announcement]:
         """The one pinned, if any, then the `SHOWN` others published last, last first."""
-        return self._select(
+        return await self._db.read(
+            _select,
             " WHERE pinned OR id IN (SELECT id FROM announcements"
             " WHERE published_at IS NOT NULL AND NOT pinned"
             " ORDER BY published_at DESC, rowid DESC LIMIT ?)"
@@ -119,78 +112,88 @@ class Announcements:
             (SHOWN,),
         )
 
-    def get(self, id: str) -> Announcement:
-        found = self._select(" WHERE id = ?", (id,))
-        if not found:
-            raise NoSuchAnnouncement(id)
-        return found[0]
+    async def get(self, id: str) -> Announcement:
+        return await self._db.read(_get, id)
 
-    def write(self, body: str) -> Announcement:
+    async def write(self, body: str) -> Announcement:
         """A new draft of `body`."""
         now = self._clock().isoformat()
-        id = uuid.uuid4().hex
-        with self._lock, self._db:
-            self._db.execute(
-                f"INSERT INTO announcements ({_COLUMNS}) VALUES (?, ?, NULL, ?, ?, 0)",
-                (id, body, now, now),
-            )
-        return self.get(id)
+        return await self._db.write(_insert, uuid.uuid4().hex, body, now)
 
-    def edit(self, id: str, body: str) -> Announcement:
+    async def edit(self, id: str, body: str) -> Announcement:
         """Replace its body, keeping whether and when it was published."""
-        return self._update(
-            id, "body = ?, updated_at = ?", (body, self._clock().isoformat())
+        return await self._db.write(
+            _update, id, "body = ?, updated_at = ?", (body, self._clock().isoformat())
         )
 
-    def publish(self, id: str) -> Announcement:
+    async def publish(self, id: str) -> Announcement:
         """Publish it now; nothing for one published already."""
-        return self._update(
-            id, "published_at = COALESCE(published_at, ?)", (self._clock().isoformat(),)
+        return await self._db.write(
+            _update, id, "published_at = COALESCE(published_at, ?)", (self._clock().isoformat(),)
         )
 
-    def withdraw(self, id: str) -> Announcement:
+    async def withdraw(self, id: str) -> Announcement:
         """Make it a draft again, not pinned."""
-        return self._update(id, "published_at = NULL, pinned = 0", ())
+        return await self._db.write(_update, id, "published_at = NULL, pinned = 0", ())
 
-    def pin(self, id: str) -> Announcement:
+    async def pin(self, id: str) -> Announcement:
         """Make it the one users see first, unpinning the one that was; `NotPublished` for
         a draft."""
-        with self._lock, self._db:
-            found = self._db.execute(
-                "SELECT published_at FROM announcements WHERE id = ?", (id,)
-            ).fetchone()
-            if found is None:
-                raise NoSuchAnnouncement(id)
-            if found[0] is None:
-                raise NotPublished(id)
-            self._db.execute("UPDATE announcements SET pinned = (id = ?)", (id,))
-        return self.get(id)
+        return await self._db.write(_pin, id)
 
-    def unpin(self, id: str) -> Announcement:
+    async def unpin(self, id: str) -> Announcement:
         """Make it no longer the one users see first; nothing for one not pinned."""
-        return self._update(id, "pinned = 0", ())
+        return await self._db.write(_update, id, "pinned = 0", ())
 
-    def delete(self, id: str) -> None:
-        with self._lock, self._db:
-            deleted = self._db.execute("DELETE FROM announcements WHERE id = ?", (id,))
-        if deleted.rowcount == 0:
-            raise NoSuchAnnouncement(id)
+    async def delete(self, id: str) -> None:
+        await self._db.write(_delete, id)
 
-    def close(self) -> None:
-        self._db.close()
 
-    def _update(self, id: str, assignments: str, values: tuple) -> Announcement:
-        with self._lock, self._db:
-            updated = self._db.execute(
-                f"UPDATE announcements SET {assignments} WHERE id = ?", (*values, id)
-            )
-        if updated.rowcount == 0:
-            raise NoSuchAnnouncement(id)
-        return self.get(id)
+def _create(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+    columns = {row[1] for row in db.execute("PRAGMA table_info(announcements)")}
+    if "pinned" not in columns:  # kept from before pinning: none pinned
+        db.execute("ALTER TABLE announcements ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
 
-    def _select(self, rest: str, values: tuple = ()) -> list[Announcement]:
-        with self._lock:
-            rows = self._db.execute(
-                f"SELECT {_COLUMNS} FROM announcements{rest}", values
-            ).fetchall()
-        return [Announcement(*row[:-1], pinned=bool(row[-1])) for row in rows]
+
+def _insert(db: sqlite3.Connection, id: str, body: str, now: str) -> Announcement:
+    db.execute(
+        f"INSERT INTO announcements ({_COLUMNS}) VALUES (?, ?, NULL, ?, ?, 0)",
+        (id, body, now, now),
+    )
+    return _get(db, id)
+
+
+def _pin(db: sqlite3.Connection, id: str) -> Announcement:
+    found = db.execute("SELECT published_at FROM announcements WHERE id = ?", (id,)).fetchone()
+    if found is None:
+        raise NoSuchAnnouncement(id)
+    if found[0] is None:
+        raise NotPublished(id)
+    db.execute("UPDATE announcements SET pinned = (id = ?)", (id,))
+    return _get(db, id)
+
+
+def _delete(db: sqlite3.Connection, id: str) -> None:
+    deleted = db.execute("DELETE FROM announcements WHERE id = ?", (id,))
+    if deleted.rowcount == 0:
+        raise NoSuchAnnouncement(id)
+
+
+def _update(db: sqlite3.Connection, id: str, assignments: str, values: tuple) -> Announcement:
+    updated = db.execute(f"UPDATE announcements SET {assignments} WHERE id = ?", (*values, id))
+    if updated.rowcount == 0:
+        raise NoSuchAnnouncement(id)
+    return _get(db, id)
+
+
+def _get(db: sqlite3.Connection, id: str) -> Announcement:
+    found = _select(db, " WHERE id = ?", (id,))
+    if not found:
+        raise NoSuchAnnouncement(id)
+    return found[0]
+
+
+def _select(db: sqlite3.Connection, rest: str, values: tuple) -> list[Announcement]:
+    rows = db.execute(f"SELECT {_COLUMNS} FROM announcements{rest}", values).fetchall()
+    return [Announcement(*row[:-1], pinned=bool(row[-1])) for row in rows]

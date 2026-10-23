@@ -63,21 +63,21 @@ def add_favor_routes(app: FastAPI, backend: Backend) -> None:
 
     async def asking(user_id: str, ask: Callable[[], Awaitable[str | tuple[str, bool]]]) -> dict:
         """Use a favor ticket on `ask`; given back only should she not get to answer."""
-        gifts.take_ticket(user_id, "favor")
+        await gifts.take_ticket(user_id, "favor")
         try:
             asked = await ask()
         except BaseException:
-            gifts.put_back_ticket(user_id, "favor")
+            await gifts.put_back_ticket(user_id, "favor")
             raise
         conversation_id, accepted = asked if isinstance(asked, tuple) else (asked, True)
         return {
             "conversation_id": conversation_id, "accepted": accepted,
-            "left": gifts.tickets(user_id, "favor"),
+            "left": await gifts.tickets(user_id, "favor"),
         }
 
     @app.get("/api/favors")
     async def overview(user_id: UserId) -> dict:
-        return favors.overview(user_id)
+        return await favors.overview(user_id)
 
     @app.post("/api/favors/address")
     async def address(user_id: UserId, body: Address) -> dict:

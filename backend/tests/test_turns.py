@@ -5,7 +5,8 @@ text turn or during a call; the SSE and call tests only cover how each carries i
 """
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
@@ -18,6 +19,7 @@ from eidolon.llm import ToolCall
 from eidolon.own_keys import BroughtKeys
 from eidolon.reply_format import SegmentComplete, SpeechDelta
 from eidolon.store import Conversation, Store
+from tests.conftest import store_in
 from tests.fakes import (
     HANG,
     FakeBackgroundLLM,
@@ -35,11 +37,10 @@ REPLY = ["<ja>ほわっ、</ja><zh>哇，</zh>"]
 class Turns:
     """A conversation with Mano and the engine that takes its turns."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, store: Store, conversation: Conversation) -> None:
         self._settings = settings
-        self._store = Store(settings.database_path)
-        user = self._store.create_user("producer")
-        self.conversation: Conversation = self._store.create_conversation(user.id, "mano")
+        self._store = store
+        self.conversation = conversation
 
     async def take(
         self,
@@ -70,18 +71,24 @@ class Turns:
             asdict(e) for e in events if in_house or not isinstance(e, SegmentComplete | SpeechDelta)
         ]
 
-    def record(self) -> list[tuple]:
-        return [(m.role, m.text, m.ja) for m in self._store.list_messages(self.conversation.id)]
+    async def record(self) -> list[tuple]:
+        return [
+            (m.role, m.text, m.ja) for m in await self._store.list_messages(self.conversation.id)
+        ]
 
-    def close(self) -> None:
-        self._store.close()
+
+@asynccontextmanager
+async def turns_in(settings: Settings) -> AsyncIterator[Turns]:
+    """Turns in a new conversation of a new user with Mano."""
+    async with store_in(settings.database_path) as store:
+        user = await store.create_user("producer")
+        yield Turns(settings, store, await store.create_conversation(user.id, "mano"))
 
 
 @pytest.fixture
-def turns(settings: Settings) -> Iterator[Turns]:
-    turns = Turns(settings)
-    yield turns
-    turns.close()
+async def turns(settings: Settings) -> AsyncIterator[Turns]:
+    async with turns_in(settings) as turns:
+        yield turns
 
 
 def types(events: list[dict]) -> list[str]:
@@ -96,7 +103,7 @@ async def test_input_longer_than_the_limit_is_rejected_without_reaching_the_mode
     assert types(events) == ["user", "error"]
     assert events[-1]["message"] == f"这句话太长了，最多 {MAX_INPUT_LENGTH} 字。"
     assert llm.prompts == []
-    assert turns.record() == []
+    assert await turns.record() == []
 
 
 async def test_blank_input_is_rejected_without_reaching_the_model(turns: Turns):
@@ -106,7 +113,7 @@ async def test_blank_input_is_rejected_without_reaching_the_model(turns: Turns):
 
     assert events == [{"type": "user", "text": ""}, {"type": "error", "message": "没有收到要说的话。"}]
     assert llm.prompts == []
-    assert turns.record() == []
+    assert await turns.record() == []
 
 
 async def test_a_turn_opens_with_what_the_user_said_and_closes_with_the_recorded_reply(
@@ -117,7 +124,7 @@ async def test_a_turn_opens_with_what_the_user_said_and_closes_with_the_recorded
     assert types(events) == ["user", "delta", "delta", "done"]
     assert events[0]["text"] == "早上好"
     assert events[-1]["message"]["ja"] == "ほわっ、"
-    assert turns.record() == [("user", "早上好", None), ("character", None, "ほわっ、")]
+    assert await turns.record() == [("user", "早上好", None), ("character", None, "ほわっ、")]
 
 
 async def test_a_segment_is_complete_once_its_subtitle_closes_the_next_opens_or_the_model_stops(
@@ -147,7 +154,7 @@ async def test_a_failed_turn_closes_with_an_error_and_leaves_no_record(
 
     assert types(events)[0] == "user"
     assert events[-1] == {"type": "error", "message": "角色暂时无法回复，请稍后再试。"}
-    assert turns.record() == []
+    assert await turns.record() == []
     assert "turn failed" in caplog.text  # what went wrong stays in the server log
 
 
@@ -162,7 +169,7 @@ async def test_a_turn_told_to_stop_is_recorded_with_only_its_complete_segments(t
 
     assert events[-1]["type"] == "done"
     assert (events[-1]["message"]["ja"], events[-1]["message"]["zh"]) == ("ほわっ", "哇")
-    assert turns.record() == [("user", "早上好", None), ("character", None, "ほわっ")]
+    assert await turns.record() == [("user", "早上好", None), ("character", None, "ほわっ")]
     assert len(memory.prompts) == 1  # what the user revealed is written down as ever
 
 
@@ -182,7 +189,7 @@ async def test_a_turn_told_to_stop_in_its_tool_round_is_recorded_with_its_comple
 
     assert len(llm.prompts) == 2  # the tool was called and the model asked again
     assert events[-1]["type"] == "done"
-    assert turns.record()[-1] == ("character", None, "ええと公園で")
+    assert (await turns.record())[-1] == ("character", None, "ええと公園で")
 
 
 class HangingEmbedder(FakeEmbedder):
@@ -213,4 +220,4 @@ async def test_a_turn_told_to_stop_while_a_tool_runs_is_recorded_with_its_comple
 
     assert len(llm.prompts) == 1  # the model was not asked again
     assert events[-1]["type"] == "done"
-    assert turns.record()[-1] == ("character", None, "ええと")
+    assert (await turns.record())[-1] == ("character", None, "ええと")

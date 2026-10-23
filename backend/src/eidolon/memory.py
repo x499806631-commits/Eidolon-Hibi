@@ -39,18 +39,16 @@ import asyncio
 import json
 import logging
 import sqlite3
-import threading
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from eidolon.activity import detached
 from eidolon.characters import Character
 from eidolon.clock import Clock
 from eidolon.corpus import REEMBED_BATCH
-from eidolon.database import connect
+from eidolon.data_access import Database
 from eidolon.embedding import Document, Embedder, EmbeddingError, nearest, to_blob
 from eidolon.llm import ChatLLM, ChatMessage
 from eidolon.promises import Promise, Promises, parse_promise_changes, parse_promises
@@ -101,6 +99,8 @@ CREATE TABLE IF NOT EXISTS memories (
     superseded_by INTEGER,
     UNIQUE (user_id, text)
 );
+-- Deleting a conversation clears this from the memories written down in it.
+CREATE INDEX IF NOT EXISTS memories_by_conversation ON memories(conversation_id);
 CREATE TABLE IF NOT EXISTS memory_vectors (
     memory_id INTEGER NOT NULL,
     user_id TEXT NOT NULL,
@@ -203,7 +203,7 @@ class Memories:
 
     def __init__(
         self,
-        path: Path,
+        db: Database,
         characters: Mapping[str, Character],
         clock: Clock,
         *,
@@ -213,23 +213,18 @@ class Memories:
         promises: Promises | None = None,
         experiences: Experiences | None = None,
     ) -> None:
-        """Memories kept in the database at `path`, next to the users and conversations
-        they belong to; off unless `embedder` and `reranker` are both given, though
-        `embedder` alone is enough to embed them again. A memory the reranker scores below
-        what `min_relevance` says when it is found is not (see `rerank.KNOWN_THRESHOLDS`).
-        The promises the same answer writes down go to `promises`, if there are any to keep."""
-        self._db = connect(path)
-        self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
-            columns = {row[1] for row in self._db.execute("PRAGMA table_info(memories)")}
-            if "superseded_by" not in columns:  # kept from before superseding: all hold
-                self._db.execute("ALTER TABLE memories ADD COLUMN superseded_by INTEGER")
+        """Memories kept in `db`, next to the users and conversations they belong to; off
+        unless `embedder` and `reranker` are both given, though `embedder` alone is enough to
+        embed them again. A memory the reranker scores below what `min_relevance` says when
+        it is found is not (see `rerank.KNOWN_THRESHOLDS`). The promises the same answer
+        writes down go to `promises`, if there are any to keep."""
+        self._db = db
+        db.prepare(_open)
         self._characters = characters
         self._clock = clock
         self._promises = promises
         self._experiences = experiences
-        self._moments: list[Callable[[str, str, str, datetime], None]] = []
+        self._moments: list[Callable[[str, str, str, datetime], Awaitable[None]]] = []
         self._embedder = embedder
         self._services = (
             _Services(embedder, reranker, min_relevance)
@@ -258,19 +253,19 @@ class Memories:
         are writing down (unless that takes too long). Not named `list`, which would
         shadow the builtin in this class's annotations."""
         await self._settle(user_id)
-        return list(reversed(await asyncio.to_thread(self.kept, user_id)))
+        return list(reversed(await self.kept(user_id)))
 
     async def delete(self, user_id: str, memory_id: int) -> bool:
         """Forget one of the user's memories; False if they have no such memory."""
         await self._settle(user_id)
-        return await asyncio.to_thread(self._delete, user_id, memory_id)
+        return await self._db.write(_delete, user_id, memory_id)
 
     async def clear(self, user_id: str) -> None:
         """Forget all of the user's memories, including those their turns so far are still
         writing down."""
         self._clearings[user_id] = self._clearings.get(user_id, 0) + 1
         await self._settle(user_id)
-        await asyncio.to_thread(self._clear, user_id)
+        await self._db.write(_clear, user_id)
 
     async def forget(self, user_id: str) -> None:
         """Drop whatever the user's turns so far are still writing down, before the user
@@ -294,26 +289,14 @@ class Memories:
         done = 0
         after = 0
         while True:
-            with self._lock:
-                rows = self._db.execute(
-                    "SELECT id, user_id, text FROM memories m WHERE id > ?"
-                    " AND (? IS NULL OR user_id = ?) AND NOT EXISTS"
-                    " (SELECT 1 FROM memory_vectors v WHERE v.memory_id = m.id AND v.model = ?)"
-                    " ORDER BY id LIMIT ?",
-                    (after, user_id, user_id, model, batch),
-                ).fetchall()
+            rows = await self._db.read(_unembedded, after, user_id, model, batch)
             if not rows:
                 return done
             vectors = await embedder.embed_documents([Document(text) for _, _, text in rows])
-            with self._lock, self._db:
-                self._db.executemany(
-                    "INSERT OR REPLACE INTO memory_vectors (memory_id, user_id, model, embedding)"
-                    " SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM memories WHERE id = ?)",
-                    [
-                        (id, user_id, model, to_blob(v), id)
-                        for (id, user_id, _), v in zip(rows, vectors, strict=True)
-                    ],
-                )
+            await self._db.write(_store_embedded, model, [
+                (id, user_id, to_blob(v))
+                for (id, user_id, _), v in zip(rows, vectors, strict=True)
+            ])
             done += len(rows)
             after = rows[-1][0]
             if progress is not None:
@@ -338,14 +321,10 @@ class Memories:
         task = asyncio.create_task(embed(), context=detached())
         self._hold(user_id, task)
 
-    def forget_other_models(self) -> int:
+    async def forget_other_models(self) -> int:
         """Drop every memory's vector not from the embedder given; returns how many there
         were."""
-        model = self._reembedder().model
-        with self._lock, self._db:
-            return self._db.execute(
-                "DELETE FROM memory_vectors WHERE model != ?", (model,)
-            ).rowcount
+        return await self._db.write(_forget_other_models, self._reembedder().model)
 
     def _reembedder(self) -> Embedder:
         """The embedder given, which embedding the memories again needs."""
@@ -361,7 +340,6 @@ class Memories:
             for task in unfinished:
                 task.cancel()
             await asyncio.gather(*unfinished, return_exceptions=True)
-        self._db.close()
 
     async def _settle(self, user_id: str) -> None:
         if pending := self._pending.get(user_id):
@@ -387,7 +365,7 @@ class Memories:
         character = self._characters[conversation.character_id]
         return _memories_prompt(found, character, timezone, _FOUND) if found else None
 
-    def on_moment(self, listener: Callable[[str, str, str, datetime], None]) -> None:
+    def on_moment(self, listener: Callable[[str, str, str, datetime], Awaitable[None]]) -> None:
         """Have `listener` told what the background model, writing a turn's memories, found
         mattered to her in it (`parse_moment`): the user, the character, what, and when, in
         the producer's time zone."""
@@ -423,7 +401,7 @@ class Memories:
         ][:MAX_EXPERIENCES]
         if not found:
             return None
-        await asyncio.to_thread(mine.remember_used, [e.id for e in found])
+        await mine.remember_used([e.id for e in found])
         return prompt_of(found, self._characters[conversation.character_id].name)
 
     async def _relevant(self, query_text: str, candidates: Sequence[Memory]) -> list[Memory]:
@@ -467,7 +445,7 @@ class Memories:
             found = await self._relevant(last_turn, candidates)
         since = (self._clock() - LATELY).astimezone(UTC)
         latest = [
-            m for m in _holding(await asyncio.to_thread(self.kept, user_id), character_id)
+            m for m in _holding(await self.kept(user_id), character_id)
             if datetime.fromisoformat(m.created_at) >= since
         ][-MAX_LATEST:]
         ids = {m.id for m in found}
@@ -488,12 +466,15 @@ class Memories:
         """As many as `limit` of the user's holding memories nearest a query embedded with
         `embedder`, nearest first, only those told to the character `character_id` if given.
         Raises EmbeddingError, embedding those not embedded yet."""
-        memories = await asyncio.to_thread(self.kept, user_id)
-        vectors = await self._vectors(embedder, user_id, memories)
+        memories, stored = await self._db.read(
+            self._kept_with_vectors, user_id, embedder.model
+        )
+        vectors = await self._vectors(embedder, user_id, memories, stored)
         holding = _holding(memories, character_id)
-        return [
-            holding[i] for i, _ in nearest([vectors[m.id] for m in holding], query_vector, limit)
-        ]
+        found = await asyncio.to_thread(
+            nearest, [vectors[m.id] for m in holding], query_vector, limit
+        )
+        return [holding[i] for i, _ in found]
 
     async def _shown(
         self,
@@ -512,8 +493,7 @@ class Memories:
         except EmbeddingError:
             log.warning("embedding the turn failed; the background model is shown the latest"
                         " memories", exc_info=True)
-            memories = await asyncio.to_thread(self.kept, user_id)
-            return _holding(memories)[-SHOWN_MEMORIES:]
+            return _holding(await self.kept(user_id))[-SHOWN_MEMORIES:]
 
     def _write_down(
         self,
@@ -575,12 +555,12 @@ class Memories:
                 services.embedder, user_id, memory_query(history, text), query_vector
             )
             standing = (
-                self._promises.standing(user_id, conversation.character_id)
+                await self._promises.standing(user_id, conversation.character_id)
                 if self._promises is not None else []
             )
             prompt = _extraction_prompt(
                 character, history, text, reply, shown, now, found,
-                self._experiences.recent(user_id, conversation.character_id)
+                await self._experiences.recent(user_id, conversation.character_id)
                 if self._experiences is not None else (),
                 standing,
             )
@@ -598,10 +578,10 @@ class Memories:
             if self._promises is not None:
                 changes = parse_promise_changes(answer, standing)
                 if changes:
-                    self._promises.change(user_id, changes, now)
+                    await self._promises.change(user_id, changes, now)
                 made = parse_promises(answer)
                 if made:
-                    self._promises.record(
+                    await self._promises.record(
                         user_id, conversation.character_id, made, now
                     )
             if self._experiences is not None:
@@ -610,40 +590,52 @@ class Memories:
                     _array(answer, "experiences")
                 )
                 if written_experiences:
-                    self._experiences.record(
+                    await self._experiences.record(
                         user_id, conversation.character_id, written_experiences, now
                     )
             moment = parse_moment(answer)
             if moment is not None:
                 for listener in self._moments:
                     try:
-                        listener(user_id, conversation.character_id, moment, now)
+                        await listener(user_id, conversation.character_id, moment, now)
                     except Exception:
                         log.exception("telling of a moment in %s failed", conversation.id)
             if self._clearings.get(user_id, 0) != clearings:
                 return  # cleared since the turn began
-            added = await asyncio.to_thread(self._add, conversation, written, shown, now)
+            added = await self._db.write(self._add, conversation, written, shown, now)
         except Exception:
             log.warning("writing memories failed in conversation %s", conversation.id,
                         exc_info=True)
             return
         try:
             if added:
-                await self._vectors(services.embedder, user_id, added, forget=False)
+                model = services.embedder.model
+                stored = await self._db.read(_stored_vectors, user_id, model)
+                await self._vectors(services.embedder, user_id, added, stored, forget=False)
         except EmbeddingError:
             log.warning("embedding new memories failed; they are embedded when searched",
                         exc_info=True)
 
-    def kept(self, user_id: str) -> list[Memory]:
+    async def kept(self, user_id: str) -> list[Memory]:
         """All of the user's memories, oldest first, as they are now: not waiting for what
         is being written down (`entries` does)."""
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT id, user_id, source_character_id, text, created_at, superseded_by,"
-                " conversation_id FROM memories WHERE user_id = ? ORDER BY id",
-                (user_id,),
-            ).fetchall()
+        return await self._db.read(self.read_kept, user_id)
+
+    def read_kept(self, db: sqlite3.Connection, user_id: str) -> list[Memory]:
+        """What `kept` reads, read through `db`: for a data package too."""
+        rows = db.execute(
+            "SELECT id, user_id, source_character_id, text, created_at, superseded_by,"
+            " conversation_id FROM memories WHERE user_id = ? ORDER BY id",
+            (user_id,),
+        ).fetchall()
         return [self._memory(*row) for row in rows]
+
+    def _kept_with_vectors(
+        self, db: sqlite3.Connection, user_id: str, model: str
+    ) -> tuple[list[Memory], dict[int, bytes]]:
+        """All of the user's memories, and their vectors stored for `model`, as they were at
+        one moment."""
+        return self.read_kept(db, user_id), _stored_vectors(db, user_id, model)
 
     def _memory(
         self, id: int, user_id: str, source_character_id: str, text: str, created_at: str,
@@ -657,6 +649,7 @@ class Memories:
 
     def _add(
         self,
+        db: sqlite3.Connection,
         conversation: Conversation,
         written: Sequence["NewMemory"],
         shown: Sequence[Memory],
@@ -669,107 +662,161 @@ class Memories:
         added = []
         user_id = conversation.user_id
         created_at = now.astimezone(UTC).isoformat()
-        with self._lock, self._db:
-            for memory in written:
-                kept = self._db.execute(
-                    "SELECT id, superseded_by IS NOT NULL FROM memories"
-                    " WHERE user_id = ? AND text = ?",
-                    (user_id, memory.text),
-                ).fetchone()
-                if kept is None:
-                    # Its conversation may have been deleted since the turn (GLOSSARY.md
-                    # 「历史对话」): the memory is kept all the same, saying where no longer.
-                    cursor = self._db.execute(
-                        "INSERT INTO memories"
-                        " (user_id, source_character_id, conversation_id, text, created_at)"
-                        " VALUES (?, ?, (SELECT id FROM conversations WHERE id = ?), ?, ?)",
-                        (user_id, conversation.character_id, conversation.id, memory.text,
-                         created_at),
-                    )
-                    assert cursor.lastrowid is not None
-                    id = cursor.lastrowid
-                    added.append(self._memory(
-                        id, user_id, conversation.character_id, memory.text, created_at
-                    ))
-                else:
-                    id, superseded = kept
-                    if not superseded:
-                        continue  # already remembered
-                    self._db.execute(
-                        "UPDATE memories SET superseded_by = NULL WHERE id = ?", (id,)
-                    )
-                # Only what still holds: a memory deleted or superseded since it was shown
-                # is left as it is.
-                self._db.executemany(
-                    "UPDATE memories SET superseded_by = ?"
-                    " WHERE id = ? AND user_id = ? AND superseded_by IS NULL",
-                    [
-                        (id, shown[n - 1].id, user_id)
-                        for n in memory.supersedes
-                        if 1 <= n <= len(shown) and shown[n - 1].id != id
-                    ],
+        for memory in written:
+            kept = db.execute(
+                "SELECT id, superseded_by IS NOT NULL FROM memories"
+                " WHERE user_id = ? AND text = ?",
+                (user_id, memory.text),
+            ).fetchone()
+            if kept is None:
+                # Its conversation may have been deleted since the turn (GLOSSARY.md
+                # 「历史对话」): the memory is kept all the same, saying where no longer.
+                cursor = db.execute(
+                    "INSERT INTO memories"
+                    " (user_id, source_character_id, conversation_id, text, created_at)"
+                    " VALUES (?, ?, (SELECT id FROM conversations WHERE id = ?), ?, ?)",
+                    (user_id, conversation.character_id, conversation.id, memory.text,
+                     created_at),
                 )
+                assert cursor.lastrowid is not None
+                id = cursor.lastrowid
+                added.append(self._memory(
+                    id, user_id, conversation.character_id, memory.text, created_at
+                ))
+            else:
+                id, superseded = kept
+                if not superseded:
+                    continue  # already remembered
+                db.execute(
+                    "UPDATE memories SET superseded_by = NULL WHERE id = ?", (id,)
+                )
+            # Only what still holds: a memory deleted or superseded since it was shown
+            # is left as it is.
+            db.executemany(
+                "UPDATE memories SET superseded_by = ?"
+                " WHERE id = ? AND user_id = ? AND superseded_by IS NULL",
+                [
+                    (id, shown[n - 1].id, user_id)
+                    for n in memory.supersedes
+                    if 1 <= n <= len(shown) and shown[n - 1].id != id
+                ],
+            )
         return added
 
-    def _delete(self, user_id: str, memory_id: int) -> bool:
-        """Delete the memory, what it superseded superseded instead by what superseded it,
-        or holding again if nothing did."""
-        with self._lock, self._db:
-            deleted = self._db.execute(
-                "SELECT superseded_by FROM memories WHERE id = ? AND user_id = ?",
-                (memory_id, user_id),
-            ).fetchone()
-            if deleted is None:
-                return False
-            [superseded_by] = deleted
-            self._db.execute(
-                "UPDATE memories SET superseded_by = ? WHERE superseded_by = ? AND user_id = ?",
-                (superseded_by, memory_id, user_id),
-            )
-            self._db.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
-            self._db.execute(
-                "DELETE FROM memory_vectors WHERE user_id = ? AND memory_id = ?",
-                (user_id, memory_id),
-            )
-        return True
-
-    def _clear(self, user_id: str) -> None:
-        with self._lock, self._db:
-            self._db.execute("DELETE FROM memories WHERE user_id = ?", (user_id,))
-            self._db.execute("DELETE FROM memory_vectors WHERE user_id = ?", (user_id,))
-
     async def _vectors(
-        self, embedder: Embedder, user_id: str, memories: list[Memory], forget: bool = True
+        self,
+        embedder: Embedder,
+        user_id: str,
+        memories: list[Memory],
+        stored: dict[int, bytes],
+        forget: bool = True,
     ) -> dict[int, bytes]:
-        """The vector of each memory, embedding those not yet stored and, if `memories` are
-        all the user's, forgetting those of memories that are gone. A memory deleted while
-        it was being embedded gets no vector."""
+        """The vector of each memory, of those `stored` for the embedder's model, embedding
+        those not yet stored and, if `memories` are all the user's, forgetting those of
+        memories that are gone. A memory deleted while it was being embedded gets no
+        vector."""
         model = embedder.model
-        with self._lock:
-            stored: dict[int, bytes] = dict(
-                self._db.execute(
-                    "SELECT memory_id, embedding FROM memory_vectors"
-                    " WHERE user_id = ? AND model = ?",
-                    (user_id, model),
-                ).fetchall()
-            )
+        stored = dict(stored)
         missing = [m for m in memories if m.id not in stored]
         stale = stored.keys() - {m.id for m in memories} if forget else set()
         if missing:
             embedded = await embedder.embed_documents([Document(m.text) for m in missing])
             stored.update(zip((m.id for m in missing), map(to_blob, embedded), strict=True))
         if missing or stale:
-            with self._lock, self._db:
-                self._db.executemany(
-                    "INSERT OR REPLACE INTO memory_vectors (memory_id, user_id, model, embedding)"
-                    " SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM memories WHERE id = ?)",
-                    [(m.id, user_id, model, stored[m.id], m.id) for m in missing],
-                )
-                self._db.executemany(
-                    "DELETE FROM memory_vectors WHERE memory_id = ? AND model = ?",
-                    [(memory_id, model) for memory_id in stale],
-                )
+            await self._db.write(
+                _store_vectors, user_id, model, [(m.id, stored[m.id]) for m in missing],
+                stale,
+            )
         return stored
+
+
+def _open(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+    columns = {row[1] for row in db.execute("PRAGMA table_info(memories)")}
+    if "superseded_by" not in columns:  # kept from before superseding: all hold
+        db.execute("ALTER TABLE memories ADD COLUMN superseded_by INTEGER")
+
+
+def _delete(db: sqlite3.Connection, user_id: str, memory_id: int) -> bool:
+    """Delete the memory, what it superseded superseded instead by what superseded it, or
+    holding again if nothing did."""
+    deleted = db.execute(
+        "SELECT superseded_by FROM memories WHERE id = ? AND user_id = ?",
+        (memory_id, user_id),
+    ).fetchone()
+    if deleted is None:
+        return False
+    [superseded_by] = deleted
+    db.execute(
+        "UPDATE memories SET superseded_by = ? WHERE superseded_by = ? AND user_id = ?",
+        (superseded_by, memory_id, user_id),
+    )
+    db.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+    db.execute(
+        "DELETE FROM memory_vectors WHERE user_id = ? AND memory_id = ?", (user_id, memory_id)
+    )
+    return True
+
+
+def _clear(db: sqlite3.Connection, user_id: str) -> None:
+    db.execute("DELETE FROM memories WHERE user_id = ?", (user_id,))
+    db.execute("DELETE FROM memory_vectors WHERE user_id = ?", (user_id,))
+
+
+def _unembedded(
+    db: sqlite3.Connection, after: int, user_id: str | None, model: str, batch: int
+) -> list[tuple[int, str, str]]:
+    """As many as `batch` of every user's memories, or only those of `user_id`, after the
+    id `after`, with no vector for `model`: each one's id, user and text."""
+    return db.execute(
+        "SELECT id, user_id, text FROM memories m WHERE id > ?"
+        " AND (? IS NULL OR user_id = ?) AND NOT EXISTS"
+        " (SELECT 1 FROM memory_vectors v WHERE v.memory_id = m.id AND v.model = ?)"
+        " ORDER BY id LIMIT ?",
+        (after, user_id, user_id, model, batch),
+    ).fetchall()
+
+
+def _store_embedded(
+    db: sqlite3.Connection, model: str, embedded: Sequence[tuple[int, str, bytes]]
+) -> None:
+    """Store the vectors for `model` of the memories `embedded`, each with its user, but of
+    those deleted meanwhile."""
+    db.executemany(
+        "INSERT OR REPLACE INTO memory_vectors (memory_id, user_id, model, embedding)"
+        " SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM memories WHERE id = ?)",
+        [(id, user_id, model, vector, id) for id, user_id, vector in embedded],
+    )
+
+
+def _forget_other_models(db: sqlite3.Connection, model: str) -> int:
+    return db.execute("DELETE FROM memory_vectors WHERE model != ?", (model,)).rowcount
+
+
+def _stored_vectors(db: sqlite3.Connection, user_id: str, model: str) -> dict[int, bytes]:
+    """The vector of each of the user's memories stored for `model`."""
+    return dict(
+        db.execute(
+            "SELECT memory_id, embedding FROM memory_vectors WHERE user_id = ? AND model = ?",
+            (user_id, model),
+        ).fetchall()
+    )
+
+
+def _store_vectors(
+    db: sqlite3.Connection,
+    user_id: str,
+    model: str,
+    added: Sequence[tuple[int, bytes]],
+    stale: Iterable[int],
+) -> None:
+    """Store the `added` vectors for `model`, but of memories deleted meanwhile, and forget
+    those of the `stale` memories."""
+    _store_embedded(db, model, [(memory_id, user_id, vector) for memory_id, vector in added])
+    db.executemany(
+        "DELETE FROM memory_vectors WHERE memory_id = ? AND model = ?",
+        [(memory_id, model) for memory_id in stale],
+    )
 
 
 class MemoryTurn:
@@ -829,7 +876,7 @@ class MemoryTurn:
 
 
 _INSTRUCTIONS = """\
-你负责替《偶像大师 闪耀色彩》283 事务所的偶像们记住关于制作人的事。制作人就是正在和偶像对话的用户。
+你负责替《偶像大师 闪耀色彩》283 事务所的偶像们（还有事务员）记住关于制作人的事。制作人就是正在和她们对话的用户。
 读下面的对话，从制作人最新的一句话里找出值得长期记住的、关于制作人本人的信息。
 
 只记过后仍有意义的事。

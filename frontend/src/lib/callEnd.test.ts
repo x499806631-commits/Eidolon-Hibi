@@ -7,6 +7,7 @@ describe("startFailedEnd", () => {
     ["the microphone is refused", new MicUnavailable("no mic"), "mic_denied", null],
     ["the hour's calls are used up", new ApiError("本小时的通话次数已用完", 429), "over_limit", "本小时的通话次数已用完"],
     ["calls are unavailable", new ApiError("通话暂时不可用", 503), "not_connected", "通话暂时不可用"],
+    ["too many are calling", new ApiError("现在打电话的人太多，稍后再试", 503, { code: "calls_busy" }), "busy", null],
     ["the connection cannot be made", new Error("无法接通，请稍后再试"), "not_connected", null],
     ["she does not pick up, in the bath", new ApiError("她现在没有接电话", 409, { code: "no_answer" }), "no_answer", null],
   ])("says why when %s, and that it did not count", (_, error, reason, detail) => {
@@ -100,6 +101,11 @@ describe("endCard", () => {
   it("gives the other ends their own title and body, and the main button they call for", () => {
     expect(endCard({ reason: "turn_limit", detail: null, counts: true }, context)).toMatchObject({
       title: "这次通话说到回合数上限了",
+      action: "redial",
+    });
+    expect(endCard({ reason: "busy", detail: null, counts: false }, context)).toMatchObject({
+      title: "现在打电话的人太多",
+      body: "稍后再拨一次试试。",
       action: "redial",
     });
     expect(endCard({ reason: "own_key", detail: "密钥调用失败", counts: false }, context)).toMatchObject({

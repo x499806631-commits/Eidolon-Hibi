@@ -81,7 +81,7 @@ export function landingText(): string {
   ]);
 }
 
-/** 用 Shippori Mincho B1 排的：偶像的名字、组合名（查不到组合时的「其他偶像」也排在组合名的位置）、招呼的日语原文、
+/** 用 Shippori Mincho B1 排的：偶像的名字、组合名（没有组合的那一段的「283プロ」也排在组合名的位置）、招呼的日语原文、
  * 幕名和幕名轨，以及第 3、4、5 幕里她们说的日语（第 4 幕是开场白，第 5 幕是气泡里的原文）。 */
 export function japaneseText(): string {
   const { act1, act2, act3, act5, rail } = copy.landing;

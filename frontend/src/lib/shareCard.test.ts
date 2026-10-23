@@ -19,6 +19,7 @@ const stats: Stats = {
   all_hours: hours({ 1: 4, 20: 1 }),
   heatmap: { from: "2025-09-22", counts: Array(52 * 7 + 5).fill(0) },
   affinity: null,
+  achievements: null,
   range: {
     span: "30d",
     turns: 12,

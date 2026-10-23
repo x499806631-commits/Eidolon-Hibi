@@ -12,6 +12,7 @@ import {
   type RefObject,
 } from "react";
 
+import { UnseenDot } from "@/components/app/AchievementLine";
 import { FailureNotice, SignInButton } from "@/components/app/FailureNotice";
 import { MarkedAvatar } from "@/components/app/MarkedAvatar";
 import { KeepsakeCard } from "@/components/keepsakes/KeepsakeParts";
@@ -45,7 +46,7 @@ import type { Character } from "@/lib/api";
 import type { Entry } from "@/lib/conversationLog";
 import type { Failure } from "@/lib/failure";
 import { giftsHref } from "@/lib/gifts";
-import { isLive, NOT_OPEN, type LiveConversation } from "@/lib/liveConversation";
+import { isLive, NOT_OPEN, type LiveConversation, type Trophy } from "@/lib/liveConversation";
 import { linesOf, type Line } from "@/lib/messageLines";
 import { pastDay } from "@/lib/pastConversations";
 import { scheduleText } from "@/lib/schedule";
@@ -54,6 +55,7 @@ import { cn } from "@/lib/utils";
 import { isWebOn, rememberWeb } from "@/lib/webToggle";
 import { herVars } from "@/theme/herVars";
 import {
+  AchievementsIcon,
   BackIcon,
   AsmrIcon,
   CooldownIcon,
@@ -71,6 +73,7 @@ import {
 } from "@/theme/icons";
 import { Ja } from "@/theme/Ja";
 
+import { AchievementsPanel } from "./AchievementsPanel";
 import { AffinityBadge, CueArrowIcon } from "./AffinityBadge";
 import { CallBar } from "./CallBar";
 import { FocusSetup } from "./FocusSetup";
@@ -83,6 +86,7 @@ import { PhotoBlock } from "./PhotoBlock";
 import { useDirectory, useWide } from "./ConversationDirectory";
 import { ReadAloudButton } from "./ReadAloudButton";
 import { useFocusBack } from "./useFocusBack";
+import { useHerAchievements } from "./useHerAchievements";
 import { usePastConversation, type Viewing } from "./usePastConversation";
 import { useProducerTimezone } from "./useProducerTimezone";
 import { useScheduleNow } from "./useScheduleNow";
@@ -108,7 +112,10 @@ const noSubscription = () => () => {};
  * 送礼的入口（冷却时的输入栏、标识的说明末尾、冷却版结束卡）都跳到礼物页，带上她（spec「打开好感度藏起的送礼入口」），
  * 礼物一律记进当前对话；好感度和礼物同一个开关，好感度读不到时这些入口都不在。
  *
- * 更多菜单依次是「新对话」「历史对话」「换衣装」。「历史对话」打开面板（`PastConversations`），点一段就看那段历史对话
+ * 更多菜单依次是「新对话」「历史对话」「换衣装」「成就」。「成就」打开她的成就面板（`AchievementsPanel`），「好感度和礼物」关着时没有；
+ * 她有没看过的解锁时，更多菜单键右上角和「成就」后面各一个点（`useHerAchievements`）。这一页上的回合解锁了她的阶段、
+ * 通话层没盖着页首时，好感度标识左边跳出奖杯和「+n」，约 3 秒收起（快照的 `trophy`）。
+ * 「历史对话」打开面板（`PastConversations`），点一段就看那段历史对话
  * （地址带 `?c=`，`usePastConversation`）：消息区照平时画、只读，页首名字下面写「{日期}的对话」，电话键禁用
  * （通话中也禁用，回通话走通话条），输入栏换成只读卡「回到当前对话」；窄屏页首的返回键、只读卡的按钮都回到当前对话。
  * 历史对话不碰 LiveConversation：通话和正在进行的回复照旧在当前对话里，回去就看得到。在历史对话里点「新对话」先回到当前对话再开。
@@ -146,7 +153,8 @@ export function ConversationView({
   const { viewing, view, backToCurrent } = usePastConversation(character.id);
   const subtree = useRef<HTMLDivElement>(null);
   // 她现在对制作人的好感度；读不到（好感度关着、没配判断模型或请求失败）就不显示标识，也不出变化胶囊。
-  const { affinity, affinityCue, cooling, ended } = snapshot;
+  const { affinity, affinityCue, cooling, ended, trophy } = snapshot;
+  const achievements = useHerAchievements(character.id, userId, snapshot.herUnlockedAt);
   // 解除时刻按制作人的时区写成今天或明天。
   const timeZone = useProducerTimezone();
 
@@ -241,6 +249,11 @@ export function ConversationView({
         )}
       </div>
       {phoneKey}
+      {trophy && <TrophyCue key={trophy.key} trophy={trophy} isReducedMotion={isReducedMotion} />}
+      {/* 礼貌的 live region 一直在，奖杯出现时读「成就，抽奖 +n」；按 key 换节点，同样的 n 再来一次也读 */}
+      <span role="status" className="sr-only">
+        {trophy && <span key={trophy.key}>{copy.achievements.trophy(trophy.draws)}</span>}
+      </span>
       {affinity && (
         <AffinityBadge
           status={affinity}
@@ -253,9 +266,19 @@ export function ConversationView({
       )}
       <DropdownMenu>
         <DropdownMenuTrigger
-          render={<Button variant="ghost" size="icon-lg" className={headerKey} aria-label={t.menu} />}
+          render={
+            <Button
+              variant="ghost"
+              size="icon-lg"
+              className={cn(headerKey, "relative")}
+              aria-label={achievements.isUnseen ? t.menuUnseen : t.menu}
+            />
+          }
         >
           <MoreIcon className="size-5" />
+          {achievements.isUnseen && (
+            <span aria-hidden className="absolute top-2 right-2 size-1.5 rounded-full bg-foreground" />
+          )}
         </DropdownMenuTrigger>
         <DropdownMenuContent container={subtree} align="end">
           {/* 菜单项里的图标默认 16px、跟着菜单文字的颜色，不用她的颜色 */}
@@ -285,6 +308,13 @@ export function ConversationView({
             <DropdownMenuItem onClick={() => setPickingOutfit(true)}>
               <OutfitIcon aria-hidden />
               {t.outfits.open}
+            </DropdownMenuItem>
+          )}
+          {achievements.her && (
+            <DropdownMenuItem onClick={() => achievements.setPanelOpen(true)}>
+              <AchievementsIcon aria-hidden />
+              {copy.achievements.open}
+              {achievements.isUnseen && <UnseenDot className="ml-auto" />}
             </DropdownMenuItem>
           )}
         </DropdownMenuContent>
@@ -483,6 +513,14 @@ export function ConversationView({
           setFocusMinutes(minutes);
         }}
       />
+      <AchievementsPanel
+        isOpen={achievements.isPanelOpen}
+        onOpenChange={achievements.setPanelOpen}
+        isWide={!isFullScreen}
+        color={character.color}
+        her={achievements.her}
+        unseen={achievements.unseenRows}
+      />
       {live && (
         <LiveCallLayer
           live={live}
@@ -583,6 +621,24 @@ function ReadOnlyCard({
         {t.past.backToCurrent}
       </Button>
     </ComposerCard>
+  );
+}
+
+/**
+ * 页首好感度标识左边的奖杯（DESIGN.md「Buttons」）：解锁她的阶段时跳出来，奖杯加「+n」（这次到账的抽奖次数），
+ * 弹出、停住、淡出共 3 秒（`animate-trophy`）；减少动态时只淡入淡出。读屏读旁边的 live region，这里藏起来。
+ */
+function TrophyCue({ trophy, isReducedMotion }: { trophy: Trophy; isReducedMotion: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "flex shrink-0 items-center gap-1 px-1 text-sm tabular-nums",
+        isReducedMotion ? "animate-trophy-fade" : "animate-trophy",
+      )}
+    >
+      <AchievementsIcon className="size-4" />+{trophy.draws}
+    </span>
   );
 }
 

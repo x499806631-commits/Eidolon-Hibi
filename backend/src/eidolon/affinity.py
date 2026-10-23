@@ -28,7 +28,8 @@ In a call she hangs up after the turn that cools her into a cooldown, after the 
 been out of line in it too many times, or after the call's latest turns have taken too much
 off her affinity between them (`ends`); halfway to that, she warns the user first
 (`warns`). A cooldown begun elsewhere has her hang up the user's calls with her straight
-away (`Affinities.on_cooldown`). Nothing else has her hang up. Outside calls the same has
+away, as whoever recorded the turn that began it tells the calls once it is recorded
+(`Affinities.change` says it began). Nothing else has her hang up. Outside calls the same has
 her end the conversation (GLOSSARY.md「已结束的对话」), by the same numbers, counted over the
 conversation's latest typed turns rather than the call's.
 
@@ -42,6 +43,8 @@ Close's door and intimate's are not gone through at once (GLOSSARY.md「重要�
 first time it would, affinity is held just below (`DOOR_GAP`) and her scene there begins; the
 turns at the door after are of it (`Affinities.scene`, `scene_prompt`), and the last of
 `SCENE_TURNS` opens the door for good. There is no failing it: away from the door it waits.
+Whatever opens one says so in the status it returns (`Status.opened`), for whoever recorded
+it to tell (`Affinities.scene_done`) once it is written.
 
 Promises (GLOSSARY.md「约定」) move it too, by how each ends up (`PROMISE_STEPS`): kept on
 time raises it a little, kept only after she complained less; put off ahead of its day, the
@@ -58,23 +61,20 @@ It is on only where the deployment has the judge model and the switch「好感�
 Deleting the user deletes it (`database.USER_DATA`); deleting memories does not touch it.
 """
 
-import threading
-from collections.abc import Callable, Iterable, Mapping, Sequence
+import sqlite3
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
-from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TYPE_CHECKING, Literal
 from zoneinfo import ZoneInfo
 
 from eidolon.clock import Clock
-from eidolon.database import connect
+from eidolon.data_access import Database
 from eidolon.features import AllOn, Switches
 from eidolon.gift_catalog import Rarity
 
 if TYPE_CHECKING:  # hearts know the tiers
     from eidolon.hearts import Heart
-
-T = TypeVar("T")
 
 Tier = Literal["cold", "distant", "trust", "close", "intimate"]
 """冷淡、疏远、信任、亲近、亲密, from lowest to highest."""
@@ -292,6 +292,9 @@ class Status:
 
     tier: Tier
     cooldown_until: datetime | None
+    opened: "Tier | None" = None
+    """The door her scene opened as it was changed, if one did (GLOSSARY.md「重要的一幕」):
+    for whoever changed it to tell (`Affinities.scene_done`); never shown."""
 
     @property
     def cooling(self) -> bool:
@@ -331,7 +334,7 @@ _SWEET_WITHIN_BOUNDS = (
 )
 
 _WHATEVER_THE_TIER = (
-    "无论现在关系怎样，人设里的硬性规则照旧；一起经历过的事和你们偶像与制作人的关系都不会改变。"
+    "无论现在关系怎样，人设里的硬性规则照旧；一起经历过的事和你们在事务所里的关系都不会改变。"
     "如果想不起具体是因为什么，就不要编造原因。"
 )
 
@@ -596,334 +599,340 @@ class Cooling(Exception):
     """She is in a cooldown with the user: what was asked of her affinity waits until it ends."""
 
 
+SceneDone = Callable[[str, str, Tier, datetime], Awaitable[None]]
+"""Told the user, the character, the tier and when, as her scene at a door is played through."""
+
+
 class Affinities:
-    """Every user's affinity with every character, kept in the database at `path`, next to
-    the users it belongs to."""
+    """Every user's affinity with every character, kept in the database, next to the users
+    it belongs to. What changes it is a body of the write task it is changed in, with what
+    changed it (`change`, `receive_gift`, `reset`, `give_back`, `promise_settled`): given that
+    task's connection, so that it changes with the rest or not at all, and told of by what it
+    returns, never to a listener; a scene played through is told (`scene_done`) by whoever
+    changed it, once written."""
 
     def __init__(
-        self, path: Path, clock: Clock, is_on: Callable[[], bool], features: Switches = AllOn()
+        self, db: Database, clock: Clock, is_on: Callable[[], bool], features: Switches = AllOn()
     ) -> None:
         """`is_on` tells whether affinity is on now (the live configuration's); `features`,
         whether a user has her scenes on (GLOSSARY.md「玩法开关」): with them off, no door
         holds her."""
-        self._features = features
-        self._db = connect(path)
-        self._lock = threading.Lock()
+        self._db = db
         self._clock = clock
         self._is_on = is_on
-        self._cooling: list[Callable[[str, str, datetime], None]] = []
-        self._scenes_done: list[Callable[[str, str, Tier, datetime], None]] = []
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
+        self._features = features
+        self._scenes_done: list[SceneDone] = []
+        db.prepare(_open)
 
-    def status(self, user_id: str, character_id: str) -> Status | None:
-        """The user's affinity with the character now; None while affinity is off."""
-        if not self._is_on():
-            return None
-        affinity = self._read(user_id, character_id)
-        return Status(affinity.tier, affinity.cooldown_until)
+    @property
+    def on(self) -> bool:
+        """Whether affinity is on now: told on the event loop, as what reads it with the rest
+        reads it there, before handing in what it reads with (`read_status`)."""
+        return self._is_on()
 
-    def tier(self, user_id: str, character_id: str) -> Tier:
-        """The tier the user's affinity with the character is in now, on or off: whoever
-        shows it is to show it only while affinity is on."""
-        return self._read(user_id, character_id).tier
-
-    def cooldown_until(self, user_id: str, character_id: str) -> datetime | None:
-        """When the cooldown the character is in with the user ends; None if she is in none,
-        or while affinity is off, when none holds whatever is kept."""
-        status = self.status(user_id, character_id)
-        return status and status.cooldown_until
-
-    def on_cooldown(self, listener: Callable[[str, str, datetime], None]) -> None:
-        """Have `listener` told the user, the character and when it ends as each cooldown
-        begins, there and then, as the turn that begins it is recorded."""
-        self._cooling.append(listener)
-
-    def on_scene_done(self, listener: Callable[[str, str, Tier, datetime], None]) -> None:
+    def on_scene_done(self, listener: SceneDone) -> None:
         """Have `listener` told the user, the character, the tier and when, as her scene at a
         door is played through and it opens (GLOSSARY.md「重要的一幕」)."""
         self._scenes_done.append(listener)
 
-    def scene(self, user_id: str, character_id: str) -> Scene | None:
+    async def scene_done(self, user_id: str, character_id: str, status: "Status | None") -> None:
+        """Tell those `on_scene_done` has of the door `status` says was opened, if any: by
+        whoever changed it, on the event loop, once it is written."""
+        if status is None or status.opened is None:
+            return
+        now = self._clock()
+        for listener in self._scenes_done:
+            await listener(user_id, character_id, status.opened, now)
+
+    async def status(self, user_id: str, character_id: str) -> Status | None:
+        """The user's affinity with the character now; None while affinity is off."""
+        if not self.on:
+            return None
+        return await self._db.read(self.read_status, user_id, character_id)
+
+    def read_status(self, db: sqlite3.Connection, user_id: str, character_id: str) -> Status:
+        """The user's affinity with the character now, read through `db`, on or off: whoever
+        reads it is to read it only while affinity is `on`."""
+        affinity = _row(db, user_id, character_id, self._clock())[0]
+        return Status(affinity.tier, affinity.cooldown_until)
+
+    async def tiers(self, user_id: str, character_ids: Sequence[str]) -> list[Tier]:
+        """The tiers the user's affinity with each of the characters is in now, in the
+        order given, on or off: whoever shows them is to show them only while affinity is
+        on."""
+        return await self._db.read(self._tiers, user_id, character_ids)
+
+    async def cooldown_until(self, user_id: str, character_id: str) -> datetime | None:
+        """When the cooldown the character is in with the user ends; None if she is in none,
+        or while affinity is off, when none holds whatever is kept."""
+        status = await self.status(user_id, character_id)
+        return status and status.cooldown_until
+
+    async def scene(self, user_id: str, character_id: str) -> Scene | None:
         """Her scene the next turn is of, if any: begun, not played through, she not in a
         cooldown, and affinity at its door (`SCENE_SLACK`). None while affinity is off."""
-        if not self._is_on():
+        if not self.on:
             return None
-        with self._lock:
-            now = self._clock()
-            affinity = self._row(user_id, character_id, now)[0]
-            return self._at_door(affinity, self._scene_rows(user_id, character_id))
+        return await self._db.read(self.read_scene, user_id, character_id)
 
-    def cools(self, user_id: str, character_id: str, judged: Judged) -> bool:
+    def read_scene(self, db: sqlite3.Connection, user_id: str, character_id: str) -> Scene | None:
+        """`scene`, read through `db`, on or off."""
+        affinity = _row(db, user_id, character_id, self._clock())[0]
+        return _at_door(affinity, self._scene_rows(db, user_id, character_id))
+
+    async def cools(self, user_id: str, character_id: str, judged: Judged) -> bool:
         """Whether the turn `judged` would begin a cooldown, recorded now: foretold as the
         turn begins, so that she may part with the producer as she replies. Another turn
         recorded meanwhile may make it otherwise; so be it."""
-        affinity = self._read(user_id, character_id)
-        return affinity.stepped(judged.step).cooling and not affinity.cooling
+        return await self._db.read(self._cools, user_id, character_id, judged)
 
     def change(
-        self,
-        user_id: str,
-        character_id: str,
-        judged: Judged,
-        record: Callable[[Change | None], T],
-    ) -> tuple[T, Status]:
-        """Change the user's affinity with the character as the turn `judged` says, as the
-        turn is recorded by `record`, told how it changed (None for not at all): if
-        recording fails, nothing changes. The day's gains are counted on the day it is
-        (`day_of`). Should it begin a cooldown, those `on_cooldown` has are told then.
-        Returns what `record` returned, and the affinity left."""
-        with self._lock:
-            now = self._clock()
-            before, gained, gained_on = self._row(user_id, character_id, now)
-            today = day_of(now).isoformat()
-            gained_today = gained if gained_on == today else 0.0
-            step = judged.step
-            if step > 0:
-                step = min(step, max(GAINS_PER_DAY - gained_today, 0.0))
-            after = before.stepped(step)
-            scenes = self._scene_rows(user_id, character_id)
-            playing = self._at_door(before, scenes)
-            opened: Tier | None = None
-            if playing is not None:
-                if playing.turns + 1 >= SCENE_TURNS:
-                    opened = playing.tier
-                    lifted = _start(playing.tier) + SCENE_LIFT
-                    after = Affinity(max(after.value, lifted), after.at, after.cooling)
-            after, door = self._held(before, after, scenes, opened)
-            value = after.value
-            change = None
-            if value != before.value:
-                change = Change(
-                    up=value > before.value,
-                    tier_changed=after.tier != before.tier,
-                    tier=after.tier,
-                    cooldown=after.cooling and not before.cooling,
-                )
-            recorded = record(change)
-            with self._db:
-                self._db.execute(
-                    "INSERT OR REPLACE INTO affinities (user_id, character_id, value,"
-                    " updated_at, cooling, gained_today, gained_on)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        user_id, character_id, value, now.isoformat(), int(after.cooling),
-                        gained_today + max(value - before.value, 0.0), today,
-                    ),
-                )
-                if playing is not None:
-                    self._db.execute(
-                        "UPDATE affinity_scenes SET turns = turns + 1, done_at = ?"
-                        " WHERE user_id = ? AND character_id = ? AND tier = ?",
-                        (
-                            now.isoformat() if opened else None,
-                            user_id, character_id, playing.tier,
-                        ),
-                    )
-                self._begin_scene(user_id, character_id, door, now)
-        until = after.cooldown_until
-        if change is not None and change.cooldown and until is not None:
-            for listener in self._cooling:
-                listener(user_id, character_id, until)
-        if opened is not None:
-            for opens in self._scenes_done:
-                opens(user_id, character_id, opened, now)
-        return recorded, Status(after.tier, after.cooldown_until)
+        self, db: sqlite3.Connection, user_id: str, character_id: str, judged: Judged
+    ) -> tuple[Change | None, Status]:
+        """Change the user's affinity with the character as the turn `judged` says, through
+        `db`, in the transaction the turn is recorded in: how it changed (None for not at
+        all), a cooldown begun with it among that, and the affinity left, with when the
+        cooldown it is in ends and the door her scene opened, if it did. The day's gains are
+        counted on the day it is (`day_of`). A turn at a door whose scene is begun is of it;
+        a door not opened holds her below it, her scene there begun."""
+        now = self._clock()
+        before, gained, gained_on = _row(db, user_id, character_id, now)
+        today = day_of(now).isoformat()
+        gained_today = gained if gained_on == today else 0.0
+        step = judged.step
+        if step > 0:
+            step = min(step, max(GAINS_PER_DAY - gained_today, 0.0))
+        after = before.stepped(step)
+        scenes = self._scene_rows(db, user_id, character_id)
+        playing = _at_door(before, scenes)
+        opened: Tier | None = None
+        if playing is not None and playing.turns + 1 >= SCENE_TURNS:
+            opened = playing.tier
+            lifted = _start(playing.tier) + SCENE_LIFT
+            after = Affinity(max(after.value, lifted), after.at, after.cooling)
+        after, door = _held(before, after, scenes, opened)
+        value = after.value
+        change = None
+        if value != before.value:
+            change = Change(
+                up=value > before.value,
+                tier_changed=after.tier != before.tier,
+                tier=after.tier,
+                cooldown=after.cooling and not before.cooling,
+            )
+        db.execute(
+            "INSERT OR REPLACE INTO affinities (user_id, character_id, value,"
+            " updated_at, cooling, gained_today, gained_on)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                user_id, character_id, value, now.isoformat(), int(after.cooling),
+                gained_today + max(value - before.value, 0.0), today,
+            ),
+        )
+        if playing is not None:
+            db.execute(
+                "UPDATE affinity_scenes SET turns = turns + 1, done_at = ?"
+                " WHERE user_id = ? AND character_id = ? AND tier = ?",
+                (now.isoformat() if opened else None, user_id, character_id, playing.tier),
+            )
+        _begin_scene(db, user_id, character_id, door, now)
+        return change, Status(after.tier, after.cooldown_until, opened)
 
     def give_back(
-        self, user_id: str, character_id: str, step: float, record: Callable[[], T]
-    ) -> tuple[T, Status]:
+        self, db: sqlite3.Connection, user_id: str, character_id: str, step: float
+    ) -> Status:
         """Give back to the user's affinity with the character what a turn took off it
-        (`step`), as the user appeals it (GLOSSARY.md「我不是这个意思」), as it is recorded by
-        `record`: if recording fails, nothing changes. No day's limit holds it, nor does it
-        count towards one. Raises Cooling, changing nothing, while she is in a cooldown: an
-        appeal does not bring her out of one. Returns what `record` returned, and the
-        affinity left."""
-        with self._lock:
-            now = self._clock()
-            before = self._row(user_id, character_id, now)[0]
-            if before.cooling:
-                raise Cooling()
-            after = before.stepped(max(step, 0.0))
-            after, door = self._held(before, after, self._scene_rows(user_id, character_id))
-            recorded = record()
-            with self._db:
-                self._db.execute(
-                    "INSERT INTO affinities (user_id, character_id, value, updated_at, cooling)"
-                    " VALUES (?, ?, ?, ?, 0) ON CONFLICT (user_id, character_id) DO UPDATE SET"
-                    " value = excluded.value, updated_at = excluded.updated_at",
-                    (user_id, character_id, after.value, now.isoformat()),
-                )
-                self._begin_scene(user_id, character_id, door, now)
-        return recorded, Status(after.tier, after.cooldown_until)
+        (`step`), as the user appeals it (GLOSSARY.md「我不是这个意思」), through `db`, in the
+        transaction the appeal is recorded in. No day's limit holds it, nor does it count
+        towards one. Raises Cooling, changing nothing, while she is in a cooldown: an appeal
+        does not bring her out of one. Returns the affinity left."""
+        now = self._clock()
+        before = _row(db, user_id, character_id, now)[0]
+        if before.cooling:
+            raise Cooling()
+        after = before.stepped(max(step, 0.0))
+        after, door = _held(before, after, self._scene_rows(db, user_id, character_id))
+        db.execute(
+            "INSERT INTO affinities (user_id, character_id, value, updated_at, cooling)"
+            " VALUES (?, ?, ?, ?, 0) ON CONFLICT (user_id, character_id) DO UPDATE SET"
+            " value = excluded.value, updated_at = excluded.updated_at",
+            (user_id, character_id, after.value, now.isoformat()),
+        )
+        _begin_scene(db, user_id, character_id, door, now)
+        return Status(after.tier, after.cooldown_until)
 
     def receive_gift(
         self,
+        db: sqlite3.Connection,
         user_id: str,
         character_id: str,
         rarity: Rarity,
         liked: bool,
-        record: Callable[[Change | None], T],
-    ) -> tuple[T, Status]:
+    ) -> tuple[Change | None, Status]:
         """Raise the user's affinity with the character for a gift of `rarity` she `liked`
-        or not, as it is recorded by `record`, told how it changed (None for no change to
-        show): if recording fails, nothing changes. No day's limit holds gifts, nor do they
-        count towards it. In a cooldown, what it is raised to is when it ends, sooner; there
-        is a change to show only once it ends. Returns what `record` returned, and the
-        affinity left."""
-        with self._lock:
-            now = self._clock()
-            before = self._row(user_id, character_id, now)[0]
-            after = before.stepped(_gift_step(rarity, liked, before.cooling))
-            after = Affinity(after.value, now, after.cooling and after.value < THAW)
-            after, door = self._held(before, after, self._scene_rows(user_id, character_id))
-            thawed = before.cooling and not after.cooling
-            change = None
-            if thawed or (not after.cooling and after.value != before.value):
-                change = Change(True, after.tier != before.tier, after.tier, False, thawed)
-            recorded = record(change)
-            with self._db:
-                self._db.execute(
-                    "INSERT INTO affinities (user_id, character_id, value, updated_at, cooling)"
-                    " VALUES (?, ?, ?, ?, ?) ON CONFLICT (user_id, character_id) DO UPDATE SET"
-                    " value = excluded.value, updated_at = excluded.updated_at,"
-                    " cooling = excluded.cooling",
-                    (user_id, character_id, after.value, now.isoformat(), int(after.cooling)),
-                )
-                self._begin_scene(user_id, character_id, door, now)
-        return recorded, Status(after.tier, after.cooldown_until)
+        or not, through `db`, in the transaction the gift is recorded in: how it changed
+        (None for no change to show), and the affinity left. No day's limit holds gifts, nor
+        do they count towards it. In a cooldown, what it is raised to is when it ends,
+        sooner; there is a change to show only once it ends. A door not opened holds her."""
+        now = self._clock()
+        before = _row(db, user_id, character_id, now)[0]
+        after = before.stepped(_gift_step(rarity, liked, before.cooling))
+        after = Affinity(after.value, now, after.cooling and after.value < THAW)
+        after, door = _held(before, after, self._scene_rows(db, user_id, character_id))
+        thawed = before.cooling and not after.cooling
+        change = None
+        if thawed or (not after.cooling and after.value != before.value):
+            change = Change(True, after.tier != before.tier, after.tier, False, thawed)
+        db.execute(
+            "INSERT INTO affinities (user_id, character_id, value, updated_at, cooling)"
+            " VALUES (?, ?, ?, ?, ?) ON CONFLICT (user_id, character_id) DO UPDATE SET"
+            " value = excluded.value, updated_at = excluded.updated_at,"
+            " cooling = excluded.cooling",
+            (user_id, character_id, after.value, now.isoformat(), int(after.cooling)),
+        )
+        _begin_scene(db, user_id, character_id, door, now)
+        return change, Status(after.tier, after.cooldown_until)
 
-    def promise_settled(self, user_id: str, character_id: str, settled: str) -> Status | None:
+    async def promise_settled(self, user_id: str, character_id: str, settled: str) -> Status | None:
         """Change the user's affinity with the character as a promise to her ended up
         (`PROMISE_STEPS`), now: never below `PROMISE_FLOOR`, never in a cooldown, no day's
         limit; held at a closed door as anything is. Nothing is told of it: no change to show,
         no listener. None while affinity is off, or where it changes nothing."""
         step = PROMISE_STEPS.get(settled, 0.0)
-        if not self._is_on() or step == 0.0:
+        if not self.on or step == 0.0:
             return None
-        with self._lock:
-            now = self._clock()
-            before = self._row(user_id, character_id, now)[0]
-            if before.cooling:
-                return None
-            value = before.value + step
-            if step < 0:
-                value = max(value, min(before.value, PROMISE_FLOOR))
-            after = Affinity(min(value, HIGHEST), now, False)
-            after, door = self._held(before, after, self._scene_rows(user_id, character_id))
-            with self._db:
-                self._db.execute(
-                    "INSERT INTO affinities (user_id, character_id, value, updated_at, cooling)"
-                    " VALUES (?, ?, ?, ?, 0) ON CONFLICT (user_id, character_id) DO UPDATE SET"
-                    " value = excluded.value, updated_at = excluded.updated_at",
-                    (user_id, character_id, after.value, now.isoformat()),
-                )
-                self._begin_scene(user_id, character_id, door, now)
+        return await self._db.write(self._promise_settled, user_id, character_id, step)
+
+    def _promise_settled(
+        self, db: sqlite3.Connection, user_id: str, character_id: str, step: float
+    ) -> Status | None:
+        now = self._clock()
+        before = _row(db, user_id, character_id, now)[0]
+        if before.cooling:
+            return None
+        value = before.value + step
+        if step < 0:
+            value = max(value, min(before.value, PROMISE_FLOOR))
+        after = Affinity(min(value, HIGHEST), now, False)
+        after, door = _held(before, after, self._scene_rows(db, user_id, character_id))
+        db.execute(
+            "INSERT INTO affinities (user_id, character_id, value, updated_at, cooling)"
+            " VALUES (?, ?, ?, ?, 0) ON CONFLICT (user_id, character_id) DO UPDATE SET"
+            " value = excluded.value, updated_at = excluded.updated_at",
+            (user_id, character_id, after.value, now.isoformat()),
+        )
+        _begin_scene(db, user_id, character_id, door, now)
         return Status(after.tier, after.cooldown_until)
 
-    def reset(self, user_id: str, character_ids: Iterable[str]) -> list[str]:
+    def reset(
+        self, db: sqlite3.Connection, user_id: str, character_ids: Iterable[str]
+    ) -> list[str]:
         """Bring each of the characters below trust with the user now, having recovered, back
-        to the normal value, out of any cooldown, as a reset card does (GLOSSARY.md「重置卡」);
-        those in trust or above are left as they are. Nothing is told of it: no change to
-        show, no listener. Returns whom it brought back, in the order given."""
-        with self._lock, self._db:
-            now = self._clock()
-            below = [
-                character_id
-                for character_id in character_ids
-                if self._row(user_id, character_id, now)[0].tier in BELOW_TRUST
-            ]
-            for character_id in below:
-                self._db.execute(
-                    "UPDATE affinities SET value = ?, updated_at = ?, cooling = 0"
-                    " WHERE user_id = ? AND character_id = ?",
-                    (NORMAL, now.isoformat(), user_id, character_id),
-                )
+        to the normal value, out of any cooldown, as a reset card does (GLOSSARY.md「重置卡」),
+        through `db`, in the transaction the card is used in; those in trust or above are
+        left as they are. Nothing is told of it: no change to show. Returns whom it brought
+        back, in the order given."""
+        now = self._clock()
+        below = [
+            character_id
+            for character_id in character_ids
+            if _row(db, user_id, character_id, now)[0].tier in BELOW_TRUST
+        ]
+        for character_id in below:
+            db.execute(
+                "UPDATE affinities SET value = ?, updated_at = ?, cooling = 0"
+                " WHERE user_id = ? AND character_id = ?",
+                (NORMAL, now.isoformat(), user_id, character_id),
+            )
         return below
 
-    def close(self) -> None:
-        with self._lock:
-            self._db.close()
-
-    def _scene_rows(self, user_id: str, character_id: str) -> dict[Tier, tuple[int, bool]]:
+    def _scene_rows(
+        self, db: sqlite3.Connection, user_id: str, character_id: str
+    ) -> dict[Tier, tuple[int, bool]]:
         """Her scenes as they count for the user: every one as though played through where they
-        have them off. Called holding the lock."""
-        if not self._features.on(user_id, "scenes"):  # as though every one were played through
+        have them off."""
+        if not self._features.read_on(db, user_id, "scenes"):
             return {tier: (0, True) for tier in SCENE_TIERS}
-        return self._kept_scenes(user_id, character_id)
-
-    def _kept_scenes(self, user_id: str, character_id: str) -> dict[Tier, tuple[int, bool]]:
-        """Her scenes begun with the user: turns taken, and whether played through, by tier.
-        Called holding the lock."""
-        rows = self._db.execute(
+        rows = db.execute(
             "SELECT tier, turns, done_at FROM affinity_scenes WHERE user_id = ? AND character_id = ?",
             (user_id, character_id),
         ).fetchall()
         return {tier: (turns, done_at is not None) for tier, turns, done_at in rows}
 
-    def _at_door(
-        self, affinity: Affinity, scenes: Mapping[Tier, tuple[int, bool]]
-    ) -> Scene | None:
-        """Her scene a turn at `affinity` is of: one begun and not played through whose door
-        affinity is at, she not in a cooldown."""
-        if affinity.cooling:
-            return None
-        for tier in SCENE_TIERS:
-            begun = scenes.get(tier)
-            start = _start(tier)
-            if begun is None or begun[1]:
-                continue
-            if start - SCENE_SLACK <= affinity.value < start:
-                return Scene(tier, begun[0])
+    def _tiers(
+        self, db: sqlite3.Connection, user_id: str, character_ids: Sequence[str]
+    ) -> list[Tier]:
+        now = self._clock()
+        return [_row(db, user_id, c, now)[0].tier for c in character_ids]
+
+    def _cools(
+        self, db: sqlite3.Connection, user_id: str, character_id: str, judged: Judged
+    ) -> bool:
+        affinity = _row(db, user_id, character_id, self._clock())[0]
+        return affinity.stepped(judged.step).cooling and not affinity.cooling
+
+
+def _at_door(affinity: Affinity, scenes: Mapping[Tier, tuple[int, bool]]) -> Scene | None:
+    """Her scene a turn at `affinity` is of: one begun and not played through whose door
+    affinity is at, she not in a cooldown."""
+    if affinity.cooling:
         return None
+    for tier in SCENE_TIERS:
+        begun = scenes.get(tier)
+        start = _start(tier)
+        if begun is None or begun[1]:
+            continue
+        if start - SCENE_SLACK <= affinity.value < start:
+            return Scene(tier, begun[0])
+    return None
 
-    def _held(
-        self,
-        before: Affinity,
-        after: Affinity,
-        scenes: Mapping[Tier, tuple[int, bool]],
-        opened: Tier | None = None,
-    ) -> tuple[Affinity, Tier | None]:
-        """`after`, held below the first door it would go through whose scene is not played
-        through (`opened` is, as of now), and that door; as it is, and None, if it goes
-        through none. A door already behind `before` holds nothing."""
-        for tier in SCENE_TIERS:
-            start = _start(tier)
-            done = tier == opened or scenes.get(tier, (0, False))[1]
-            if not done and before.value < start <= after.value:
-                return Affinity(start - DOOR_GAP, after.at, after.cooling), tier
-        return after, None
 
-    def _begin_scene(
-        self, user_id: str, character_id: str, door: Tier | None, now: datetime
-    ) -> None:
-        """Her scene at `door` is begun, if it is a door and it is not begun yet. Called
-        holding the lock, in a transaction."""
-        if door is None:
-            return
-        self._db.execute(
-            "INSERT OR IGNORE INTO affinity_scenes (user_id, character_id, tier, begun_at)"
-            " VALUES (?, ?, ?, ?)",
-            (user_id, character_id, door, now.isoformat()),
-        )
+def _held(
+    before: Affinity,
+    after: Affinity,
+    scenes: Mapping[Tier, tuple[int, bool]],
+    opened: Tier | None = None,
+) -> tuple[Affinity, Tier | None]:
+    """`after`, held below the first door it would go through whose scene is not played
+    through (`opened` is, as of now), and that door; as it is, and None, if it goes through
+    none. A door already behind `before` holds nothing."""
+    for tier in SCENE_TIERS:
+        start = _start(tier)
+        done = tier == opened or scenes.get(tier, (0, False))[1]
+        if not done and before.value < start <= after.value:
+            return Affinity(start - DOOR_GAP, after.at, after.cooling), tier
+    return after, None
 
-    def _read(self, user_id: str, character_id: str) -> Affinity:
-        """As it is now, having recovered since it was kept."""
-        with self._lock:
-            return self._row(user_id, character_id, self._clock())[0]
 
-    def _row(
-        self, user_id: str, character_id: str, now: datetime
-    ) -> tuple[Affinity, float, str | None]:
-        """As it is at `now`, having recovered since it was kept, and what turns have raised
-        it on the day they last did, and that day (None if never). Called holding the lock."""
-        row = self._db.execute(
-            "SELECT value, updated_at, cooling, gained_today, gained_on FROM affinities"
-            " WHERE user_id = ? AND character_id = ?",
-            (user_id, character_id),
-        ).fetchone()
-        if row is None:
-            return Affinity(NORMAL, now), 0.0, None
-        value, updated_at, cooling, gained, gained_on = row
-        kept = Affinity(value, datetime.fromisoformat(updated_at), bool(cooling))
-        return kept.recovered(now), gained, gained_on
+def _begin_scene(
+    db: sqlite3.Connection, user_id: str, character_id: str, door: Tier | None, now: datetime
+) -> None:
+    """Her scene at `door` is begun, if it is a door and it is not begun yet."""
+    if door is None:
+        return
+    db.execute(
+        "INSERT OR IGNORE INTO affinity_scenes (user_id, character_id, tier, begun_at)"
+        " VALUES (?, ?, ?, ?)",
+        (user_id, character_id, door, now.isoformat()),
+    )
+
+
+def _open(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+
+
+def _row(
+    db: sqlite3.Connection, user_id: str, character_id: str, now: datetime
+) -> tuple[Affinity, float, str | None]:
+    """As it is at `now`, having recovered since it was kept, and what turns have raised it
+    on the day they last did, and that day (None if never); read through `db`."""
+    row = db.execute(
+        "SELECT value, updated_at, cooling, gained_today, gained_on FROM affinities"
+        " WHERE user_id = ? AND character_id = ?",
+        (user_id, character_id),
+    ).fetchone()
+    if row is None:
+        return Affinity(NORMAL, now), 0.0, None
+    value, updated_at, cooling, gained, gained_on = row
+    kept = Affinity(value, datetime.fromisoformat(updated_at), bool(cooling))
+    return kept.recovered(now), gained, gained_on

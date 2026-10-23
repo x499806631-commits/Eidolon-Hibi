@@ -6,22 +6,25 @@ The first time a scope is searched, the vectors stored for it are read, those of
 texts not stored yet are embedded (in batches, each committed, so an interrupted run
 keeps what it finished) and those of texts no longer among them are forgotten; so an
 edited facts file or data file takes effect after a restart without any command and
-costs only the changed texts. The scope's vectors are then kept in memory, as its texts
-do not change while the server runs, and a scope is loaded only once at a time. Reading
-and writing SQLite happen in a thread, off the event loop.
+costs only the changed texts. The scope's vectors are then kept in memory, scaled to
+length 1 as `unit_rows`, as its texts do not change while the server runs, and a scope is
+loaded only once at a time. The database is read and written through the data access
+layer, off the event loop.
 
 The vectors were once kept in a table for the character facts and another for the work
 facts; opening the set moves their rows over and drops them, embedding nothing again.
 """
 
 import asyncio
-import threading
+import sqlite3
 from collections.abc import Iterable, Sequence
-from pathlib import Path
+from dataclasses import dataclass
+
+import numpy as np
 
 from eidolon.corpus import REEMBED_BATCH
-from eidolon.database import connect
-from eidolon.embedding import Document, Embedder, nearest, to_blob
+from eidolon.data_access import Database
+from eidolon.embedding import Document, Embedder, nearest_rows, to_blob, unit_rows
 
 WORK_SCOPE = "work"
 """The scope of the work facts, shared by every character."""
@@ -44,49 +47,22 @@ def character_scope(character_id: str) -> str:
     return f"{CHARACTER_SCOPES}:{character_id}"
 
 
-class EmbeddedTexts:
-    def __init__(self, path: Path, embedder: Embedder) -> None:
-        self._db = connect(path)
-        self._lock = threading.Lock()
-        self._embedder = embedder
-        self._loaded: dict[str, dict[str, bytes]] = {}
-        self._loading: dict[str, asyncio.Lock] = {}
-        with self._lock:
-            self._create()
+@dataclass(frozen=True)
+class _Vectors:
+    """A scope's vectors, as `unit_rows`."""
 
-    def _create(self) -> None:
-        """Create the table, moving over the rows of the tables the character facts and
-        the work facts were kept in before, if they are still there, so no vector is
-        embedded again."""
-        self._db.execute("BEGIN IMMEDIATE")  # another process may be migrating too
-        try:
-            self._db.execute(_SCHEMA)
-            old = {
-                name
-                for (name,) in self._db.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
-                    " AND name IN ('character_facts', 'world_entries')"
-                )
-            }
-            if "character_facts" in old:
-                self._db.execute(
-                    "INSERT OR IGNORE INTO embedded_texts (scope, text, model, embedding)"
-                    " SELECT ? || ':' || character_id, text, model, embedding"
-                    " FROM character_facts",
-                    (CHARACTER_SCOPES,),
-                )
-                self._db.execute("DROP TABLE character_facts")
-            if "world_entries" in old:
-                self._db.execute(
-                    "INSERT OR IGNORE INTO embedded_texts (scope, text, model, embedding)"
-                    " SELECT ?, text, model, embedding FROM world_entries",
-                    (WORK_SCOPE,),
-                )
-                self._db.execute("DROP TABLE world_entries")
-        except BaseException:
-            self._db.rollback()
-            raise
-        self._db.commit()
+    rows: dict[str, int]
+    """Each text's row."""
+    matrix: np.ndarray
+
+
+class EmbeddedTexts:
+    def __init__(self, db: Database, embedder: Embedder) -> None:
+        self._db = db
+        self._embedder = embedder
+        self._loaded: dict[str, _Vectors] = {}
+        self._loading: dict[str, asyncio.Lock] = {}
+        db.prepare(_create)
 
     async def search(
         self,
@@ -99,9 +75,10 @@ class EmbeddedTexts:
         """The positions in `documents` (the scope's texts, all of them) of those most
         similar to a query embedded with this set's embedder, best first, with their
         similarity; only those at the positions `among`, if given."""
-        vectors = await self._load(scope, documents)
+        vectors, _ = await self._vectors(scope, documents)
         positions = range(len(documents)) if among is None else among
-        best = nearest([vectors[i] for i in positions], query_vector, limit)
+        rows = np.array([vectors.rows[documents[i].text] for i in positions], dtype=np.intp)
+        best = await asyncio.to_thread(nearest_rows, vectors.matrix, query_vector, limit, rows)
         return [(positions[i], similarity) for i, similarity in best]
 
     async def embed_missing(
@@ -112,38 +89,25 @@ class EmbeddedTexts:
         _, embedded = await self._vectors(scope, documents, batch)
         return embedded
 
-    def forget_other_models(self, scopes: str) -> int:
+    async def forget_other_models(self, scopes: str) -> int:
         """Drop every vector of `scopes` (a scope, or `CHARACTER_SCOPES` for every
         character's) not from this set's embedder; returns how many there were."""
-        with self._lock, self._db:
-            return self._db.execute(
-                "DELETE FROM embedded_texts WHERE (scope = ? OR scope LIKE ? || ':%')"
-                " AND model != ?",
-                (scopes, scopes, self._embedder.model),
-            ).rowcount
-
-    def close(self) -> None:
-        self._db.close()
-
-    async def _load(self, scope: str, documents: Sequence[Document]) -> list[bytes]:
-        """The vector of each of `documents`, in order."""
-        vectors, _ = await self._vectors(scope, documents)
-        return [vectors[d.text] for d in documents]
+        return await self._db.write(_forget_other_models, scopes, self._embedder.model)
 
     async def _vectors(
         self, scope: str, documents: Sequence[Document], batch: int = REEMBED_BATCH
-    ) -> tuple[dict[str, bytes], int]:
-        """The vectors of the scope's texts, by text, embedding those not yet stored (in
-        batches, each committed); and how many it embedded. Loaded once per scope, then
-        kept in memory."""
+    ) -> tuple[_Vectors, int]:
+        """The vectors of the scope's texts, embedding those not yet stored (in batches,
+        each committed); and how many it embedded. Loaded once per scope, then kept in
+        memory."""
         async with self._loading.setdefault(scope, asyncio.Lock()):
             if (loaded := self._loaded.get(scope)) is not None:
                 return loaded, 0
             model = self._embedder.model
-            stored = await asyncio.to_thread(self._stored, scope, model)
+            stored = await self._db.read(_stored, scope, model)
             missing = list({d.text: d for d in documents if d.text not in stored}.values())
             if stale := stored.keys() - {d.text for d in documents}:
-                await asyncio.to_thread(self._forget, scope, model, stale)
+                await self._db.write(_forget, scope, model, stale)
                 stored = {t: v for t, v in stored.items() if t not in stale}
             for start in range(0, len(missing), batch):
                 texts = missing[start : start + batch]
@@ -151,31 +115,73 @@ class EmbeddedTexts:
                 rows = [
                     (scope, d.text, model, to_blob(v)) for d, v in zip(texts, embedded, strict=True)
                 ]
-                await asyncio.to_thread(self._save, rows)
+                await self._db.write(_save, rows)
                 stored.update((text, blob) for _, text, _, blob in rows)
-            self._loaded[scope] = stored
-            return stored, len(missing)
+            vectors = await asyncio.to_thread(_vectors_of, stored)
+            self._loaded[scope] = vectors
+            return vectors, len(missing)
 
-    def _stored(self, scope: str, model: str) -> dict[str, bytes]:
-        with self._lock:
-            return dict(
-                self._db.execute(
-                    "SELECT text, embedding FROM embedded_texts WHERE scope = ? AND model = ?",
-                    (scope, model),
-                ).fetchall()
-            )
 
-    def _forget(self, scope: str, model: str, texts: Iterable[str]) -> None:
-        with self._lock, self._db:
-            self._db.executemany(
-                "DELETE FROM embedded_texts WHERE scope = ? AND model = ? AND text = ?",
-                [(scope, model, t) for t in texts],
-            )
+def _vectors_of(stored: dict[str, bytes]) -> _Vectors:
+    return _Vectors({text: row for row, text in enumerate(stored)}, unit_rows(list(stored.values())))
 
-    def _save(self, rows: Sequence[tuple[str, str, str, bytes]]) -> None:
-        with self._lock, self._db:
-            self._db.executemany(
-                "INSERT OR REPLACE INTO embedded_texts (scope, text, model, embedding)"
-                " VALUES (?, ?, ?, ?)",
-                rows,
-            )
+
+def _create(db: sqlite3.Connection) -> None:
+    """Create the table, moving over the rows of the tables the character facts and the
+    work facts were kept in before, if they are still there, so no vector is embedded
+    again."""
+    db.execute(_SCHEMA)
+    old = {
+        name
+        for (name,) in db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+            " AND name IN ('character_facts', 'world_entries')"
+        )
+    }
+    if "character_facts" in old:
+        db.execute(
+            "INSERT OR IGNORE INTO embedded_texts (scope, text, model, embedding)"
+            " SELECT ? || ':' || character_id, text, model, embedding"
+            " FROM character_facts",
+            (CHARACTER_SCOPES,),
+        )
+        db.execute("DROP TABLE character_facts")
+    if "world_entries" in old:
+        db.execute(
+            "INSERT OR IGNORE INTO embedded_texts (scope, text, model, embedding)"
+            " SELECT ?, text, model, embedding FROM world_entries",
+            (WORK_SCOPE,),
+        )
+        db.execute("DROP TABLE world_entries")
+
+
+def _forget_other_models(db: sqlite3.Connection, scopes: str, model: str) -> int:
+    return db.execute(
+        "DELETE FROM embedded_texts WHERE (scope = ? OR scope LIKE ? || ':%')"
+        " AND model != ?",
+        (scopes, scopes, model),
+    ).rowcount
+
+
+def _stored(db: sqlite3.Connection, scope: str, model: str) -> dict[str, bytes]:
+    return dict(
+        db.execute(
+            "SELECT text, embedding FROM embedded_texts WHERE scope = ? AND model = ?",
+            (scope, model),
+        ).fetchall()
+    )
+
+
+def _forget(db: sqlite3.Connection, scope: str, model: str, texts: Iterable[str]) -> None:
+    db.executemany(
+        "DELETE FROM embedded_texts WHERE scope = ? AND model = ? AND text = ?",
+        [(scope, model, t) for t in texts],
+    )
+
+
+def _save(db: sqlite3.Connection, rows: Sequence[tuple[str, str, str, bytes]]) -> None:
+    db.executemany(
+        "INSERT OR REPLACE INTO embedded_texts (scope, text, model, embedding)"
+        " VALUES (?, ?, ?, ?)",
+        rows,
+    )

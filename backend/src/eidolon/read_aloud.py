@@ -15,16 +15,15 @@ import hashlib
 import json
 import re
 import sqlite3
-import threading
 from dataclasses import dataclass
-from datetime import UTC, timedelta
-from pathlib import Path
+from datetime import UTC, datetime, timedelta
 
 from eidolon.activity import ActivityLog, Origin, host, timed
 from eidolon.call import Speech
 from eidolon.characters import Character
 from eidolon.clock import Clock
-from eidolon.database import connect
+from eidolon.data_access import Database
+from eidolon.database import by_name
 from eidolon.greetings import FISH_TTS_HTTP_URL
 from eidolon.live_config import LiveConfig
 from eidolon.reply_format import Segment
@@ -75,7 +74,7 @@ class Reading:
 class ReadAloud:
     def __init__(
         self,
-        path: Path,
+        db: Database,
         characters: dict[str, Character],
         config: LiveConfig,
         speech: Speech,
@@ -87,11 +86,8 @@ class ReadAloud:
         self._speech = speech
         self._activity = activity
         self._clock = clock
-        self._db = connect(path)
-        self._db.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
+        self._db = db
+        db.prepare(_open)
 
     def has_local_voice(self, character_id: str) -> bool:
         """Whether she has a voice on the deployer's GPT-SoVITS server."""
@@ -104,7 +100,7 @@ class ReadAloud:
     async def read(self, user_id: str, key: str) -> Reading:
         """Her message `key` (`m<id>` for a reply, `r<id>` for a reach-out) read aloud.
         Raises NothingToRead, CannotRead, ReadingTooOften, and whatever the engine raises."""
-        character_id, segments = self._message(user_id, key)
+        character_id, segments = await self._db.read(_message, user_id, key)
         character = self._characters.get(character_id)
         text = "".join(s.ja for s in segments).strip()
         if character is None or not text:
@@ -122,9 +118,9 @@ class ReadAloud:
             else f"fish|{voice.model}|{character.voice_id}"
         )
         digest = hashlib.sha256(f"{character_id}\n{said_with}\n{text}".encode()).hexdigest()
-        if (kept := self._kept(user_id, digest)) is not None:
+        if (kept := await self._db.read(_kept, user_id, digest)) is not None:
             return kept
-        if self._made_within_hour(user_id) >= PER_HOUR:
+        if await self._db.read(_made_since, user_id, self._clock() - timedelta(hours=1)) >= PER_HOUR:
             raise ReadingTooOften()
         recording = self._activity.begin(
             "read_aloud", user_id, character_id, own_llm=False, exempt=False
@@ -145,55 +141,61 @@ class ReadAloud:
                     )
                     media_type = "audio/mpeg"
         except BaseException:
-            recording.finish("failed")
+            await recording.finish("failed")
             raise
-        recording.finish("success")
+        await recording.finish("success")
         if not audio:
             raise NothingToRead()
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT OR REPLACE INTO read_aloud (user_id, digest, audio, media_type, created_at)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (user_id, digest, audio, media_type, self._clock().astimezone(UTC).isoformat()),
-            )
+        await self._db.write(
+            _keep, user_id, digest, audio, media_type, self._clock().astimezone(UTC).isoformat()
+        )
         return Reading(audio, media_type)
 
-    def _message(self, user_id: str, key: str) -> tuple[str, list[Segment]]:
-        found = _KEY.match(key)
-        if found is None:
-            raise NothingToRead()
-        table = "messages" if found.group(1) == "m" else "reach_outs"
-        role = " AND m.role = 'character'" if table == "messages" else ""
-        with self._lock:
-            row = self._db.execute(
-                f"SELECT c.character_id, m.segments, m.ja FROM {table} m"
-                " JOIN conversations c ON c.id = m.conversation_id"
-                f" WHERE m.id = ? AND c.user_id = ?{role}",
-                (int(found.group(2)), user_id),
-            ).fetchone()
-        if row is None:
-            raise NothingToRead()
-        segments = [Segment(**s) for s in json.loads(row["segments"] or "[]")]
-        if not segments and row["ja"]:
-            segments = [Segment(row["ja"], "")]
-        return row["character_id"], segments
 
-    def _kept(self, user_id: str, digest: str) -> Reading | None:
-        with self._lock:
-            row = self._db.execute(
-                "SELECT audio, media_type FROM read_aloud WHERE user_id = ? AND digest = ?",
-                (user_id, digest),
-            ).fetchone()
-        return Reading(row["audio"], row["media_type"]) if row else None
+def _open(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
 
-    def _made_within_hour(self, user_id: str) -> int:
-        since = (self._clock() - timedelta(hours=1)).astimezone(UTC).isoformat()
-        with self._lock:
-            return self._db.execute(
-                "SELECT COUNT(*) FROM read_aloud WHERE user_id = ? AND created_at > ?",
-                (user_id, since),
-            ).fetchone()[0]
 
-    def close(self) -> None:
-        with self._lock:
-            self._db.close()
+def _keep(
+    db: sqlite3.Connection, user_id: str, digest: str, audio: bytes, media_type: str, at: str
+) -> None:
+    db.execute(
+        "INSERT OR REPLACE INTO read_aloud (user_id, digest, audio, media_type, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (user_id, digest, audio, media_type, at),
+    )
+
+
+def _message(db: sqlite3.Connection, user_id: str, key: str) -> tuple[str, list[Segment]]:
+    found = _KEY.match(key)
+    if found is None:
+        raise NothingToRead()
+    table = "messages" if found.group(1) == "m" else "reach_outs"
+    role = " AND m.role = 'character'" if table == "messages" else ""
+    row = by_name(db).execute(
+        f"SELECT c.character_id, m.segments, m.ja FROM {table} m"
+        " JOIN conversations c ON c.id = m.conversation_id"
+        f" WHERE m.id = ? AND c.user_id = ?{role}",
+        (int(found.group(2)), user_id),
+    ).fetchone()
+    if row is None:
+        raise NothingToRead()
+    segments = [Segment(**s) for s in json.loads(row["segments"] or "[]")]
+    if not segments and row["ja"]:
+        segments = [Segment(row["ja"], "")]
+    return row["character_id"], segments
+
+
+def _kept(db: sqlite3.Connection, user_id: str, digest: str) -> Reading | None:
+    row = db.execute(
+        "SELECT audio, media_type FROM read_aloud WHERE user_id = ? AND digest = ?",
+        (user_id, digest),
+    ).fetchone()
+    return Reading(row[0], row[1]) if row else None
+
+
+def _made_since(db: sqlite3.Connection, user_id: str, since: datetime) -> int:
+    return db.execute(
+        "SELECT COUNT(*) FROM read_aloud WHERE user_id = ? AND created_at > ?",
+        (user_id, since.astimezone(UTC).isoformat()),
+    ).fetchone()[0]

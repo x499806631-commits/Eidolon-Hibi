@@ -14,7 +14,8 @@ counts towards the user's limit, and what the browser is told when the backend e
 is `CallOutcome`'s to decide; the call only reports to it. So is the call's activity
 record: each turn of the call has one under it, and its speech recognition and synthesis
 are recorded under it by `CallMeter`, which also lays each error in the pipeline at the
-door of the service it came from.
+door of the service it came from. A call that connected is kept as it is settled, for stats
+and towards the achievements (`Happenings.call_ended`).
 Whose turn it is during the call, what is a follow-on and what interrupts the character, is
 likewise `TurnTaking`'s.
 
@@ -31,7 +32,6 @@ from contextlib import nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from functools import partial
 from typing import Any, Literal, Protocol
 from zoneinfo import ZoneInfo
 
@@ -147,6 +147,7 @@ from eidolon.own_keys import (
     Service,
 )
 from eidolon.greetings import FISH_TTS_HTTP_URL
+from eidolon.happenings import Happenings
 from eidolon.proxy import ProxiedWebsocket, ProxyRoutes, masked, open_client
 from eidolon.readings import Reading, pronunciation_dictionary, used_in
 from eidolon.voices import GptSovits, VoiceFailed
@@ -229,6 +230,20 @@ class CallNotFound(Exception):
 
     def __init__(self) -> None:
         super().__init__("通话不存在")
+
+
+class CallsBusy(Exception):
+    """There are as many calls as there may be at once (`UsageLimits.concurrent_calls`)."""
+
+    def __init__(self) -> None:
+        super().__init__("现在打电话的人太多，稍后再试")
+
+
+class StillPlacing(Exception):
+    """The user's last call is still being placed, not yet answered."""
+
+    def __init__(self) -> None:
+        super().__init__("上一通电话还在拨，稍后再试")
 
 
 class CallFailed(Exception):
@@ -1155,6 +1170,12 @@ class Calls:
     call can renegotiate it or add ICE candidates to it. As a character falls into a
     cooldown with a user (`cooled`), she hangs up the user's calls with her; as she ends a
     conversation (`conversation_ended`), the call in it.
+
+    Each user has one call at a time, and all users together as many as the limits say
+    (`UsageLimits.concurrent_calls`), exempt calls too: a call is under way from being
+    placed until it is over, before its connection has closed. A user's new call, let
+    through, hangs up the one they had, which they may well have left without the backend
+    knowing yet (their page reloaded, their network changed).
     """
 
     def __init__(
@@ -1167,11 +1188,14 @@ class Calls:
         speech: Speech,
         clock: Clock,
         store: Store,
+        happenings: Happenings,
         weather: Weather | None = None,
     ) -> None:
         """Calls last as long, and take as many turns, as `limits` says as each starts.
-        Calls of users banned or deleted meanwhile, as `store` has them, are hung up.
-        Without `weather`, the ambience of a call is picked without the weather there."""
+        Calls of users banned or deleted meanwhile, as `store` has them, are hung up. Each
+        that connected is kept in `store`, then, if its conversation is still there to keep
+        it in, told to `happenings`. Without `weather`, the ambience of a call is picked
+        without the weather there."""
         self._settings = settings
         self._engine = engine
         self._admissions = admissions
@@ -1180,12 +1204,14 @@ class Calls:
         self._speech = speech
         self._clock = clock
         self._store = store
+        self._happenings = happenings
         self._weather = weather
         self._webrtc = SmallWebRTCRequestHandler(
             ice_servers=[RTCIceServer(**server) for server in settings.ice_servers]
         )
         self._owners: dict[str, str] = {}  # peer connection id → the user it belongs to
         self._live: set[_LiveCall] = set()
+        self._placing: set[_Placing] = set()  # calls placed, not yet served
         self._watch: asyncio.Task | None = None  # hangs up banned and deleted users' calls
 
     def _limits(self) -> CallLimits:
@@ -1196,7 +1222,7 @@ class Calls:
             limits.turns_per_call,
         )
 
-    def ice_servers(
+    async def ice_servers(
         self,
         user_id: str,
         own: frozenset[Service] = frozenset(),
@@ -1205,10 +1231,12 @@ class Calls:
         """What the browser needs before calling: ICE servers, with TURN credentials of its
         own; how long a call may last, in seconds (None for no limit); and whether a call
         bringing the user's own keys for `own` would be exempt from the limit. Raises
-        CoolingDown, for a call with `character_id` if given, and CallsUnavailable, as
-        `OwnKeys.call_exempt` does, before anything is spent on a call that could not start."""
+        CoolingDown, for a call with `character_id` if given, StillPlacing and CallsBusy, as
+        `start` would, and CallsUnavailable, as `OwnKeys.call_exempt` does, before anything
+        is spent on a call that could not start."""
         if character_id is not None:
-            self._admissions.refuse_while_cooling(user_id, character_id)
+            await self._admissions.refuse_while_cooling(user_id, character_id)
+        self._refuse_unless_room(user_id)
         exempt = self._own_keys.call_exempt(own)
         servers: list[IceServer] = list(self._settings.ice_servers)
         if self._settings.turn is not None:
@@ -1228,17 +1256,58 @@ class Calls:
         options: CallOptions,
         offer: SessionDescription,
         brought: BroughtKeys = BroughtKeys(),
+        answering: Callable[[], Awaitable[None]] | None = None,
     ) -> dict:
         """Answer a new call into the user's `conversation` with `character`, bringing
-        `brought`, let through by `Admissions.call`, whose exceptions it raises. Whatever
-        fails before the call is served, it never connected; once it is served, it is
-        settled as it ends, letting go of the keys it brought."""
-        admission = self._admissions.call(user_id, character.id, brought)
-        outcome = CallOutcome(
-            admission, self._limits(), self._clock, partial(self._store.keep_call, conversation.id)
+        `brought`, let through by `Admissions.call`, whose exceptions it raises; once it
+        is, the user's call under way, if any, is hung up as left. Raises StillPlacing while
+        the user's last call is still being placed, and CallsBusy while there are as many
+        as there may be at once, not counting the user's own, before anything is asked or
+        recorded. `answering`, if given, is awaited once the call counts as being placed, and
+        may raise to refuse it. Whatever fails before the call is served, it never connected;
+        once it is served, it is settled as it ends, letting go of the keys it brought."""
+        self._refuse_unless_room(user_id)
+        placing = _Placing(user_id)
+        self._placing.add(placing)
+        try:
+            if answering is not None:  # whether she can answer at all (GLOSSARY.md「洗澡」)
+                await answering()
+            return await self._admit_and_start(
+                user_id, conversation, character, options, offer, brought, placing
+            )
+        finally:
+            self._placing.discard(placing)
+
+    async def _admit_and_start(
+        self,
+        user_id: str,
+        conversation: Conversation,
+        character: Character,
+        options: CallOptions,
+        offer: SessionDescription,
+        brought: BroughtKeys,
+        placing: "_Placing",
+    ) -> dict:
+
+        async def keep(connected_at: datetime, duration_s: float) -> None:
+            await self._happenings.call_ended(
+                conversation.id, user_id, character.id, connected_at, duration_s
+            )
+
+        # Cancelled meanwhile, what is let in never set up, so is settled.
+        admission = await self._admissions.admitted(
+            self._admissions.call(user_id, character.id, brought),
+            lambda let_in: CallOutcome(let_in, self._limits(), self._clock, keep).set_up_failed(),
         )
+        outcome = CallOutcome(admission, self._limits(), self._clock, keep)
+        try:
+            await self.hang_up(user_id, "left")
+        except BaseException:
+            await outcome.set_up_failed()
+            raise
         return await self._start(
-            user_id, conversation, character, options, offer, admission, outcome, brought.image
+            user_id, conversation, character, options, offer, admission, outcome, placing,
+            brought.image,
         )
 
     async def _start(
@@ -1250,6 +1319,7 @@ class Calls:
         offer: SessionDescription,
         admission: Admission[CallKeys],
         outcome: CallOutcome,
+        placing: "_Placing",
         own_image: ImageSettings | None = None,
     ) -> dict:
         keys = admission.keys
@@ -1267,6 +1337,7 @@ class Calls:
                 connection, call, self._engine, self._store, self._speech, keys, outcome,
                 keys.emotions, keys.ambience, self._weather,
             )
+            self._placing.discard(placing)  # under way as a live call from now on
             self._live.add(live)
             live.start(on_done=self._live.discard)
             started.append(live)
@@ -1288,14 +1359,14 @@ class Calls:
             answer = await self._answer(SmallWebRTCRequest(offer.sdp, offer.type), serve)
         except BaseException:
             if not started:  # once served, the call is settled as it ends
-                outcome.set_up_failed()
+                await outcome.set_up_failed()
             raise
         if answer is None or not started:
             if started:
                 await started[0].hang_up("failed")
             elif connections:  # the pipeline could not be built; Pipecat only logs why
                 await _within_disconnect_timeout(connections[0].disconnect(), "a call")
-            outcome.set_up_failed()
+            await outcome.set_up_failed()
             raise CallFailed()
         self._owners[answer["pc_id"]] = user_id
         return answer
@@ -1328,6 +1399,23 @@ class Calls:
         """How many calls there are now, connected or still connecting."""
         return len(self._live)
 
+    def _refuse_unless_room(self, user_id: str) -> None:
+        """Raise StillPlacing if the user's last call is still being placed, CallsBusy if
+        there are as many calls under way as there may be at once, but for the user's own,
+        which a new one replaces."""
+        placing_users = [placing.user_id for placing in list(self._placing)]
+        if user_id in placing_users:
+            raise StillPlacing()
+        under_way = placing_users + [
+            live.user_id for live in list(self._live) if not live.over and live.user_id != user_id
+        ]
+        most = self._usage_limits().concurrent_calls
+        if most is not None and len(under_way) >= most:
+            log.warning(
+                "refused a call: %d calls under way, at most %d at once", len(under_way), most
+            )
+            raise CallsBusy()
+
     def in_call(self, conversation_id: str) -> bool:
         """Whether there is a call in the conversation now, connected or still connecting."""
         return any(live.conversation_id == conversation_id for live in list(self._live))
@@ -1343,7 +1431,7 @@ class Calls:
         """The character has fallen into a cooldown with the user, ending `until`: she hangs
         up the user's calls with her, but for the one whose turn began it, if a call's did,
         straight away; that one after its turn."""
-        taking = _taking_turn.get()  # whose turn began it, as told while it is recorded
+        taking = _taking_turn.get()  # whose turn began it, as told once it is recorded
         for live in list(self._live):
             if live.user_id == user_id and live.character_id == character_id:
                 live.cooled(until, taking)
@@ -1361,9 +1449,9 @@ class Calls:
         while self._live:
             await asyncio.sleep(USER_CHECK_INTERVAL)
             users = {live.user_id for live in self._live}
-            for user_id in users - self._store.active_users(users):
+            for user_id in users - await self._store.active_users(users):
                 try:
-                    self._store.get_user(user_id)
+                    await self._store.get_user(user_id)
                     reason: CallEndReason = "banned"
                 except NotFound:
                     reason = "deleted"
@@ -1391,6 +1479,13 @@ class Calls:
     def _require_owner(self, user_id: str, pc_id: str) -> None:
         if self._owners.get(pc_id) != user_id:
             raise CallNotFound()
+
+
+class _Placing:
+    """A call placed by the user, from being placed until it is served or fails to be."""
+
+    def __init__(self, user_id: str) -> None:
+        self.user_id = user_id
 
 
 async def _no_new_connection(connection: SmallWebRTCConnection) -> None:
@@ -1474,6 +1569,8 @@ class _LiveCall:
         )
         self._connected = asyncio.Event()
         self._hung_up = False
+        self.over = False
+        """Whether the call is over, its connection perhaps still closing."""
         self._task: asyncio.Task | None = None
         self._hanging_up_on: asyncio.Task | None = None  # hangs it up for a cooldown, unconnected
 
@@ -1558,8 +1655,9 @@ class _LiveCall:
             self._outcome.ended_by("failed")
             self._report_failure()
         finally:
+            self.over = True
             self._meter.close()
-            self._outcome.settle()
+            await self._outcome.settle()
             await _within_disconnect_timeout(  # lets the browser know the call is over
                 self._connection.disconnect(),
                 f"the call in conversation {self._call.conversation.id}",
@@ -1788,7 +1886,7 @@ class CallTurns(FrameProcessor):
         if self._answered:
             return
         self._answered = True
-        phone = self._engine.phone(self._call.conversation, self._call.device_timezone)
+        phone = await self._engine.phone(self._call.conversation, self._call.device_timezone)
         if phone == "in_the_tub":
             self._bath = True
             await self._send({"type": "bath"})
@@ -1866,7 +1964,7 @@ class CallTurns(FrameProcessor):
         words are voiced, as the call's record says she hung up whoever leaves first."""
         message = ending.ended
         if message is not None and ending.by_her:
-            event = self._store.hang_up(self._call.conversation.id)
+            event = await self._store.hang_up(self._call.conversation.id)
             message = {**message, "event": event.shown()}
         await self._carry_out(self._turns.call_ending())
         if message is not None:
@@ -1887,7 +1985,7 @@ class CallTurns(FrameProcessor):
             reply, self._reply = self._reply, None
             if reply is not None and not reply.done():
                 await self.cancel_task(reply)
-            turn.over(cut_short_by_failure=self._outcome.ended_by_failure)
+            await turn.over(cut_short_by_failure=self._outcome.ended_by_failure)
 
     def _start_reply(self, text: str, number: int, after: asyncio.Event | None = None) -> None:
         """Reply to `text`, as reply `number`, once `after` is set, if given."""
@@ -2054,13 +2152,13 @@ class CallTurns(FrameProcessor):
 
     async def _send_ambience(self, ambience: AmbiencePicking) -> None:
         conversation = self._call.conversation
-        profile = self._store.get_profile(conversation.user_id)
+        profile = await self._store.get_profile(conversation.user_id)
         timezone = effective_timezone(profile, self._call.device_timezone)
         moment = AmbienceMoment(
             self._call.character,
             ambience.clock().astimezone(ZoneInfo(timezone)),
             self._call.asmr,
-            self._store.list_messages(conversation.id),
+            await self._store.list_messages(conversation.id),
             await self._weather.now() if self._weather is not None else None,
         )
         kind = await ambience.pick(moment, self._ambience_kind)

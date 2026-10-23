@@ -38,6 +38,7 @@ from zoneinfo import ZoneInfo
 
 from eidolon.characters import Character
 from eidolon.corpus import StoryCorpus
+from eidolon.data_access import Database
 from eidolon.embedding import Embedder
 from eidolon.judge import JudgeError, JudgeModel, JudgeThresholds
 from eidolon.llm import ChatLLM, ChatMessage, Streamed, Tool
@@ -451,11 +452,12 @@ async def evaluate(
     `workdir`, telling `progress` which case is next."""
     workdir.mkdir(parents=True, exist_ok=True)
     # No references to look up: a turn needing them finds only memories.
-    sources = ReferenceSources(
-        services.embedder, [], StoryCorpus(workdir / "references.db", services.embedder), None
-    )
+    references = Database(workdir / "references.db")
     total = len(memory_eval.extraction) + len(memory_eval.recall)
     try:
+        sources = ReferenceSources(
+            services.embedder, [], StoryCorpus(references, services.embedder), None
+        )
         extraction = []
         for i, case in enumerate(memory_eval.extraction):
             if progress is not None:
@@ -472,7 +474,7 @@ async def evaluate(
                 await _recall(case, workdir / f"recall-{i}.db", characters, services, sources)
             )
     finally:
-        sources.close()
+        await references.close()
     return MemoryEvalResults(extraction, recall)
 
 
@@ -540,7 +542,7 @@ async def _recall(
     try:
         await scratch.start_with(case.memories)
         turn = await scratch.memories.begin(
-            scratch.conversation(case.character), TIMEZONE, _ScriptedBackground(None)
+            await scratch.conversation(case.character), TIMEZONE, _ScriptedBackground(None)
         )
         retrieved = await retrieval.retrieve(
             characters[case.character], case.history, case.said, turn
@@ -577,24 +579,28 @@ class _Scratch:
     def __init__(
         self, path: Path, characters: Mapping[str, Character], services: MemoryServices
     ) -> None:
-        self._store = Store(path)
-        self.user = self._store.create_user("评测用的制作人").id
+        self._database = Database(path)
+        self._store = Store(self._database)
+        self.user = ""
+        """The made-up user, once `start_with` has made them."""
         self.memories = Memories(
-            path, characters, lambda: NOW, embedder=services.embedder,
+            self._database, characters, lambda: NOW, embedder=services.embedder,
             reranker=services.reranker, min_relevance=lambda: services.rerank_thresholds.memories,
         )
         self._conversations: dict[str, Conversation] = {}
 
-    def conversation(self, character_id: str) -> Conversation:
+    async def conversation(self, character_id: str) -> Conversation:
         if character_id not in self._conversations:
-            self._conversations[character_id] = self._store.create_conversation(
+            self._conversations[character_id] = await self._store.create_conversation(
                 self.user, character_id
             )
         return self._conversations[character_id]
 
     async def start_with(self, memories: Sequence[StartingMemory]) -> dict[str, int]:
-        """Write `memories` down, each in a turn with its source character, in order,
-        superseding those it superseded; returns each one's id by key."""
+        """Make the user, then write `memories` down, each in a turn with its source
+        character, in order, superseding those it superseded; returns each one's id by
+        key."""
+        self.user = (await self._store.create_user("评测用的制作人")).id
         for memory in memories:
             superseded = [m.text for m in memories if m.superseded_by == memory.key]
             model = _ScriptedBackground(memory.text, superseded)
@@ -619,14 +625,14 @@ class _Scratch:
         written down. Raises TimeoutError if that takes over `WRITE_TIMEOUT`."""
         written = asyncio.Event()
         turn = await self.memories.begin(
-            self.conversation(character_id), TIMEZONE, llm, lambda: written.set
+            await self.conversation(character_id), TIMEZONE, llm, lambda: written.set
         )
         turn.write_down(history, said, reply)
         await asyncio.wait_for(written.wait(), WRITE_TIMEOUT)
 
     async def aclose(self) -> None:
         await self.memories.aclose()
-        self._store.close()
+        await self._database.close()
 
 
 class _ScriptedBackground:

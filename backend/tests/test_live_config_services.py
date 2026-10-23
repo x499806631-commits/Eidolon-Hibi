@@ -537,8 +537,10 @@ async def test_a_saved_judge_model_judges_the_next_turn_while_a_call_keeps_its_o
     saved = await client.put(JUDGE, json=CLOUDFLARE)
     assert saved.status_code == 200, saved.text
     await speech.stts[-1].hear("早上好")
-    await browser.turn()
-    emotion = await browser.next_server_message("emotion")
+    # Judged as her reply is voiced: told before the turn is done, or after.
+    emotion = next(
+        (m for m in await browser.turn() if m["type"] == "emotion"), None
+    ) or await browser.next_server_message("emotion")
     await send_turn(client, conversation_id, "你好")
     asked = list(clients.judge.asked)
     closed_during_call = list(clients.judges_closed)

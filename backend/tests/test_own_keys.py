@@ -4,13 +4,14 @@ falling back from a key of theirs that does not work; and whether it counts towa
 user's limit, by one rule, also asked before a call from the services it will bring keys
 for."""
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from eidolon.activity import OWN, ActivityLog
+from eidolon.data_access import Database
 from eidolon.config import EXEMPTING_SERVICES, ChatModelSettings, LLMSettings, SttKey
 from eidolon.llm import ChatLLM, ChatMessage
 from eidolon.own_keys import (
@@ -52,8 +53,9 @@ class CountingDeployer:
 class Deployment:
     """The deployer's keys, and where service calls are recorded."""
 
-    def __init__(self, path: Path) -> None:
-        self.activity = ActivityLog(path, FakeClock())
+    def __init__(self, db: Database) -> None:
+        self.db = db
+        self.activity = ActivityLog(db, FakeClock())
         self.chat = FakeLLM()
         self.memory = FakeBackgroundLLM()
         self.llm_service = FakeLLMService()
@@ -97,10 +99,10 @@ async def ask(llm: ChatLLM) -> None:
 
 
 @pytest.fixture
-def deployment(tmp_path: Path) -> Iterator[Deployment]:
-    deployment = Deployment(tmp_path / "eidolon.db")
+async def deployment(tmp_path: Path) -> AsyncIterator[Deployment]:
+    deployment = Deployment(Database(tmp_path / "eidolon.db"))
     yield deployment
-    deployment.activity.close()
+    await deployment.db.close()
 
 
 async def test_a_turn_that_brings_an_llm_runs_on_it_for_both_and_does_not_count(
@@ -118,7 +120,7 @@ async def test_a_turn_that_brings_an_llm_runs_on_it_for_both_and_does_not_count(
     assert keys.exempt is True and keys.own_llm is True
     # Each request is recorded as a service call on their own key, never saying which
     # host or model theirs is.
-    _, calls = deployment.activity.since(datetime.min.replace(tzinfo=UTC))
+    _, calls = await deployment.activity.since(datetime.min.replace(tzinfo=UTC))
     assert sorted((c.service, c.provider, c.model, c.own_key) for c in calls) == [
         ("chat_llm", OWN, OWN, True),
         ("memory_llm", OWN, OWN, True),

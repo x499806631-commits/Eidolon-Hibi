@@ -32,16 +32,15 @@ import json
 import logging
 import re
 import sqlite3
-import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
-from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 from eidolon.clock import Clock
-from eidolon.database import connect
+from eidolon.data_access import Database
+from eidolon.database import by_name
 from eidolon.features import AllOn, Switches
 from eidolon.randomness import Random, secure_random
 
@@ -214,7 +213,7 @@ def parse_promise_changes(answer: str, numbered: Sequence["Promise"]) -> list[Pr
     return list(changes.values())
 
 
-PromiseListener = Callable[[str, str, str, datetime], None]
+PromiseListener = Callable[[str, str, str, datetime], Awaitable[None]]
 
 Settled = Literal[
     "kept", "kept_late", "put_off", "put_off_late", "called_off", "called_off_late", "broken"
@@ -223,7 +222,7 @@ Settled = Literal[
 of its days, the first time; put off on or after its first day, or once more; called off ahead;
 called off on or after its first day; broken, as she first complains of it."""
 
-SettledListener = Callable[["Promise", Settled, datetime], None]
+SettledListener = Callable[["Promise", Settled, datetime], Awaitable[None]]
 
 CALLING = ("电话", "打给她", "通话")
 """What a promise kept by a call with her says."""
@@ -234,33 +233,24 @@ TALKING = ("来找她", "去找她", "陪她聊", "和她聊", "找她聊")
 
 
 class Promises:
-    """Every user's promises to every idol, in the database at `path` beside the users they
-    belong to; `random` draws the minute she asks about one at."""
+    """Every user's promises to every idol, in `db` beside the users they belong to
+    (ADR-0028); `random` draws the minute she asks about one at. What ends one up is told
+    those listening once it is written, on the event loop."""
 
     def __init__(
-        self, path: Path, clock: Clock, random: Random = secure_random,
+        self, db: Database, clock: Clock, random: Random = secure_random,
         features: Switches = AllOn(),
     ) -> None:
         """A user who has promises off (GLOSSARY.md「玩法开关」) has none kept, nor any she
         asks about or complains of."""
         self._features = features
-        self._db = connect(path)
-        self._db.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
+        self._db = db
         self._clock = clock
         self._random = random
         self._kept: list[PromiseListener] = []
         self._broken: list[PromiseListener] = []
         self._settled: list[SettledListener] = []
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
-            columns = {row[1] for row in self._db.execute("PRAGMA table_info(promises)")}
-            for column, kind in (
-                ("from_on", "TEXT"), ("put_off", "INTEGER NOT NULL DEFAULT 0"),
-                ("reminded_on", "TEXT"),
-            ):
-                if column not in columns:
-                    self._db.execute(f"ALTER TABLE promises ADD COLUMN {column} {kind}")
+        db.prepare(_open)
 
     def on_kept(self, listener: "PromiseListener") -> None:
         """Have `listener` told the user, the idol, the promise's words and when, as one is
@@ -276,326 +266,392 @@ class Promises:
         when: kept however it is, put off, called off, or broken as she first complains."""
         self._settled.append(listener)
 
-    def _tell(self, listeners: "Sequence[PromiseListener]", promises: "Sequence[Promise]") -> None:
+    async def _tell(
+        self, listeners: "Sequence[PromiseListener]", promises: "Sequence[Promise]"
+    ) -> None:
         now = self._clock()
         for promise in promises:
             for listener in listeners:
                 try:
-                    listener(promise.user_id, promise.character_id, promise.text, now)
+                    await listener(promise.user_id, promise.character_id, promise.text, now)
                 except Exception:
                     log.exception("telling of promise %s failed", promise.id)
 
-    def _settle(self, promises: "Sequence[tuple[Promise, Settled]]") -> None:
+    async def _settle(self, promises: "Sequence[tuple[Promise, Settled]]") -> None:
         now = self._clock()
         for promise, settled in promises:
             for listener in self._settled:
                 try:
-                    listener(promise, settled, now)
+                    await listener(promise, settled, now)
                 except Exception:
                     log.exception("telling how promise %s ended up failed", promise.id)
 
-    def _kept_all(self, promises: "Sequence[Promise]") -> None:
+    async def _kept_all(self, promises: "Sequence[Promise]") -> None:
         """Tell of `promises`, kept: whether only after she complained of each, too."""
-        self._tell(self._kept, promises)
-        self._settle([(p, "kept_late" if p.complained_at else "kept") for p in promises])
+        await self._tell(self._kept, promises)
+        await self._settle([(p, "kept_late" if p.complained_at else "kept") for p in promises])
 
-    def record(
+    async def record(
         self, user_id: str, character_id: str, made: Sequence[NewPromise], now: datetime
     ) -> None:
         """Keep `made`, promised in the turn recorded at `now` (in the producer's own time
         zone): a promise for a day already gone is dropped, one already made for that day is
         not written twice."""
-        if not self._features.on(user_id, "promises"):
+        return await self._db.write(self.record_in, user_id, character_id, made, now)
+
+    def record_in(
+        self,
+        db: sqlite3.Connection, user_id: str, character_id: str, made: Sequence[NewPromise], now: datetime
+    ) -> None:
+        if not self._features.read_on(db, user_id, "promises"):
             return
         today = now.date()
-        with self._lock, self._db:
-            for promise in made:
-                if promise.due < today:
-                    continue
-                if self._db.execute(
-                    "SELECT 1 FROM promises WHERE user_id = ? AND character_id = ?"
-                    " AND text = ? AND due_on = ?",
-                    (user_id, character_id, promise.text, promise.due.isoformat()),
-                ).fetchone():
-                    continue
-                starts = promise.starts if promise.starts and promise.starts > today else None
-                self._db.execute(
-                    "INSERT INTO promises"
-                    " (user_id, character_id, text, due_on, made_at, ask_at, from_on)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        user_id,
-                        character_id,
-                        promise.text,
-                        promise.due.isoformat(),
-                        now.astimezone(UTC).isoformat(),
-                        self._ask_at(promise.due, now).isoformat(),
-                        starts.isoformat() if starts else None,
-                    ),
-                )
+        for promise in made:
+            if promise.due < today:
+                continue
+            if by_name(db).execute(
+                "SELECT 1 FROM promises WHERE user_id = ? AND character_id = ?"
+                " AND text = ? AND due_on = ?",
+                (user_id, character_id, promise.text, promise.due.isoformat()),
+            ).fetchone():
+                continue
+            starts = promise.starts if promise.starts and promise.starts > today else None
+            by_name(db).execute(
+                "INSERT INTO promises"
+                " (user_id, character_id, text, due_on, made_at, ask_at, from_on)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    user_id,
+                    character_id,
+                    promise.text,
+                    promise.due.isoformat(),
+                    now.astimezone(UTC).isoformat(),
+                    self._ask_at(promise.due, now).isoformat(),
+                    starts.isoformat() if starts else None,
+                ),
+            )
 
-    def to_ask(
+    async def to_ask(
         self, user_id: str, character_id: str, now: datetime, timezone: str
     ) -> Promise | None:
         """The promise for today she would ask about now, changing nothing: whose asking
         minute has come and that she has not asked about. Only once what she says is kept is
         it marked asked (`asked`), so that a turn that fails, a reach-out not sent and a
         letter written ahead do not use it up."""
-        if not self._features.on(user_id, "promises"):
+        return await self._db.read(self._to_ask_body, user_id, character_id, now, timezone)
+
+    def _to_ask_body(
+        self,
+        db: sqlite3.Connection, user_id: str, character_id: str, now: datetime, timezone: str
+    ) -> Promise | None:
+        if not self._features.read_on(db, user_id, "promises"):
             return None
         today = now.astimezone(ZoneInfo(timezone)).date().isoformat()
-        with self._lock:
-            row = self._db.execute(
-                "SELECT * FROM promises WHERE user_id = ? AND character_id = ? AND due_on = ?"
-                " AND asked_at IS NULL AND complained_at IS NULL AND ask_at <= ?"
-                " ORDER BY id LIMIT 1",
-                (user_id, character_id, today, now.astimezone(UTC).isoformat()),
-            ).fetchone()
+        row = by_name(db).execute(
+            "SELECT * FROM promises WHERE user_id = ? AND character_id = ? AND due_on = ?"
+            " AND asked_at IS NULL AND complained_at IS NULL AND ask_at <= ?"
+            " ORDER BY id LIMIT 1",
+            (user_id, character_id, today, now.astimezone(UTC).isoformat()),
+        ).fetchone()
         return _promise(row) if row is not None else None
 
-    def asked(self, promise_id: int, now: datetime) -> None:
+    async def asked(self, promise_id: int, now: datetime) -> None:
         """She asked about it at `now`, in what was kept."""
-        with self._lock, self._db:
-            self._db.execute(
-                "UPDATE promises SET asked_at = COALESCE(asked_at, ?) WHERE id = ?",
-                (now.astimezone(UTC).isoformat(), promise_id),
-            )
+        return await self._db.write(self._asked_body, promise_id, now)
 
-    def asking(
+    def _asked_body(self, db: sqlite3.Connection, promise_id: int, now: datetime) -> None:
+        by_name(db).execute(
+            "UPDATE promises SET asked_at = COALESCE(asked_at, ?) WHERE id = ?",
+            (now.astimezone(UTC).isoformat(), promise_id),
+        )
+
+    async def asking(
         self, user_id: str, character_id: str, now: datetime, timezone: str
     ) -> Promise | None:
         """The promise for today she asks about now, marked asked at once (`to_ask`, `asked`)."""
-        found = self.to_ask(user_id, character_id, now, timezone)
+        found = await self.to_ask(user_id, character_id, now, timezone)
         if found is not None:
-            self.asked(found.id, now)
+            await self.asked(found.id, now)
         return found
 
-    def awaiting(
+    async def awaiting(
         self, user_id: str, character_id: str, now: datetime, timezone: str
     ) -> list[Promise]:
         """The promises the turn taken at `now` may have kept: for a day from `JUDGED_FOR`
         days ago to today in the producer's own time zone, asked about or not, complained of
         or not; the earliest `MAX_JUDGED`."""
+        return await self._db.read(self._awaiting_body, user_id, character_id, now, timezone)
+
+    def _awaiting_body(
+        self,
+        db: sqlite3.Connection, user_id: str, character_id: str, now: datetime, timezone: str
+    ) -> list[Promise]:
         today = now.astimezone(ZoneInfo(timezone)).date()
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT * FROM promises WHERE user_id = ? AND character_id = ?"
-                " AND COALESCE(from_on, due_on) <= ? AND due_on >= ?"
-                " ORDER BY due_on, id LIMIT ?",
-                (
-                    user_id, character_id, today.isoformat(),
-                    (today - timedelta(days=JUDGED_FOR)).isoformat(), MAX_JUDGED,
-                ),
-            ).fetchall()
+        rows = by_name(db).execute(
+            "SELECT * FROM promises WHERE user_id = ? AND character_id = ?"
+            " AND COALESCE(from_on, due_on) <= ? AND due_on >= ?"
+            " ORDER BY due_on, id LIMIT ?",
+            (
+                user_id, character_id, today.isoformat(),
+                (today - timedelta(days=JUDGED_FOR)).isoformat(), MAX_JUDGED,
+            ),
+        ).fetchall()
         return [_promise(row) for row in rows]
 
-    def standing(self, user_id: str, character_id: str) -> list[Promise]:
+    async def standing(self, user_id: str, character_id: str) -> list[Promise]:
         """Every promise still standing with her, the earliest first: for the background
         model to be shown, numbered, as it writes promises down; none where the user has
         promises off."""
-        if not self._features.on(user_id, "promises"):
+        return await self._db.read(self._standing_body, user_id, character_id)
+
+    def _standing_body(self, db: sqlite3.Connection, user_id: str, character_id: str) -> list[Promise]:
+        if not self._features.read_on(db, user_id, "promises"):
             return []
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT * FROM promises WHERE user_id = ? AND character_id = ?"
-                " ORDER BY due_on, id",
-                (user_id, character_id),
-            ).fetchall()
+        rows = by_name(db).execute(
+            "SELECT * FROM promises WHERE user_id = ? AND character_id = ?"
+            " ORDER BY due_on, id",
+            (user_id, character_id),
+        ).fetchall()
         return [_promise(row) for row in rows]
 
-    def change(self, user_id: str, changes: Sequence[PromiseChange], now: datetime) -> None:
+    async def change(self, user_id: str, changes: Sequence[PromiseChange], now: datetime) -> None:
         """Put off or call off the user's promises as `changes` say, at `now` (in the
         producer's own time zone): one put off is as though made anew for its new day, to be
         asked about then and not complained of meanwhile; one put off to a day gone is left as
         it is; one called off is gone, neither kept nor broken."""
+        await self._settle(await self._db.write(self._change_body, user_id, changes, now))
+
+    def _change_body(
+        self, db: sqlite3.Connection, user_id: str, changes: Sequence[PromiseChange],
+        now: datetime,
+    ) -> "list[tuple[Promise, Settled]]":
         today = now.date()
         settled: list[tuple[Promise, Settled]] = []
-        with self._lock, self._db:
-            for change in changes:
-                row = self._db.execute(
-                    "SELECT * FROM promises WHERE id = ? AND user_id = ?",
-                    (change.promise_id, user_id),
-                ).fetchone()
-                if row is None:
-                    continue
-                promise = _promise(row)
-                late = promise.first_day <= today
-                if change.due is None:
-                    self._db.execute("DELETE FROM promises WHERE id = ?", (promise.id,))
-                    settled.append((promise, "called_off_late" if late else "called_off"))
-                elif change.due >= today:
-                    self._db.execute(
-                        "UPDATE promises SET due_on = ?, ask_at = ?, asked_at = NULL,"
-                        " complained_at = NULL, complained_on = NULL, from_on = NULL,"
-                        " reminded_on = NULL, put_off = put_off + 1 WHERE id = ?",
-                        (
-                            change.due.isoformat(), self._ask_at(change.due, now).isoformat(),
-                            promise.id,
-                        ),
-                    )
-                    again = late or promise.put_off > 0
-                    settled.append((promise, "put_off_late" if again else "put_off"))
-        self._settle(settled)
+        for change in changes:
+            row = by_name(db).execute(
+                "SELECT * FROM promises WHERE id = ? AND user_id = ?",
+                (change.promise_id, user_id),
+            ).fetchone()
+            if row is None:
+                continue
+            promise = _promise(row)
+            late = promise.first_day <= today
+            if change.due is None:
+                by_name(db).execute("DELETE FROM promises WHERE id = ?", (promise.id,))
+                settled.append((promise, "called_off_late" if late else "called_off"))
+            elif change.due >= today:
+                by_name(db).execute(
+                    "UPDATE promises SET due_on = ?, ask_at = ?, asked_at = NULL,"
+                    " complained_at = NULL, complained_on = NULL, from_on = NULL,"
+                    " reminded_on = NULL, put_off = put_off + 1 WHERE id = ?",
+                    (
+                        change.due.isoformat(), self._ask_at(change.due, now).isoformat(),
+                        promise.id,
+                    ),
+                )
+                again = late or promise.put_off > 0
+                settled.append((promise, "put_off_late" if again else "put_off"))
+        return settled
 
-    def to_complain(
+    async def to_complain(
         self, user_id: str, character_id: str, now: datetime, timezone: str
     ) -> Promise | None:
         """The promise for a day gone by she would complain of now, changing nothing: the
         earliest one for a day before today that she has not complained of today. Marked
         only once what she says is kept (`complained`)."""
-        if not self._features.on(user_id, "promises"):
+        return await self._db.read(self._to_complain_body, user_id, character_id, now, timezone)
+
+    def _to_complain_body(
+        self,
+        db: sqlite3.Connection, user_id: str, character_id: str, now: datetime, timezone: str
+    ) -> Promise | None:
+        if not self._features.read_on(db, user_id, "promises"):
             return None
         today = now.astimezone(ZoneInfo(timezone)).date().isoformat()
-        with self._lock:
-            row = self._db.execute(
-                "SELECT * FROM promises WHERE user_id = ? AND character_id = ? AND due_on < ?"
-                " AND (complained_on IS NULL OR complained_on <> ?)"
-                " ORDER BY due_on, id LIMIT 1",
-                (user_id, character_id, today, today),
-            ).fetchone()
+        row = by_name(db).execute(
+            "SELECT * FROM promises WHERE user_id = ? AND character_id = ? AND due_on < ?"
+            " AND (complained_on IS NULL OR complained_on <> ?)"
+            " ORDER BY due_on, id LIMIT 1",
+            (user_id, character_id, today, today),
+        ).fetchone()
         return _promise(row) if row is not None else None
 
-    def complained(self, promise_id: int, now: datetime, timezone: str) -> None:
+    async def complained(self, promise_id: int, now: datetime, timezone: str) -> None:
         """She complained of it at `now`, in what was kept: not again that day."""
-        today = now.astimezone(ZoneInfo(timezone)).date().isoformat()
-        with self._lock, self._db:
-            row = self._db.execute(
-                "SELECT * FROM promises WHERE id = ?", (promise_id,)
-            ).fetchone()
-            self._db.execute(
-                "UPDATE promises SET complained_at = COALESCE(complained_at, ?), complained_on = ?"
-                " WHERE id = ?",
-                (now.astimezone(UTC).isoformat(), today, promise_id),
-            )
-        if row is not None and row["complained_at"] is None:
-            self._tell(self._broken, [_promise(row)])
-            self._settle([(_promise(row), "broken")])
+        broken = await self._db.write(self._complained_body, promise_id, now, timezone)
+        if broken is not None:
+            await self._tell(self._broken, [broken])
+            await self._settle([(broken, "broken")])
 
-    def complaining(
+    def _complained_body(
+        self, db: sqlite3.Connection, promise_id: int, now: datetime, timezone: str
+    ) -> "Promise | None":
+        today = now.astimezone(ZoneInfo(timezone)).date().isoformat()
+        row = by_name(db).execute(
+            "SELECT * FROM promises WHERE id = ?", (promise_id,)
+        ).fetchone()
+        by_name(db).execute(
+            "UPDATE promises SET complained_at = COALESCE(complained_at, ?), complained_on = ?"
+            " WHERE id = ?",
+            (now.astimezone(UTC).isoformat(), today, promise_id),
+        )
+        if row is not None and row["complained_at"] is None:
+            return _promise(row)
+        return None
+
+    async def complaining(
         self, user_id: str, character_id: str, now: datetime, timezone: str
     ) -> Promise | None:
         """The promise she complains of now, marked complained of at once (`to_complain`,
         `complained`)."""
-        found = self.to_complain(user_id, character_id, now, timezone)
+        found = await self.to_complain(user_id, character_id, now, timezone)
         if found is not None:
-            self.complained(found.id, now, timezone)
+            await self.complained(found.id, now, timezone)
         return found
 
-    def fulfil(self, user_id: str, promise_id: int) -> bool:
+    async def fulfil(self, user_id: str, promise_id: int) -> bool:
         """It was done: the promise is gone. False where it is not theirs, or already gone."""
-        with self._lock, self._db:
-            row = self._db.execute(
-                "SELECT * FROM promises WHERE id = ? AND user_id = ?", (promise_id, user_id)
-            ).fetchone()
-            if row is not None:
-                self._db.execute("DELETE FROM promises WHERE id = ?", (promise_id,))
-        if row is None:
+        kept = await self._db.write(self._fulfil_body, user_id, promise_id)
+        if kept is None:
             return False
-        self._kept_all([_promise(row)])
+        await self._kept_all([kept])
         return True
 
-    def by_gift(self, user_id: str, character_id: str, gift_name: str) -> bool:
+    def _fulfil_body(
+        self, db: sqlite3.Connection, user_id: str, promise_id: int
+    ) -> "Promise | None":
+        row = by_name(db).execute(
+            "SELECT * FROM promises WHERE id = ? AND user_id = ?", (promise_id, user_id)
+        ).fetchone()
+        if row is not None:
+            by_name(db).execute("DELETE FROM promises WHERE id = ?", (promise_id,))
+        return None if row is None else _promise(row)
+
+    async def by_gift(self, user_id: str, character_id: str, gift_name: str) -> bool:
         """A gift named in the promise was given to her: that promise is gone. Judged by the
         promise's own words, since what wrote it knows no gift catalog: one to give, send or
         buy her the gift (`GIVING`), not one that merely names it (「带她去书店」 is not kept by a
         book); and only one for no later than tomorrow, not the next week's."""
-        if not gift_name:
-            return False
-        found: list[Promise] = []
-        latest = (self._clock().date() + timedelta(days=1)).isoformat()
-        with self._lock, self._db:
-            rows = self._db.execute(
-                "SELECT * FROM promises WHERE user_id = ? AND character_id = ?"
-                " AND COALESCE(from_on, due_on) <= ?",
-                (user_id, character_id, latest),
-            ).fetchall()
-            for row in rows:
-                text = row["text"]
-                if gift_name in text and any(verb in text for verb in GIVING):
-                    found.append(_promise(row))
-                    self._db.execute("DELETE FROM promises WHERE id = ?", (row["id"],))
-        self._kept_all(found)
+        found = await self._db.write(self._by_gift_body, user_id, character_id, gift_name)
+        await self._kept_all(found)
         return bool(found)
 
-    def by_action(
+    def _by_gift_body(
+        self, db: sqlite3.Connection, user_id: str, character_id: str, gift_name: str
+    ) -> "list[Promise]":
+        if not gift_name:
+            return []
+        found: list[Promise] = []
+        latest = (self._clock().date() + timedelta(days=1)).isoformat()
+        rows = by_name(db).execute(
+            "SELECT * FROM promises WHERE user_id = ? AND character_id = ?"
+            " AND COALESCE(from_on, due_on) <= ?",
+            (user_id, character_id, latest),
+        ).fetchall()
+        for row in rows:
+            text = row["text"]
+            if gift_name in text and any(verb in text for verb in GIVING):
+                found.append(_promise(row))
+                by_name(db).execute("DELETE FROM promises WHERE id = ?", (row["id"],))
+        return found
+
+    async def by_action(
         self, user_id: str, character_id: str, called: bool, now: datetime, timezone: str
     ) -> bool:
         """The producer talked to her at `now`, in a call if `called`: the promises of these
         days to do so are kept (`TALKING`, and `CALLING` for a call), as the judge model's
         days go (`JUDGED_FOR`). True if any was."""
+        found = await self._db.write(
+            self._by_action_body, user_id, character_id, called, now, timezone
+        )
+        await self._kept_all(found)
+        return bool(found)
+
+    def _by_action_body(
+        self,
+        db: sqlite3.Connection, user_id: str, character_id: str, called: bool, now: datetime,
+        timezone: str,
+    ) -> "list[Promise]":
         today = now.astimezone(ZoneInfo(timezone)).date()
         words = TALKING + CALLING if called else TALKING
         found: list[Promise] = []
-        with self._lock, self._db:
-            rows = self._db.execute(
-                "SELECT * FROM promises WHERE user_id = ? AND character_id = ?"
-                " AND COALESCE(from_on, due_on) <= ? AND due_on >= ?",
-                (
-                    user_id, character_id, today.isoformat(),
-                    (today - timedelta(days=JUDGED_FOR)).isoformat(),
-                ),
-            ).fetchall()
-            for row in rows:
-                if any(word in row["text"] for word in words):
-                    found.append(_promise(row))
-                    self._db.execute("DELETE FROM promises WHERE id = ?", (row["id"],))
-        self._kept_all(found)
-        return bool(found)
+        rows = by_name(db).execute(
+            "SELECT * FROM promises WHERE user_id = ? AND character_id = ?"
+            " AND COALESCE(from_on, due_on) <= ? AND due_on >= ?",
+            (
+                user_id, character_id, today.isoformat(),
+                (today - timedelta(days=JUDGED_FOR)).isoformat(),
+            ),
+        ).fetchall()
+        for row in rows:
+            if any(word in row["text"] for word in words):
+                found.append(_promise(row))
+                by_name(db).execute("DELETE FROM promises WHERE id = ?", (row["id"],))
+        return found
 
-    def to_remind(
+    async def to_remind(
         self, user_id: str, character_id: str, now: datetime, timezone: str
     ) -> Promise | None:
         """The promise whose first day is tomorrow she would remind the producer of now,
         changing nothing; marked once what she says is kept (`reminded`)."""
-        if not self._features.on(user_id, "promises"):
+        return await self._db.read(self._to_remind_body, user_id, character_id, now, timezone)
+
+    def _to_remind_body(
+        self,
+        db: sqlite3.Connection, user_id: str, character_id: str, now: datetime, timezone: str
+    ) -> Promise | None:
+        if not self._features.read_on(db, user_id, "promises"):
             return None
         today = now.astimezone(ZoneInfo(timezone)).date()
-        with self._lock:
-            row = self._db.execute(
-                "SELECT * FROM promises WHERE user_id = ? AND character_id = ?"
-                " AND COALESCE(from_on, due_on) = ? AND reminded_on IS NULL ORDER BY id LIMIT 1",
-                (user_id, character_id, (today + timedelta(days=1)).isoformat()),
-            ).fetchone()
+        row = by_name(db).execute(
+            "SELECT * FROM promises WHERE user_id = ? AND character_id = ?"
+            " AND COALESCE(from_on, due_on) = ? AND reminded_on IS NULL ORDER BY id LIMIT 1",
+            (user_id, character_id, (today + timedelta(days=1)).isoformat()),
+        ).fetchone()
         return _promise(row) if row is not None else None
 
-    def reminded(self, promise_id: int, now: datetime, timezone: str) -> None:
+    async def reminded(self, promise_id: int, now: datetime, timezone: str) -> None:
         """She reminded the producer of it at `now`, in what was kept."""
-        today = now.astimezone(ZoneInfo(timezone)).date().isoformat()
-        with self._lock, self._db:
-            self._db.execute(
-                "UPDATE promises SET reminded_on = ? WHERE id = ?", (today, promise_id)
-            )
+        return await self._db.write(self._reminded_body, promise_id, now, timezone)
 
-    def open_for(self, user_id: str) -> list[Promise]:
+    def _reminded_body(self, db: sqlite3.Connection, promise_id: int, now: datetime, timezone: str) -> None:
+        today = now.astimezone(ZoneInfo(timezone)).date().isoformat()
+        by_name(db).execute(
+            "UPDATE promises SET reminded_on = ? WHERE id = ?", (today, promise_id)
+        )
+
+    async def open_for(self, user_id: str) -> list[Promise]:
         """Every promise still standing with any idol: for the calendar."""
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT * FROM promises WHERE user_id = ? ORDER BY due_on, id", (user_id,)
-            ).fetchall()
+        return await self._db.read(self.read_open_for, user_id)
+
+    def read_open_for(self, db: sqlite3.Connection, user_id: str) -> list[Promise]:
+        rows = by_name(db).execute(
+            "SELECT * FROM promises WHERE user_id = ? ORDER BY due_on, id", (user_id,)
+        ).fetchall()
         return [_promise(row) for row in rows]
 
-    def due(self, user_id: str, character_id: str) -> Promise | None:
+    async def due(self, user_id: str, character_id: str) -> Promise | None:
         """The earliest promise this user has with this character, for the calendar's day."""
-        with self._lock:
-            row = self._db.execute(
-                "SELECT * FROM promises WHERE user_id = ? AND character_id = ?"
-                " ORDER BY due_on, id LIMIT 1",
-                (user_id, character_id),
-            ).fetchone()
+        return await self._db.read(self._due_body, user_id, character_id)
+
+    def _due_body(self, db: sqlite3.Connection, user_id: str, character_id: str) -> Promise | None:
+        row = by_name(db).execute(
+            "SELECT * FROM promises WHERE user_id = ? AND character_id = ?"
+            " ORDER BY due_on, id LIMIT 1",
+            (user_id, character_id),
+        ).fetchone()
         return _promise(row) if row is not None else None
 
-    def sweep(self, now: datetime) -> None:
+    async def sweep(self, now: datetime) -> None:
         """Delete the promises complained of `KEEP_AFTER_COMPLAINT` ago or longer."""
-        cutoff = (now.astimezone(UTC) - KEEP_AFTER_COMPLAINT).isoformat()
-        with self._lock, self._db:
-            self._db.execute(
-                "DELETE FROM promises WHERE complained_at IS NOT NULL AND complained_at <= ?",
-                (cutoff,),
-            )
+        return await self._db.write(self._sweep_body, now)
 
-    def close(self) -> None:
-        with self._lock:
-            self._db.close()
+    def _sweep_body(self, db: sqlite3.Connection, now: datetime) -> None:
+        cutoff = (now.astimezone(UTC) - KEEP_AFTER_COMPLAINT).isoformat()
+        by_name(db).execute(
+            "DELETE FROM promises WHERE complained_at IS NOT NULL AND complained_at <= ?",
+            (cutoff,),
+        )
 
     def _ask_at(self, due: date, now: datetime) -> datetime:
         """When she would ask about the promise for `due`: a minute of that day from `ASK_FROM`
@@ -604,6 +660,17 @@ class Promises:
         hour, minute = divmod(drawn, 60)
         asks = datetime.combine(due, time(hour, minute), now.tzinfo or UTC)
         return asks.astimezone(UTC)
+
+
+def _open(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+    columns = {row[1] for row in db.execute("PRAGMA table_info(promises)")}
+    for column, kind in (
+        ("from_on", "TEXT"), ("put_off", "INTEGER NOT NULL DEFAULT 0"),
+        ("reminded_on", "TEXT"),
+    ):
+        if column not in columns:
+            db.execute(f"ALTER TABLE promises ADD COLUMN {column} {kind}")
 
 
 def _promise(row: sqlite3.Row) -> Promise:

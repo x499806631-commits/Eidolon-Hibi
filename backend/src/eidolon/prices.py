@@ -21,18 +21,17 @@ model without a price shows what it used, and no amount. Usage on users' own key
 theirs to pay: shown, never priced.
 """
 
-import threading
+import sqlite3
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
-from pathlib import Path
 from typing import Literal
 
 from eidolon.activity import SERVICES, CallGroup
 from eidolon.clock import Clock
 from eidolon.config import ServiceName
-from eidolon.database import connect
+from eidolon.data_access import Database
 from eidolon.price_catalog import Catalog
 
 PER: dict[str, int] = {
@@ -221,6 +220,31 @@ class Pricing:
             "catalog_upstream" if upstream else "catalog", (listed.provider, listed.model),
         )
 
+    def describe(self, used: Iterable[PriceKey] = ()) -> list[dict]:
+        """Every preset, every admin's price and every model `used`, each with where the
+        price in effect is from, if any, and beside it the preset, the catalogs' and the
+        admin's, by provider, model and unit."""
+        overrides = self._overrides
+        rows = []
+        for key in sorted(PRESETS.keys() | overrides.keys() | set(used)):
+            provider, model, unit = key
+            found = self.find(*key)
+            listed = self.listed(*key)
+            rows.append({
+                "provider": provider, "model": model, "unit": unit, "per": per(unit),
+                "source": found.source if found else None,
+                "preset": (
+                    describe_price(key, Found(PRESETS[key], "preset")) if key in PRESETS
+                    else None
+                ),
+                "catalog": describe_price(key, listed) if listed else None,
+                "override": (
+                    describe_price(key, Found(overrides[key], "override"))
+                    if key in overrides else None
+                ),
+            })
+        return rows
+
 
 _SCHEMA = """
 -- The prices admins set in the admin console, each in place of the preset of its provider,
@@ -243,64 +267,20 @@ CREATE TABLE IF NOT EXISTS price_overrides (
 class Prices:
     """The prices admins set, over the catalogs' and the presets."""
 
-    def __init__(self, path: Path, clock: Clock, catalog: Catalog) -> None:
-        self._db = connect(path)
-        self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
-            columns = {
-                name for _, name, *_ in self._db.execute("PRAGMA table_info(price_overrides)")
-            }
-            # Prices set before cache prices were have none: cached input as the rest.
-            if "cache_read" not in columns:
-                self._db.execute("ALTER TABLE price_overrides ADD COLUMN cache_read REAL")
+    def __init__(self, db: Database, clock: Clock, catalog: Catalog) -> None:
+        self._db = db
+        db.prepare(_create)
         self._clock = clock
         self.catalog = catalog
 
-    def overrides(self) -> dict[PriceKey, Price]:
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT provider, model, unit, input, output, currency, updated_at, cache_read"
-                " FROM price_overrides"
-            ).fetchall()
-        return {
-            (provider, model, unit): Price(
-                input, output, currency, datetime.fromisoformat(updated).date(), cache_read
-            )
-            for provider, model, unit, input, output, currency, updated, cache_read in rows
-        }
+    async def overrides(self) -> dict[PriceKey, Price]:
+        return await self._db.read(_overrides)
 
-    def pricing(self) -> Pricing:
+    async def pricing(self) -> Pricing:
         """Every price in effect now."""
-        return Pricing(self.overrides(), self.catalog)
+        return Pricing(await self.overrides(), self.catalog)
 
-    def describe(self, used: Iterable[PriceKey] = ()) -> list[dict]:
-        """Every preset, every admin's price and every model `used`, each with where the
-        price in effect is from, if any, and beside it the preset, the catalogs' and the
-        admin's, by provider, model and unit."""
-        overrides = self.overrides()
-        pricing = Pricing(overrides, self.catalog)
-        rows = []
-        for key in sorted(PRESETS.keys() | overrides.keys() | set(used)):
-            provider, model, unit = key
-            found = pricing.find(*key)
-            listed = pricing.listed(*key)
-            rows.append({
-                "provider": provider, "model": model, "unit": unit, "per": per(unit),
-                "source": found.source if found else None,
-                "preset": (
-                    describe_price(key, Found(PRESETS[key], "preset")) if key in PRESETS
-                    else None
-                ),
-                "catalog": describe_price(key, listed) if listed else None,
-                "override": (
-                    describe_price(key, Found(overrides[key], "override"))
-                    if key in overrides else None
-                ),
-            })
-        return rows
-
-    def save(
+    async def save(
         self,
         key: PriceKey,
         input: float,
@@ -309,27 +289,55 @@ class Prices:
         cache_read: float | None = None,
     ) -> None:
         """Price `key` so from now on, in place of its preset, if any."""
-        provider, model, unit = key
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT OR REPLACE INTO price_overrides"
-                " (provider, model, unit, input, output, currency, updated_at, cache_read)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (provider, model, unit, input, output, currency, self._clock().isoformat(),
-                 cache_read),
-            )
+        await self._db.write(
+            _save, key, input, output, currency, cache_read, self._clock().isoformat()
+        )
 
-    def restore(self, key: PriceKey) -> bool:
+    async def restore(self, key: PriceKey) -> bool:
         """Back to the preset of `key`, or unpriced without one; whether an admin had set
         its price."""
-        with self._lock, self._db:
-            deleted = self._db.execute(
-                "DELETE FROM price_overrides WHERE provider = ? AND model = ? AND unit = ?", key
-            )
-        return deleted.rowcount > 0
+        return await self._db.write(_restore, key)
 
-    def close(self) -> None:
-        self._db.close()
+
+def _create(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+    columns = {name for _, name, *_ in db.execute("PRAGMA table_info(price_overrides)")}
+    # Prices set before cache prices were have none: cached input as the rest.
+    if "cache_read" not in columns:
+        db.execute("ALTER TABLE price_overrides ADD COLUMN cache_read REAL")
+
+
+def _overrides(db: sqlite3.Connection) -> dict[PriceKey, Price]:
+    rows = db.execute(
+        "SELECT provider, model, unit, input, output, currency, updated_at, cache_read"
+        " FROM price_overrides"
+    ).fetchall()
+    return {
+        (provider, model, unit): Price(
+            input, output, currency, datetime.fromisoformat(updated).date(), cache_read
+        )
+        for provider, model, unit, input, output, currency, updated, cache_read in rows
+    }
+
+
+def _save(
+    db: sqlite3.Connection, key: PriceKey, input: float, output: float | None, currency: str,
+    cache_read: float | None, now: str,
+) -> None:
+    provider, model, unit = key
+    db.execute(
+        "INSERT OR REPLACE INTO price_overrides"
+        " (provider, model, unit, input, output, currency, updated_at, cache_read)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (provider, model, unit, input, output, currency, now, cache_read),
+    )
+
+
+def _restore(db: sqlite3.Connection, key: PriceKey) -> bool:
+    deleted = db.execute(
+        "DELETE FROM price_overrides WHERE provider = ? AND model = ? AND unit = ?", key
+    )
+    return deleted.rowcount > 0
 
 
 def preset_as_of() -> date | None:

@@ -79,7 +79,7 @@ async def test_a_draw_gives_what_the_number_falls_on(
 ):
     client = make_client(FakeLLM(), clock=FakeClock(), random=FakeRandom(*numbers))
 
-    assert await draw(client) == {"drawn": [drawn], "draws": 0}
+    assert await draw(client) == {"drawn": [drawn], "draws": 0, "rewarded": None}
 
 
 async def test_a_retired_gift_is_never_drawn(make_client: ClientFactory):
@@ -120,6 +120,7 @@ async def test_drawing_them_all_uses_every_chance_and_what_they_give_stacks_in_t
     assert drawn == {
         "drawn": [gift_drawn("cocoa"), gift_drawn("cake"), CARD_DRAWN, gift_drawn("cocoa")],
         "draws": 0,
+        "rewarded": None,
     }
     after = await state(client)
     assert after["backpack"] == [

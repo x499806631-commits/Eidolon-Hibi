@@ -30,11 +30,11 @@ def add_home_routes(app: FastAPI, backend: Backend) -> None:
     home = backend.home
 
     async def shown(user_id: str) -> dict:
-        state = home.of(user_id)
+        state = await home.of(user_id)
         sky = await backend.weather.sky() if backend.weather is not None else None
         return {
             "room": state.room, "framed_photo": state.framed_photo, "sky": sky,
-            "background": home.drawn(user_id, state.room), "can_draw": home.can_draw(),
+            "background": await home.drawn(user_id, state.room), "can_draw": home.can_draw(),
             "layout": {thing: list(at) for thing, at in state.layouts.get(state.room, {}).items()},
         }
 
@@ -46,7 +46,7 @@ def add_home_routes(app: FastAPI, backend: Backend) -> None:
     async def change_home(user_id: UserId, body: HomeChange) -> dict:
         framed = body.framed_photo
         try:
-            home.set(
+            await home.set(
                 user_id, body.room,
                 framed if framed not in (None, _UNSET) else None, unframe=framed is None,
                 layout=body.layout,
@@ -59,20 +59,20 @@ def add_home_routes(app: FastAPI, backend: Backend) -> None:
     async def draw_background(user_id: UserId) -> dict:
         if not home.can_draw():
             raise HTTPException(409, "现在没有生图服务，画不了")
-        if not await home.draw(user_id, home.of(user_id).room):
+        if not await home.draw(user_id, (await home.of(user_id)).room):
             raise HTTPException(502, "这次没画出来，稍后再试")
         return await shown(user_id)
 
     @app.get("/api/home/background/{room}")
-    def background(room: Room, user_id: UserId) -> Response:
-        image = home.background(user_id, room)
+    async def background(room: Room, user_id: UserId) -> Response:
+        image = await home.background(user_id, room)
         if image is None:
             raise HTTPException(404, "这间屋子还没画")
         return Response(image, media_type="image/webp", headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
     @app.get("/api/album")
-    def album(user_id: UserId) -> list[dict]:
+    async def album(user_id: UserId) -> list[dict]:
         return [
             {"id": p.id, "character_id": p.character_id, "sent_at": p.sent_at}
-            for p in home.album(user_id)
+            for p in await home.album(user_id)
         ]

@@ -19,17 +19,17 @@ def add_photo_routes(app: FastAPI, backend: Backend) -> None:
     store = backend.store
 
     @app.get("/api/photos/{photo_id}")
-    def read_photo(photo_id: str, user_id: UserId) -> dict:
+    async def read_photo(photo_id: str, user_id: UserId) -> dict:
         """Whether the photo is being generated (`pending`), was sent (`ready`) or was not
         (`failed`), and why not."""
-        photo = store.photo(photo_id, user_id)
+        photo = await store.photo(photo_id, user_id)
         if photo is None:
             raise HTTPException(404, NOT_FOUND)
         return {"status": photo.status, "reason": photo.reason}
 
     @app.get("/api/photos/{photo_id}/image")
-    def read_photo_image(photo_id: str, user_id: UserId) -> Response:
-        image = store.photo_image(photo_id, user_id)
+    async def read_photo_image(photo_id: str, user_id: UserId) -> Response:
+        image = await store.photo_image(photo_id, user_id)
         if image is None:
             raise HTTPException(404, NOT_FOUND)
         return Response(image, media_type="image/webp", headers=_PHOTO_CACHE)

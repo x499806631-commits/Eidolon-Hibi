@@ -17,7 +17,7 @@ from eidolon.engine import (
 )
 from eidolon.outfit_tags import OutfitTags, VisionSettings, cleaned
 from eidolon.schedules import DATE_TWIST
-from tests.conftest import ClientFactory
+from tests.conftest import ClientFactory, database_in
 from tests.fakes import FAKE_JUDGE, FakeClock, FakeImageService, FakeLLM, FakeRandom
 from tests.test_delete_account import user_id
 from tests.test_photos import IMAGE
@@ -58,8 +58,8 @@ async def talked(
     return client, llm, conversation
 
 
-def give(client: httpx.AsyncClient, settings: Settings, kind: str) -> None:
-    backend_of(client).gifts.put_back_ticket(user_id(settings.database_path, "producer"), kind)
+async def give(client: httpx.AsyncClient, settings: Settings, kind: str) -> None:
+    await backend_of(client).gifts.put_back_ticket(user_id(settings.database_path, "producer"), kind)
 
 
 async def state(client: httpx.AsyncClient) -> dict:
@@ -100,7 +100,7 @@ async def test_a_liked_gift_ticket_puts_one_she_likes_in_the_backpack_once(
     make_client: ClientFactory, settings: Settings
 ):
     client, _, _ = await talked(make_client, numbers=(0,))
-    give(client, settings, "liked_gift")
+    await give(client, settings, "liked_gift")
 
     used = await client.post("/api/tickets/liked_gift", json={"character_id": "mano"})
     again = await client.post("/api/tickets/liked_gift", json={"character_id": "mano"})
@@ -113,7 +113,7 @@ async def test_a_liked_gift_ticket_puts_one_she_likes_in_the_backpack_once(
 async def test_a_letter_ticket_has_her_write_now(make_client: ClientFactory, settings: Settings):
     letter = ["<ja>プロデューサーさんへ</ja><zh>致制作人</zh>", "<ja>真乃より</ja><zh>真乃</zh>"]
     client, _, _ = await talked(make_client, letter)
-    give(client, settings, "letter")
+    await give(client, settings, "letter")
 
     used = await client.post("/api/tickets/letter", json={"character_id": "mano"})
 
@@ -132,8 +132,8 @@ async def test_a_diary_key_opens_all_of_a_page_and_is_given_back_if_there_was_no
     entry_id = (await client.post(
         "/api/diary/write-now", json={"character_id": "mano", "what": "聊得很开心"}
     )).json()["id"]
-    give(client, settings, "diary_key")
-    give(client, settings, "diary_key")
+    await give(client, settings, "diary_key")
+    await give(client, settings, "diary_key")
 
     [before] = (await client.get("/api/diary")).json()
     opened = await client.post("/api/tickets/diary_key", json={"entry_id": entry_id})
@@ -151,7 +151,7 @@ async def test_a_photo_ticket_has_her_send_one_in_the_outfit_asked_for(
 ):
     image = FakeImageService()
     client, llm, conversation = await talked(make_client, PHOTO, image=image)
-    give(client, settings, "photo")
+    await give(client, settings, "photo")
 
     used = await client.post("/api/tickets/photo", json={
         "character_id": "mano", "outfit_id": "stand/1030010010", "card": "ほわっとスマイル",
@@ -168,7 +168,7 @@ async def test_a_photo_ticket_has_her_send_one_in_the_outfit_asked_for(
     assert sent["photo"]["status"] == "ready" and image.requests
 
 
-def test_an_outfit_is_read_once_from_its_thumbnail_and_kept(tmp_path):
+async def test_an_outfit_is_read_once_from_its_thumbnail_and_kept(tmp_path):
     asked: list[str] = []
 
     def answer(request: httpx.Request) -> httpx.Response:
@@ -181,18 +181,17 @@ def test_an_outfit_is_read_once_from_its_thumbnail_and_kept(tmp_path):
             "content": "White_Blouse, pink ribbon,\n frilled skirt. "
         }}]})
 
-    tags = OutfitTags(
-        tmp_path / "db", VisionSettings("https://vision.test/v1", "k", "m"),
-        "https://assets.test", httpx.MockTransport(answer),
-    )
-    import asyncio
+    async with database_in(tmp_path / "db") as db:
+        tags = OutfitTags(
+            db, VisionSettings("https://vision.test/v1", "k", "m"),
+            "https://assets.test", httpx.MockTransport(answer),
+        )
+        first = await tags.of("stand/1030010010")
+        second = await tags.of("stand/1030010010")
 
-    first = asyncio.run(tags.of("stand/1030010010"))
-    second = asyncio.run(tags.of("stand/1030010010"))
-
-    assert first == second == "white blouse, pink ribbon, frilled skirt"
-    assert asked == ["/thumbnails/stand/1030010010.png", "/v1/chat/completions"]
-    assert asyncio.run(tags.of("../etc/passwd")) is None
+        assert first == second == "white blouse, pink ribbon, frilled skirt"
+        assert asked == ["/thumbnails/stand/1030010010.png", "/v1/chat/completions"]
+        assert await tags.of("../etc/passwd") is None
     assert cleaned("a, a, b") == "a, b"
 
 
@@ -205,7 +204,7 @@ async def test_a_date_ticket_she_answers_has_in_her_schedule_and_tells_of_after_
         make_client, ["<ja>行きたい！</ja><zh>想去！</zh>"], [PLAN], after,
         numbers=(0, 1, 0, 1), clock=clock,
     )
-    give(client, settings, "date")
+    await give(client, settings, "date")
     tomorrow = date(2026, 10, 23)
 
     used = await client.post("/api/tickets/date", json={
@@ -238,7 +237,7 @@ async def test_on_a_date_she_may_have_the_producer_in_her_photo_as_their_profile
         numbers=(0, 1, 0, 1), clock=clock, image=image,
     )
     await client.put("/api/profile", json={"gender": "female"})
-    give(client, settings, "date")
+    await give(client, settings, "date")
     tomorrow = date(2026, 10, 23)
 
     await client.post("/api/tickets/date", json={
@@ -261,7 +260,7 @@ async def test_a_date_today_or_too_far_is_refused_and_the_ticket_kept(
     make_client: ClientFactory, settings: Settings
 ):
     client, _, _ = await talked(make_client)
-    give(client, settings, "date")
+    await give(client, settings, "date")
 
     today = await client.post("/api/tickets/date", json={
         "character_id": "mano", "what": "散步", "day": NOON.date().isoformat(),

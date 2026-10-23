@@ -28,7 +28,7 @@ async def writing(make_client: ClientFactory, *replies, now: datetime | None = N
     conversation_id = await start_conversation(client)
     await send_turn(client, conversation_id, "我去练习了")
     backend = backend_of(client)
-    conversation = backend.store.get_conversation(conversation_id)
+    conversation = await backend.store.get_conversation(conversation_id)
     assert conversation is not None
     return client, llm, clock, backend, conversation
 
@@ -65,22 +65,22 @@ async def test_she_knows_of_her_letters_for_two_weeks_and_whether_he_read_them(
     client, llm, clock, backend, conversation = await writing(
         make_client, REPLY, REPLY, REPLY,
     )
-    letter = backend.store.add_letter(
+    letter = await backend.store.add_letter(
         conversation.user_id, "mano", "ordinary",
         [Segment("プロデューサーさんへ", "致制作人"), Segment("[softly] 寒いね", "好冷呀")],
         clock.now,
     )
-    backend.store.add_letter(
+    await backend.store.add_letter(
         conversation.user_id, "kogane", "ordinary", [Segment("あ", "啊")], clock.now
     )
-    backend.store.add_letter(  # written ahead: not come yet
+    await backend.store.add_letter(  # written ahead: not come yet
         conversation.user_id, "mano", "holiday", [Segment("x", "x"), Segment("x", "还没到的信")],
         clock.now + timedelta(days=30),
     )
 
     await send_turn(client, conversation.id, "收到你的信了")
     unread = context_of(llm.prompts[-1])
-    backend.store.read_letter(conversation.user_id, letter.id, clock.now)
+    await backend.store.read_letter(conversation.user_id, letter.id, clock.now)
     await send_turn(client, conversation.id, "又看了一遍")
     read = context_of(llm.prompts[-1])
 

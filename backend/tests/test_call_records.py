@@ -10,6 +10,7 @@ has a backend of its own: the admin places the calls where that is asked."""
 import asyncio
 import sqlite3
 from dataclasses import replace
+from typing import Any
 
 import httpx
 import pytest
@@ -22,9 +23,8 @@ from pipecat.tests.utils import SleepFrame
 
 import eidolon.call
 from eidolon.config import Settings
-from eidolon.store import Store
 from tests.browser import TIMEOUT, Browser, open_browser
-from tests.conftest import ClientFactory
+from tests.conftest import ClientFactory, store_in
 from tests.fakes import (
     START,
     FakeClock,
@@ -48,6 +48,7 @@ from tests.test_call_turns import (  # noqa: F401
     spoken,
 )
 from tests.test_delete_account import user_id
+from tests.test_service_status import backend_of
 from tests.test_own_speech_keys import MY_FISH, MY_LLM, MY_SONIOX, limited, own_keys
 from tests.test_text_turn import start_conversation
 
@@ -216,6 +217,43 @@ async def test_a_database_from_before_calls_were_recorded_keeps_its_records_and_
     assert stt is not None and stt["calls"] == 1 and stt["latency_ms"]["p50"] is None
 
 
+async def test_a_call_cancelled_as_it_is_let_in_never_connected_and_takes_none_of_the_limit(
+    make_client: ClientFactory,
+    settings: Settings,
+    github: FakeIdentityProvider,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Letting in goes on as the request is cancelled (the server shutting down), for what
+    it writes would be written all the same: what it let in is settled all the same."""
+    clock = FakeClock()
+    client = make_client(FakeLLM(), settings=limited(settings, calls_per_hour=1), clock=clock)
+    admin = await admin_client(make_client, github, clock)
+    conversation_id = await start_conversation(client)
+    backend = backend_of(client)
+    letting_in, may_go_on = asyncio.Event(), asyncio.Event()
+    let_in = backend.admissions.call
+
+    async def call(*args: Any) -> Any:
+        letting_in.set()
+        await may_go_on.wait()
+        return await let_in(*args)
+
+    monkeypatch.setattr(backend.admissions, "call", call)
+
+    async with open_browser() as browser:
+        offering = asyncio.create_task(browser.call(client, conversation_id=conversation_id))
+        await asyncio.wait_for(letting_in.wait(), TIMEOUT)
+        offering.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await offering
+        may_go_on.set()
+    board = await call_recorded(admin)
+
+    assert board["calls"]["by_result"]["not_connected"] == 1
+    day = await backend.usage.last_day(user_id(settings.database_path, "producer"))
+    assert day.total.calls == 0
+
+
 async def test_a_call_whose_speech_synthesis_fails_before_any_turn_never_connected(
     make_client: ClientFactory,
     github: FakeIdentityProvider,
@@ -332,9 +370,8 @@ async def test_a_call_whose_user_is_deleted_elsewhere_ends_for_the_deletion(
     await browser.call(client, conversation_id=await start_conversation(client))
     await browser.connect()
 
-    store = Store(settings.database_path)
-    store.delete_user(user_id(settings.database_path, "producer"))
-    store.close()
+    async with store_in(settings.database_path) as store:
+        await store.delete_user(user_id(settings.database_path, "producer"))
     await browser.hung_up()
     board = await call_recorded(admin)
 

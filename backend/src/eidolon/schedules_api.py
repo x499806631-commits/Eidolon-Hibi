@@ -22,6 +22,7 @@ from eidolon.engine import WOKEN_FOR
 from eidolon.producer import effective_timezone
 from eidolon.schedules import bath_began, rest
 from eidolon.sessions import UserId
+from eidolon.store import read_last_contact
 
 
 class WriteNow(BaseModel):
@@ -34,38 +35,38 @@ def add_schedule_routes(app: FastAPI, backend: Backend) -> None:
     )
 
     @app.get("/api/characters/{character_id}/schedule")
-    def read_schedule(user_id: UserId, character_id: str, day: date | None = None) -> dict | None:
+    async def read_schedule(user_id: UserId, character_id: str, day: date | None = None) -> dict | None:
         if character_id not in backend.characters:
             raise HTTPException(404, "没有这位角色")
         if day is None:
-            zone = ZoneInfo(effective_timezone(store.get_profile(user_id), None))
+            zone = ZoneInfo(effective_timezone(await store.get_profile(user_id), None))
             day = clock().astimezone(zone).date()
-        found = schedules.of(user_id, character_id, day)
+        found = await schedules.of(user_id, character_id, day)
         return found.shown() if found else None
 
     @app.get("/api/characters/{character_id}/schedule/now")
-    def read_now(user_id: UserId, character_id: str) -> dict | None:
+    async def read_now(user_id: UserId, character_id: str) -> dict | None:
         if character_id not in backend.characters:
             raise HTTPException(404, "没有这位角色")
-        if not features.on(user_id, "schedules"):
+        if not await features.on(user_id, "schedules"):
             return None
-        zone = ZoneInfo(effective_timezone(store.get_profile(user_id), None))
+        zone = ZoneInfo(effective_timezone(await store.get_profile(user_id), None))
         now = clock()
         local = now.astimezone(zone)
-        found = schedules.of(user_id, character_id, local.date())
-        yesterday = schedules.of(user_id, character_id, local.date() - timedelta(days=1))
+        found = await schedules.of(user_id, character_id, local.date())
+        yesterday = await schedules.of(user_id, character_id, local.date() - timedelta(days=1))
         resting = rest(found, yesterday, local)
-        if (resting == "bath" and not features.on(user_id, "bath")) or (
-            resting in ("asleep", "bedtime") and not features.on(user_id, "sleep")
+        if (resting == "bath" and not await features.on(user_id, "bath")) or (
+            resting in ("asleep", "bedtime") and not await features.on(user_id, "sleep")
         ):
             resting = None
         if resting == "bath":
             began = bath_began(found, yesterday, local)
-            contact = store.last_contact(user_id, character_id)
+            contact = await backend.database.read(read_last_contact, user_id, character_id)
             if began is not None and (contact is None or contact < began):
                 return {"bath": True}
         if resting == "asleep":
-            contact = store.last_contact(user_id, character_id)
+            contact = await backend.database.read(read_last_contact, user_id, character_id)
             return {"asleep": True, "woken": contact is not None and now - contact <= WOKEN_FOR}
         if found is None:
             return None
@@ -84,4 +85,4 @@ def add_schedule_routes(app: FastAPI, backend: Backend) -> None:
         async def write_now(user_id: UserId, body: WriteNow) -> dict | None:
             if not await backend.schedule_writer.write_now(user_id, body.character_id):
                 raise HTTPException(404, "还没有和她的对话")
-            return read_schedule(user_id, body.character_id)
+            return await read_schedule(user_id, body.character_id)

@@ -2,6 +2,7 @@
 whichever device they come from, driven through the backend's external API
 with a clock the tests control."""
 
+import asyncio
 from dataclasses import replace
 from datetime import datetime, timedelta
 
@@ -69,6 +70,23 @@ async def test_all_of_a_users_devices_share_one_limit_and_other_users_have_their
     assert events[-1]["type"] == "done"
 
 
+async def test_two_turns_at_once_never_both_take_the_last_turn_of_the_hour(
+    make_client: ClientFactory, settings: Settings
+):
+    client = make_client(FakeLLM(REPLY, REPLY), settings=limited(settings, turns=2))
+    with_mano = await start_conversation(client)
+    with_kogane = await start_conversation(client, "kogane")
+    await send_turn(client, with_mano, "在吗")
+
+    statuses = sorted(
+        r.status_code for r in await asyncio.gather(
+            post_turn(client, with_mano), post_turn(client, with_kogane)
+        )
+    )
+
+    assert statuses == [200, 429]
+
+
 async def test_voice_calls_have_their_own_hourly_limit_and_renegotiating_is_free(
     make_client: ClientFactory, settings: Settings, speech: FakeSpeech
 ):
@@ -76,12 +94,15 @@ async def test_voice_calls_have_their_own_hourly_limit_and_renegotiating_is_free
     client = make_client(FakeLLM(REPLY), settings=limited(settings, calls=2), clock=clock)
     conversation_id = await start_conversation(client)
     async with open_browser() as first:
-        pc_id = (await first.call(client, conversation_id=conversation_id)).json()["pc_id"]
-        renegotiation = {**await first.offer(conversation_id=conversation_id), "pc_id": pc_id}
+        await first.call(client, conversation_id=conversation_id)
+        await first.connect()
+        assert first.pc_id is not None
+        renegotiation = {**await first.offer(conversation_id=conversation_id), "pc_id": first.pc_id}
         assert (await client.post("/api/offer", json=renegotiation)).status_code == 200
     clock.advance(minutes=5)
-    async with open_browser() as second:
+    async with open_browser() as second:  # hangs up the first, which connected: it counts
         assert (await second.call(client, conversation_id=conversation_id)).status_code == 200
+        await second.connect()
     clock.advance(minutes=5)
 
     async with open_browser() as third:
@@ -99,11 +120,12 @@ async def test_voice_calls_have_their_own_hourly_limit_and_renegotiating_is_free
 def test_limits_come_from_the_environment(monkeypatch: pytest.MonkeyPatch):
     for name in [
         "TURNS_PER_HOUR", "CALLS_PER_HOUR", "CALL_MINUTES", "TURNS_PER_CALL", "PHOTOS_PER_HOUR",
+        "CONCURRENT_CALLS",
     ]:
         monkeypatch.delenv(f"EIDOLON_{name}", raising=False)
     assert UsageLimits.from_env() == UsageLimits(
         turns_per_hour=60, calls_per_hour=5, call_minutes=10, turns_per_call=40,
-        photos_per_hour=5,
+        photos_per_hour=5, concurrent_calls=10,
     )
 
     monkeypatch.setenv("EIDOLON_TURNS_PER_HOUR", "30")
@@ -111,9 +133,10 @@ def test_limits_come_from_the_environment(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("EIDOLON_CALL_MINUTES", "15")
     monkeypatch.setenv("EIDOLON_TURNS_PER_CALL", "0")
     monkeypatch.setenv("EIDOLON_PHOTOS_PER_HOUR", "2")
+    monkeypatch.setenv("EIDOLON_CONCURRENT_CALLS", "0")
     assert UsageLimits.from_env() == UsageLimits(
         turns_per_hour=30, calls_per_hour=None, call_minutes=15, turns_per_call=None,
-        photos_per_hour=2,
+        photos_per_hour=2, concurrent_calls=None,
     )
 
     monkeypatch.setenv("EIDOLON_CALLS_PER_HOUR", "-1")

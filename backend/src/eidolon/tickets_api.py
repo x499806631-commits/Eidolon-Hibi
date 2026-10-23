@@ -71,10 +71,10 @@ def add_ticket_routes(app: FastAPI, backend: Backend) -> None:
                 raise HTTPException(404, f"没有这些礼物：{'、'.join(unknown)}")
             for kind, count in body.tickets.items():
                 for _ in range(max(0, min(count, 20))):
-                    gifts.put_back_ticket(user_id, kind)
+                    await gifts.put_back_ticket(user_id, kind)
             for gift_id, count in body.gifts.items():
-                gifts.put_back_gifts(user_id, [gift_id] * max(0, min(count, 20)))
-            return gifts.state(user_id).shown()
+                await gifts.put_back_gifts(user_id, [gift_id] * max(0, min(count, 20)))
+            return (await gifts.state(user_id)).shown()
 
     @app.exception_handler(NoTickets)
     @app.exception_handler(NoConversation)
@@ -86,13 +86,13 @@ def add_ticket_routes(app: FastAPI, backend: Backend) -> None:
 
     async def using(user_id: str, kind: TicketKind, use: Callable[[], Awaitable[dict]]) -> dict:
         """Take a ticket of `kind`, `use` it, and give it back should that fail."""
-        gifts.take_ticket(user_id, kind)
+        await gifts.take_ticket(user_id, kind)
         try:
             done = await use()
         except BaseException:
-            gifts.put_back_ticket(user_id, kind)
+            await gifts.put_back_ticket(user_id, kind)
             raise
-        return done | {"left": gifts.tickets(user_id, kind)}
+        return done | {"left": await gifts.tickets(user_id, kind)}
 
     def her(character_id: str) -> None:
         if character_id not in backend.characters:
@@ -105,7 +105,7 @@ def add_ticket_routes(app: FastAPI, backend: Backend) -> None:
 
         async def use() -> dict:
             try:
-                return {"gift_id": gifts.add_liked_gift(user_id, body.character_id)}
+                return {"gift_id": await gifts.add_liked_gift(user_id, body.character_id)}
             except NoSuchCharacter as e:
                 raise HTTPException(404, str(e)) from None
 
@@ -129,7 +129,7 @@ def add_ticket_routes(app: FastAPI, backend: Backend) -> None:
 
         async def use() -> dict:
             try:
-                return {"entry": backend.diary.unlock(user_id, body.entry_id)}
+                return {"entry": await backend.diary.unlock(user_id, body.entry_id)}
             except NotFound:
                 raise HTTPException(404, "没有这一页") from None
 

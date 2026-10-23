@@ -13,8 +13,7 @@ from eidolon.reply_format import (
     SegmentDelta,
     SpeechDelta,
 )
-from eidolon.store import Store
-from tests.conftest import ClientFactory
+from tests.conftest import ClientFactory, store_in
 from tests.fakes import FakeBackgroundLLM, FakeLLM
 from tests.test_call_turns import CallUnderTest, spoken
 from tests.test_retrieval_services import MANO, judge_answering, message
@@ -147,11 +146,8 @@ async def test_a_text_turn_shows_no_cues_but_keeps_them_for_the_next_turn(
     assert res.json()[1]["segments"] == [{"ja": "えへへ、ありがとう", "zh": "嘿嘿，谢谢"}]
     # The model reads its reply as it wrote it.
     assert [m.content for m in llm.prompts[1] if m.role == "assistant"] == [REPLY[0]]
-    store = Store(settings.database_path)
-    try:
-        assert store.list_messages(conversation_id)[1].ja == "[shyly] えへへ、(happy)ありがとう"
-    finally:
-        store.close()
+    async with store_in(settings.database_path) as store:
+        assert (await store.list_messages(conversation_id))[1].ja == "[shyly] えへへ、(happy)ありがとう"
 
 
 async def test_the_conversation_list_shows_the_last_reply_without_cues(
@@ -171,12 +167,9 @@ async def test_a_call_voices_well_formed_cues_and_shows_and_remembers_none(
     make_client: ClientFactory, settings
 ):
     client = make_client(FakeLLM())
-    mano_call = CallUnderTest(settings, client, await start_conversation(client, "mano"))
+    mano_call = await CallUnderTest.of(settings, client, await start_conversation(client, "mano"))
     memory = FakeBackgroundLLM()
-    try:
-        spoken_text, messages = await mano_call.run(FakeLLM(REPLY), [spoken("谢谢你")], memory=memory)
-    finally:
-        mano_call.close()
+    spoken_text, messages = await mano_call.run(FakeLLM(REPLY), [spoken("谢谢你")], memory=memory)
 
     assert "".join(spoken_text) == "[shyly]えへへ、ありがとう"
     deltas = [m["text"] for m in messages if m["type"] == "delta"]

@@ -42,7 +42,7 @@ from tests.test_affinity import keep
 from tests.test_conversation_events import hang_up
 from tests.test_delete_account import DELETE, rows_mentioning
 from tests.test_text_turn import send_turn, start_conversation
-from tests.test_turns import Turns
+from tests.test_turns import turns_in
 
 IMAGE = ImageSettings("nai-key", "https://image.novelai.test")
 
@@ -316,8 +316,7 @@ async def test_whether_she_is_asked_for_one_is_judged_with_whatever_else_is(
 async def test_her_tag_is_never_voiced_nor_one_written_in_the_middle_of_her_words(
     settings: Settings,
 ):
-    turns = Turns(settings)
-    try:
+    async with turns_in(settings) as turns:
         events = await turns.take(
             FakeLLM([f"<photo>{SELFIE}</photo><ja>はい<photo>shot: other</photo>、どうぞ</ja>",
                      "<zh>给，<photo>x</photo>你看</zh>"]),
@@ -326,9 +325,7 @@ async def test_her_tag_is_never_voiced_nor_one_written_in_the_middle_of_her_word
             clients=asking(),
             image_transport=FakeImageService().transport(),
         )
-        record = turns.record()
-    finally:
-        turns.close()
+        record = await turns.record()
 
     def said(kind: str, lang: str | None = None) -> str:
         return "".join(e["text"] for e in events if e["type"] == kind and e.get("lang") == lang)

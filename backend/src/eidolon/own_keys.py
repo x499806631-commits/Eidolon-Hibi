@@ -60,6 +60,8 @@ from eidolon.config import (
     ChatModelSettings,
     FishAudioModel,
     ImageSettings,
+    NOT_AN_ADDRESS,
+    LLMProtocol,
     LLMSettings,
     Service,
     VoiceEngine,
@@ -75,8 +77,9 @@ from eidolon.image_generation import (
     try_image_service,
 )
 from eidolon.llm import ChatLLM, ChatMessage, LLMError, Streamed, Tool, TurnLLMs
+from eidolon.llm import listing
 from eidolon.llm.providers import check_chat_models, open_chat_models, open_llm
-from eidolon.proxy import OwnAddressed, ProxyRoutes
+from eidolon.proxy import POOL_LIMITS, OwnAddressed, ProxyRoutes
 from eidolon.usage import UsageKind
 
 log = logging.getLogger(__name__)
@@ -158,6 +161,11 @@ class LLMService(Protocol):
         turns and calls, each at its own effort."""
         ...
 
+    async def list_models(self, protocol: LLMProtocol, base_url: str, api_key: str) -> list[str]:
+        """The models the service at `base_url` offers `api_key`, as it lists them; raises
+        LLMError saying why not."""
+        ...
+
     async def aclose(self) -> None: ...
 
 
@@ -193,6 +201,15 @@ class ProviderLLMService:
             # Not where the proxy resolves it: a name may not resolve here as it does there.
             await _check_public(settings.text.base_url)
         await check_chat_models(open_chat_models(settings, self._client), settings)
+
+    async def list_models(self, protocol: LLMProtocol, base_url: str, api_key: str) -> list[str]:
+        """As the service lists them, asked as a turn would be: over the same client,
+        checked to be on the public internet the same way (`listing.list_models`)."""
+        if self._public_only and not _proxied(
+            self._routes, "own_llm", base_url, self._known_provider
+        ):
+            await _check_public(base_url)
+        return await listing.list_models(self._client, protocol, base_url, api_key)
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -290,7 +307,7 @@ def _own_client(
     host `known_provider` knows; direct to every other one, which with `public_only` must
     be on the public internet, as `resolver` finds it. With `https_only`, every request
     goes over HTTPS."""
-    direct = httpx.AsyncHTTPTransport()
+    direct = httpx.AsyncHTTPTransport(limits=POOL_LIMITS)
     if public_only:
         pool = direct._pool  # httpx takes no network backend of its own
         assert isinstance(pool, httpcore.AsyncConnectionPool)
@@ -549,6 +566,12 @@ class OwnKeys:
         with _rejecting(own.text.api_key):
             await self._llm_service.check(own)
 
+    async def list_llm_models(self, protocol: LLMProtocol, base_url: str, api_key: str) -> list[str]:
+        """The models the user's key is offered at `base_url`, as the service lists them,
+        keeping nothing. Raises OwnKeyRejected saying why not, the key masked."""
+        with _rejecting(api_key):
+            return await self._llm_service.list_models(protocol, base_url, api_key)
+
     async def check_memory_llm(self, own: LLMSettings) -> None:
         """Try the user's model for memories at its effort, as their LLM is tried, keeping
         nothing. Raises OwnKeyRejected saying why it does not work, and that it was this
@@ -668,10 +691,14 @@ async def _check_public(base_url: str) -> None:
 async def _require_public(base_url: str, resolver: "Resolver | None" = None) -> None:
     """Raise NotPublic unless `base_url` is HTTPS to a host on the public internet, as
     `resolver` finds it."""
-    parts = urlsplit(base_url)
-    if parts.scheme != "https" or not parts.hostname:
+    try:  # a link pasted with its brackets (`[https://…](…)`) is not one
+        parts = urlsplit(base_url)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        raise NotPublic(NOT_AN_ADDRESS) from None
+    if parts.scheme != "https" or not host:
         raise NotPublic(HTTPS_ONLY)
-    await public_address(parts.hostname, parts.port or 443, resolver or resolve)
+    await public_address(host, port or 443, resolver or resolve)
 
 
 class NotPublic(OSError):

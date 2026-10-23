@@ -149,7 +149,8 @@ class ImageGenerator:
             raise ImageFailed("timeout", f"生图服务没有及时回应：{e!r}") from e
         except httpx.HTTPError as e:
             raise ImageFailed("service_error", f"无法连接生图服务：{e!r}") from e
-        return GeneratedImage(kept_as_webp(picture, size_of(prompt)))
+        # On a thread: decoding and encoding take a while, which the event loop cannot spare.
+        return GeneratedImage(await asyncio.to_thread(kept_as_webp, picture, size_of(prompt)))
 
     async def _novelai(self, prompt: ImagePrompt) -> bytes:
         body = generation_request(

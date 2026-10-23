@@ -4,7 +4,7 @@ import { contrast } from "@/lib/imageColor";
 
 import { idolColors } from "./color";
 
-/** 28 位偶像的官方印象色（characters/characters.toml）。 */
+/** 28 位偶像和事务员はづき的官方印象色（characters/characters.toml）。 */
 const OFFICIALS = {
   真乃: "#ffbad6",
   灯織: "#144384",
@@ -34,6 +34,7 @@ const OFFICIALS = {
   ルカ: "#24130d",
   羽那: "#e0b5d3",
   はるき: "#ead7a4",
+  はづき: "#c3d825",
 };
 
 /** 官方色，加上任意色相、任意深浅的颜色：以后的新角色也要守住同样的契约。 */

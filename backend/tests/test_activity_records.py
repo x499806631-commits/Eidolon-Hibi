@@ -4,8 +4,10 @@ how it went, how long it took and what it is billed for, all of it seen only as 
 admin's dashboard sums it up, with nothing anyone said. Driven through the backend's
 external API with a clock the tests control."""
 
+import asyncio
 import sqlite3
 from collections.abc import Callable
+from contextlib import closing
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,7 +16,8 @@ from typing import Any
 import httpx
 import pytest
 
-from eidolon.activity import OWN, ActivityLog, llm_origin, metered_llm
+from eidolon.activity import OWN, llm_origin, metered_llm
+from eidolon.billing import Billing
 from eidolon.config import LLMSettings, Settings, UsageLimits
 from eidolon.engine import MAX_INPUT_LENGTH
 from eidolon.llm import ChatLLM, ChatMessage, LLMError, Reasoning, ToolCall
@@ -24,6 +27,8 @@ from eidolon.llm.responses import ResponsesLLM
 from eidolon.rerank import SiliconFlowReranker
 from tests.conftest import (
     ClientFactory,
+    activity_in,
+    users_in,
     agree_to_terms,
     github_identity,
     sign_in_with,
@@ -42,6 +47,7 @@ from tests.fakes import (
 )
 from tests.test_embedding import Answer, scripted
 from tests.test_retrieval_services import ranked
+from tests.test_service_status import backend_of
 from tests.test_delete_account import rows_mentioning, user_id
 from tests.test_llm_protocols import recorded, serving
 from tests.test_openai_compat import RECORDED_STREAM
@@ -107,7 +113,7 @@ async def test_the_dashboard_counts_turns_by_how_they_turned_out_and_says_nothin
 
     succeeded = await send_turn(producer, conversation_id, SAID)
     failed = await send_turn(producer, conversation_id, "在吗")
-    await leave_turn(producer, conversation_id, "你好", after="user")
+    await leave_turn(producer, conversation_id, "你好", after="delta")  # once asked
     refused = await post_turn(producer, conversation_id)
     await send_turn(friend, await start_conversation(friend, "kogane"), "早上好")
     board = await dashboard(admin)
@@ -271,6 +277,11 @@ async def test_each_range_takes_the_turns_since_that_long_ago(
     assert day["turns"]["total"] == 1
     assert day["bucket"] == "hour" and len(day["trend"]) == 24
     clock.advance(minutes=1)
+    # The range begins where the slot of 15 minutes 24 hours ago does, the turn's.
+    assert (await dashboard(admin, "24h"))["turns"]["total"] == 1
+    clock.advance(minutes=14, seconds=59)
+    assert (await dashboard(admin, "24h"))["turns"]["total"] == 1
+    clock.advance(seconds=1)
     assert (await dashboard(admin, "24h"))["turns"]["total"] == 0
     week = await dashboard(admin, "7d")
     assert week["turns"]["total"] == 1
@@ -289,15 +300,21 @@ async def test_records_are_forgotten_after_90_days(
     client = make_client(FakeLLM(REPLY), clock=clock)
     await send_turn(client, await start_conversation(client), "在吗")
 
-    clock.advance(days=90)
+    # Its rollups go with the slot of 15 minutes it began in, which a range may begin with.
+    clock.advance(days=90, minutes=15)
     later = make_client(FakeLLM(REPLY), clock=clock)  # signed in again
     await send_turn(later, await start_conversation(later), "在吗")
     admin = await admin_client(make_client, github, clock)
+    await backend_of(later).activity.forget_old()  # as the backend tidies up
 
     assert (await dashboard(admin, "90d"))["turns"]["total"] == 1
     with sqlite3.connect(settings.database_path) as db:
         assert db.execute("SELECT COUNT(*) FROM activity_records").fetchone() == (1,)
         assert db.execute("SELECT COUNT(*) FROM service_calls").fetchone() == (1,)
+        # Its day's are kept till the day is over: a range begins with its slots before that.
+        for slots in ["record_rollups WHERE length = 900", "taken_rollups", "call_rollups"]:
+            [(first,)] = db.execute(f"SELECT MIN(start) FROM {slots}").fetchall()
+            assert first > START.timestamp(), slots
 
 
 async def test_deleting_a_user_keeps_the_numbers_but_not_who_it_was(
@@ -412,16 +429,15 @@ async def test_an_llm_call_records_its_first_words_time_but_not_its_thinking_and
     tmp_path: Path,
 ):
     """A tool call counts as the first word, as text does (which the dashboard's test times)."""
-    activity = ActivityLog(tmp_path / "eidolon.db", FakeClock())
-    model = LLMSettings("http://llm.invalid/v1", "k", "m", reasoning_effort="high")
-    llm = metered_llm(
-        FakeLLM([Reasoning({"text": "想想"}), ToolCall("c1", "recall", {}), "っ"], delay=SLOW),
-        activity, llm_origin("chat_llm", model),
-    )
+    async with activity_in(tmp_path / "eidolon.db") as activity:
+        model = LLMSettings("http://llm.invalid/v1", "k", "m", reasoning_effort="high")
+        llm = metered_llm(
+            FakeLLM([Reasoning({"text": "想想"}), ToolCall("c1", "recall", {}), "っ"], delay=SLOW),
+            activity, llm_origin("chat_llm", model),
+        )
 
-    await drain(llm)
-    [call] = activity.since(START - timedelta(days=1))[1]
-    activity.close()
+        await drain(llm)
+        [call] = (await activity.since(START - timedelta(days=1)))[1]
 
     assert (call.effort, call.error) == ("high", None)
     assert call.first_token_ms is not None and call.latency_ms is not None
@@ -431,16 +447,15 @@ async def test_an_llm_call_records_its_first_words_time_but_not_its_thinking_and
 
 
 async def test_an_llm_call_failing_before_any_word_has_no_first_words_time(tmp_path: Path):
-    activity = ActivityLog(tmp_path / "eidolon.db", FakeClock())
-    llm = metered_llm(
-        FakeLLM(LLMError("模型返回 503: overloaded")), activity,
-        llm_origin("memory_llm", LLMSettings("http://llm.invalid/v1", "k", "m")),
-    )
+    async with activity_in(tmp_path / "eidolon.db") as activity:
+        llm = metered_llm(
+            FakeLLM(LLMError("模型返回 503: overloaded")), activity,
+            llm_origin("memory_llm", LLMSettings("http://llm.invalid/v1", "k", "m")),
+        )
 
-    with pytest.raises(LLMError):
-        await drain(llm)
-    [call] = activity.since(START - timedelta(days=1))[1]
-    activity.close()
+        with pytest.raises(LLMError):
+            await drain(llm)
+        [call] = (await activity.since(START - timedelta(days=1)))[1]
 
     assert (call.error, call.first_token_ms, call.effort) == ("server_error", None, None)
 
@@ -529,13 +544,12 @@ async def test_a_database_from_before_reach_outs_were_answered_has_none_answered
 
 
 async def test_an_llm_call_records_how_much_of_its_input_hit_the_cache(tmp_path: Path):
-    activity = ActivityLog(tmp_path / "eidolon.db", FakeClock())
-    origin = llm_origin("chat_llm", LLMSettings("http://llm.invalid/v1", "k", "m"))
+    async with activity_in(tmp_path / "eidolon.db") as activity:
+        origin = llm_origin("chat_llm", LLMSettings("http://llm.invalid/v1", "k", "m"))
 
-    await drain(metered_llm(FakeLLM(REPLY, tokens=(1000, 50, 800)), activity, origin))
-    await drain(metered_llm(FakeLLM(REPLY, tokens=(1000, 50)), activity, origin))
-    calls = activity.since(START - timedelta(days=1))[1]
-    activity.close()
+        await drain(metered_llm(FakeLLM(REPLY, tokens=(1000, 50, 800)), activity, origin))
+        await drain(metered_llm(FakeLLM(REPLY, tokens=(1000, 50)), activity, origin))
+        calls = (await activity.since(START - timedelta(days=1)))[1]
 
     assert [(c.usage_input, c.usage_output, c.usage_cached) for c in calls] == [
         (1000, 50, 800), (1000, 50, None)
@@ -616,3 +630,25 @@ async def test_a_database_from_before_cache_hits_were_recorded_takes_them_now(
     assert kept == [(1000, None)]
     assert chat is not None
     assert (chat["usage"][0]["cached"], chat["cache_hit_rate"]) == (None, 0)
+
+
+async def test_a_service_call_recorded_as_its_turns_record_is_written_goes_under_it(
+    tmp_path: Path,
+):
+    """As a photo's that comes out once the turn is over may, its record being written."""
+    [user] = await users_in(tmp_path / "eidolon.db", "producer")
+    async with activity_in(tmp_path / "eidolon.db") as activity:
+        origin = llm_origin("chat_llm", LLMSettings("http://llm.invalid/v1", "k", "m"))
+        turn = activity.begin("turn", user, "mano", own_llm=False, exempt=False)
+        await activity.record(activity.ended_call(origin, 0.0, None, Billing()), turn)
+
+        finishing = asyncio.create_task(turn.finish("success"))
+        await asyncio.sleep(0)  # handed in to be written
+        await activity.record(activity.ended_call(origin, 0.0, None, Billing()), turn)
+        await finishing
+        await activity.record(activity.ended_call(origin, 0.0, None, Billing()), turn)
+
+    with closing(sqlite3.connect(tmp_path / "eidolon.db")) as db:
+        [(record_id,)] = db.execute("SELECT id FROM activity_records").fetchall()
+        under = db.execute("SELECT record_id FROM service_calls").fetchall()
+    assert under == [(record_id,)] * 3

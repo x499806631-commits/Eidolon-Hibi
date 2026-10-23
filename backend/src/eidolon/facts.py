@@ -7,10 +7,10 @@ without any command and costs only the changed entries.
 """
 
 from collections.abc import Callable, Iterable, Sequence
-from pathlib import Path
 
 from eidolon.characters import Character, Fact
 from eidolon.corpus import REEMBED_BATCH
+from eidolon.data_access import Database
 from eidolon.embedded_texts import CHARACTER_SCOPES, EmbeddedTexts, character_scope
 from eidolon.embedding import Document, Embedder
 from eidolon.references import Reference, ReferenceKind
@@ -23,8 +23,8 @@ class CharacterFacts:
     label = "角色资料"
     unit = "条"
 
-    def __init__(self, path: Path, embedder: Embedder, characters: Iterable[Character]) -> None:
-        self._texts = EmbeddedTexts(path, embedder)
+    def __init__(self, db: Database, embedder: Embedder, characters: Iterable[Character]) -> None:
+        self._texts = EmbeddedTexts(db, embedder)
         self._characters = list(characters)
 
     async def search(
@@ -54,13 +54,10 @@ class CharacterFacts:
                 progress(embedded)
         return embedded
 
-    def forget_other_models(self) -> int:
+    async def forget_other_models(self) -> int:
         """Drop every character's vectors not from this source's embedder; returns how many
         there were."""
-        return self._texts.forget_other_models(CHARACTER_SCOPES)
-
-    def close(self) -> None:
-        self._texts.close()
+        return await self._texts.forget_other_models(CHARACTER_SCOPES)
 
 
 def _facts(character: Character) -> list[Fact]:

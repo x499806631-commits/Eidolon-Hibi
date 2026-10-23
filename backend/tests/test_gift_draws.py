@@ -1,13 +1,14 @@
 """Draw chances (GLOSSARY.md「抽奖」): one a day at midnight Beijing time, wherever the user
 is, kept up to seven, given as the gifts' state is read rather than on a schedule; the state
 tells when the next is given. The days affinity and gifts are off give none, and the day
-they open again gives one. Off, the state is read all the same, saying so. Deleting the user deletes their
+they open again gives one. The state tells how far today's daily tasks are too. Off, the state is read all the same, saying so. Deleting the user deletes their
 chances; when affinity and gifts last opened is no one's and stays. Driven through the
 backend's external API, with the clock moved."""
 
 import sqlite3
 from dataclasses import replace
 from datetime import datetime
+from unittest.mock import ANY
 
 import httpx
 import pytest
@@ -16,6 +17,7 @@ from eidolon.config import Settings
 from tests.conftest import ClientFactory
 from tests.fakes import FAKE_JUDGE, FakeClock, FakeIdentityProvider, FakeLLM
 from tests.test_admin_users import admin_beside
+from tests.test_daily_tasks import tasks
 
 AFFINITY = "/api/admin/config/affinity"
 
@@ -60,6 +62,9 @@ async def test_a_new_user_has_one_draw_the_day_they_come_and_nothing_else_yet(
             {"id": "mano", "tier": "trust", "cooling": False, "cooldown_until": None},
             {"id": "kogane", "tier": "trust", "cooling": False, "cooldown_until": None},
         ],
+        "daily_tasks": {"tasks": tasks(), "renews_at": "2026-09-25T16:00:00+00:00"},
+        "achievements": ANY,  # as test_achievements has them
+        "rewarded_at": None,
     }
 
 
@@ -168,6 +173,9 @@ async def test_off_the_state_is_read_all_the_same_saying_so(
         "next_draw_at": None,
         "resettable": [],
         "characters": [],
+        "daily_tasks": None,
+        "achievements": None,
+        "rewarded_at": None,
     }
 
 

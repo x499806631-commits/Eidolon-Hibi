@@ -14,6 +14,9 @@
 //   Once the user's words start the next turn, the card stays where it is until her next reply's
 //   first segment: the user speaking alone may come to nothing, and stops nothing she says.
 // - A reply dropped for a follow-on leaves no trace on the card.
+// - What the user types in the call shows at the card's foot until the card moves on to a reply
+//   started after it, the one to it; the user speaking takes it off, as does typing again (only
+//   the last thing typed shows).
 
 import type { Segment, SegmentPlaying } from "@/lib/api";
 
@@ -64,6 +67,9 @@ export type LineCard = {
   reply: Reply | null;
   /** Since when her voice has not been playing; null while it plays. */
   quietSince: number | null;
+  /** What the user typed last, and the number of her latest reply as they sent it (-1 for none);
+   * null once a later reply shows, or the user speaks. */
+  typed: { text: string; afterReply: number } | null;
 };
 
 export type LineCardEvent =
@@ -77,15 +83,15 @@ export type LineCardEvent =
   | ({ type: "segment-playing" } & SegmentAt)
   /** Her voice started or stopped playing. */
   | { type: "voice"; playing: boolean }
-  /** The user started speaking, or sent what they typed: her latest reply is interrupted, or
-   * dropped for a follow-on, which comes to the same here. Her `done` may come before the
-   * user's words are taken up, so it is told apart by this, not by the next reply. */
-  | { type: "interrupted" }
+  /** The user started speaking, or sent what they typed (`typed`): her latest reply is
+   * interrupted, or dropped for a follow-on, which comes to the same here. Her `done` may come
+   * before the user's words are taken up, so it is told apart by this, not by the next reply. */
+  | { type: "interrupted"; typed?: string }
   /** The call is over: the card keeps its last moment, and moves on no more. */
   | { type: "call-over" };
 
 /** As a call starts: nothing shown, and her voice has not played. */
-export const BLANK_CARD: LineCard = { shown: [], reply: null, quietSince: -Infinity };
+export const BLANK_CARD: LineCard = { shown: [], reply: null, quietSince: -Infinity, typed: null };
 
 /** The card moved on by this event, at `now`. */
 export function movedCard(card: LineCard, event: LineCardEvent, now: number): LineCard {
@@ -112,8 +118,10 @@ export function movedCard(card: LineCard, event: LineCardEvent, now: number): Li
       return shownUpTo(card, event.segment, now);
     case "voice":
       return { ...card, quietSince: event.playing ? null : (card.quietSince ?? now) };
-    case "interrupted":
-      return card.reply ? { ...card, reply: { ...card.reply, interrupted: true } } : card;
+    case "interrupted": {
+      const typed = event.typed === undefined ? null : { text: event.typed, afterReply: card.reply?.number ?? -1 };
+      return { ...card, typed, reply: card.reply && { ...card.reply, interrupted: true } };
+    }
     case "call-over":
       return { ...card, reply: null, quietSince: card.quietSince ?? now };
   }
@@ -173,6 +181,11 @@ export function lineOf(card: LineCard): Segment | null {
   return card.shown.at(-1)?.text ?? null;
 }
 
+/** What the user typed, shown at the card's foot until her reply to it is; null for nothing. */
+export function typedOf(card: LineCard): string | null {
+  return card.typed?.text ?? null;
+}
+
 /** The line the card showed before that; null until it has shown two. */
 export function previousLineOf(card: LineCard): Segment | null {
   return card.shown.at(-2)?.text ?? null;
@@ -201,5 +214,7 @@ function shownUpTo(card: LineCard, segment: number, now: number): LineCard {
   const current = card.shown.at(-1);
   if (current?.reply === reply.number && current.segment >= segment) return card;
   const text = reply.segments[segment] ?? { ja: "", zh: "" };
-  return { ...card, shown: [...card.shown, { reply: reply.number, segment, text, at: now }] };
+  // Her reply to what was typed: it is said.
+  const typed = card.typed && reply.number > card.typed.afterReply ? null : card.typed;
+  return { ...card, typed, shown: [...card.shown, { reply: reply.number, segment, text, at: now }] };
 }

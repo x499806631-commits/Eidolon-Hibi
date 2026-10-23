@@ -60,6 +60,8 @@ const buttonVariants = cva(
         // 底栏里的挂断胶囊和 56px 圆键，图标 20px。
         "call-dock": "h-call-dock-control gap-2 px-6 [&_svg:not([class*='size-'])]:size-5",
         "icon-call-dock": "size-call-dock-control [&_svg:not([class*='size-'])]:size-5",
+        // eidolon: 通话层输入栏里的 44px 圆键（收起输入栏、发送），图标 20px。
+        "icon-call": "size-11 [&_svg:not([class*='size-'])]:size-5",
       },
     },
     defaultVariants: {

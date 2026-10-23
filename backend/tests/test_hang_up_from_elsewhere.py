@@ -1,11 +1,12 @@
-"""She hangs up from elsewhere (GLOSSARY.md「通话」「冷却」): once a turn in another
-conversation, typed or in another call, has her fall into a cooldown with the user, she
-hangs up the user's calls with her there and then, without waiting for the user to speak.
+"""She hangs up from elsewhere (GLOSSARY.md「通话」「冷却」): once a typed turn in another
+conversation has her fall into a cooldown with the user, she hangs up the user's call with
+her there and then, without waiting for the user to speak.
 Idle, the call ends straight away; a reply she has started speaking goes no further, to be
 recorded with what was complete of it, and one she has not is dropped; nothing said after
 that is taken up. The browser is told `ended` as for a cooldown, with when it ends, the
 「挂断了电话」event is written into the call's conversation, and the call is a success,
-ended by her (「角色挂断」). Calls with other characters go on.
+ended by her (「角色挂断」). A user has one call at a time, so no other call of
+theirs, with her or anyone, is there to go on or end with it.
 
 Driven through the backend's external API, with browsers calling in over real WebRTC
 connections and the judge model faked turn by turn; what needs its timing held exactly, at
@@ -27,7 +28,6 @@ from tests.fakes import (
     FakeIdentityProvider,
     FakeLLM,
     FakeServiceClients,
-    FakeSpeech,
     level,
 )
 from tests.test_admin_users import ADMIN, admin_beside
@@ -45,7 +45,7 @@ from tests.test_call_turns import (  # noqa: F401
     without_emotions,
 )
 from tests.test_conversation_events import record, shape
-from tests.test_she_hangs_up import record_of, say
+from tests.test_she_hangs_up import record_of
 from tests.test_text_turn import send_turn, start_conversation
 
 REPLY = ["<ja>はい</ja><zh>好的</zh>"]
@@ -61,36 +61,26 @@ def settings(settings: Settings) -> Settings:
     )
 
 
-async def test_a_cooldown_begun_elsewhere_has_her_hang_up_an_idle_call_with_her_alone(
+async def test_a_cooldown_begun_elsewhere_has_her_hang_up_an_idle_call(
     make_client: ClientFactory,
     settings: Settings,
     github: FakeIdentityProvider,
-    speech: FakeSpeech,
 ):
     clock = FakeClock()
     clients = FakeServiceClients()
-    clients.judge.judgings = [level(0), level(2)]
-    client = make_client(FakeLLM(REPLY, REPLY), clients=clients, clock=clock)
+    clients.judge.judgings = [level(0)]
+    client = make_client(FakeLLM(REPLY), clients=clients, clock=clock)
     in_call = await start_conversation(client)
-    with_kogane = await start_conversation(client, "kogane")
     elsewhere = await start_conversation(client)
     keep(settings.database_path, "producer", 5, clock.now)
 
-    async with (
-        admin_beside(client, github) as admin,
-        open_browser() as mano,
-        open_browser() as kogane,
-    ):
+    async with admin_beside(client, github) as admin, open_browser() as mano:
         await mano.call(client, conversation_id=in_call)
         await mano.connect()
-        await kogane.call(client, conversation_id=with_kogane)
-        await kogane.connect()
         await send_turn(client, elsewhere, "随便你")
         ended = await mano.next_server_message("ended")
         await mano.hung_up()
         board = await call_recorded(admin)
-        still = await say(speech, kogane, "还在吗")
-        await kogane.hang_up()
     recorded = await record(client, in_call)
 
     assert ended["reason"] == "cooldown"
@@ -101,38 +91,6 @@ async def test_a_cooldown_begun_elsewhere_has_her_hang_up_an_idle_call_with_her_
     calls = board["calls"]
     assert {r: n for r, n in calls["by_result"].items() if n} == {"success": 1}
     assert {r: n for r, n in calls["end_reasons"].items() if n} == {"character_hung_up": 1}
-    assert still[-1]["type"] == "done"
-
-
-async def test_a_turn_in_one_call_that_cools_her_hangs_up_the_other_and_that_one_after_it(
-    make_client: ClientFactory,
-    settings: Settings,
-    speech: FakeSpeech,
-):
-    clock = FakeClock()
-    clients = FakeServiceClients()
-    clients.judge.judgings = [level(0)]
-    client = make_client(FakeLLM(REPLY), clients=clients, clock=clock)
-    first_conversation = await start_conversation(client)
-    other_conversation = await start_conversation(client)
-    keep(settings.database_path, "producer", 5, clock.now)
-
-    async with open_browser() as first, open_browser() as other:
-        await first.call(client, conversation_id=first_conversation)
-        await first.connect()
-        await other.call(client, conversation_id=other_conversation)
-        await other.connect()
-        await speech.stts[0].hear("随便你")
-        turn = await first.turn()
-        other_ended = await other.next_server_message("ended")
-        first_ended = await first.next_server_message("ended")
-
-    assert turn[-1]["type"] == "done"
-    assert first_ended["reason"] == other_ended["reason"] == "cooldown"
-    assert shape(await record(client, first_conversation)) == [
-        "user:随便你", "character:好的", "hung_up"
-    ]
-    assert shape(await record(client, other_conversation)) == ["hung_up"]
 
 
 async def test_a_reply_she_has_started_speaking_goes_no_further_and_nothing_after_is_taken_up(

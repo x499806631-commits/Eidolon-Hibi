@@ -65,6 +65,11 @@ export {
   CalendarHeart as AnniversaryIcon,
   HeartHandshake as PromiseIcon,
 } from "lucide-react";
+// 礼物页每日任务一节里没做完的一项（做完的用 SuccessIcon）；成就面板里没集齐的「集齐」一行也用它。
+export { Circle as TaskOpenIcon } from "lucide-react";
+
+// 对话页更多菜单的「成就」，和解锁她的阶段时页首好感度标识左边跳出的奖杯（GLOSSARY.md「成就」）。
+export { Trophy as AchievementsIcon } from "lucide-react";
 
 // 对话列表页首的公告铃铛（GLOSSARY.md「公告」）；后台导航的公告用 Megaphone。
 export { Bell as AnnouncementsBellIcon } from "lucide-react";
@@ -89,6 +94,9 @@ export { ArrowDown as SortedIcon, ArrowUpDown as SortableIcon } from "lucide-rea
 
 // 通话层右上角的「只看文字」胶囊。
 export { Captions as TextOnlyIcon } from "lucide-react";
+
+// 通话层底栏的打字键：点了底栏换成输入栏。
+export { Keyboard as TypingIcon } from "lucide-react";
 
 // 导航栏（电脑）和 dock（手机）的三项。
 export { Gift as GiftIcon, MessageCircle as ConversationsIcon, Settings as SettingsIcon } from "lucide-react";

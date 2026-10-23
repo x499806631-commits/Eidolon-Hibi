@@ -536,7 +536,7 @@ async def test_one_that_fails_is_put_off_by_a_time_from_her_range_and_counts_for
 
     assert asked == 2
     assert len(reach_outs(await record(client, conversation))) == 1
-    assert records(database)[1:] == [
+    assert [r for r in records(database) if r[0] == "reach_out"] == [
         ("reach_out", "mano", "failed", 0), ("reach_out", "mano", "success", 0),
     ]
 

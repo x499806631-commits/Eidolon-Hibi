@@ -30,12 +30,13 @@ from eidolon.config import (
     split_proxy_password,
     with_proxy_password,
 )
+from eidolon.data_access import Database
 from eidolon.llm import ChatMessage, LLMError
 from eidolon.image_generation import ImageFailed
 from eidolon.own_keys import OwnImageService, ProviderLLMService
 from eidolon.photo_prompt import check_prompt
 from eidolon.price_catalog import Catalog
-from eidolon.proxy import ProxyRoutes, Unreachable, masked, reach
+from eidolon.proxy import MAX_CONNECTIONS, ProxyRoutes, Unreachable, masked, reach
 from tests.conftest import ClientFactory
 from tests.fakes import (
     FakeCatalog,
@@ -295,8 +296,9 @@ async def stalling() -> AsyncIterator[StallingProxy]:
     await fake.aclose()
 
 
-POOL_LIMIT = 100
-"""How many connections an httpx client keeps at most."""
+POOL_LIMIT = MAX_CONNECTIONS
+"""How many connections a service's way to its provider keeps at most: more than httpx's
+own 100, which the tunnels below would wait on, given up on, were it that."""
 
 GIVEN_UP = httpx.Timeout(5, connect=0.2, pool=1)
 
@@ -401,19 +403,26 @@ KNOWN = "https://llm.known.example/v1"
 
 
 @pytest.fixture
-def catalog(settings: Settings) -> Catalog:
-    """The price catalogs as fetched: a provider at `KNOWN`, and those that are not on the
-    internet by name: one run on this machine, as models.dev lists LM Studio, and others
-    at an address or a name for this machine."""
+async def catalog(settings: Settings) -> AsyncIterator[Catalog]:
+    """The price catalogs as fetched: a provider at `KNOWN`, one whose model says it is
+    served at an address of its own, and those that are not on the internet by name: one
+    run on this machine, as models.dev lists LM Studio, and others at an address or a name
+    for this machine."""
     fake = FakeCatalog({
         "known": {"id": "known", "api": KNOWN, "models": {}},
         "lmstudio": {"id": "lmstudio", "api": "http://lmstudio.example/v1", "models": {}},
         "private": {"id": "private", "api": "https://10.0.0.8/v1", "models": {}},
         "loopback": {"id": "loopback", "api": "https://llm.localhost/v1", "models": {}},
+        "relayed": {"id": "relayed", "models": {
+            "m": {"id": "m", "provider": {"api": "https://llm.relayed.example/anthropic/v1"}},
+        }},
     })
-    catalog = Catalog(settings.database_path, FakeClock(), fake.transport())
-    catalog.refresh()
-    return catalog
+    db = Database(settings.database_path)
+    catalog = Catalog(db, FakeClock(), fake.transport())
+    await catalog.refresh()
+    yield catalog
+    await catalog.aclose()
+    await db.close()
 
 
 async def own_llm_fails(service: ProviderLLMService, base_url: str) -> str:
@@ -440,7 +449,6 @@ async def test_a_users_own_llm_goes_through_the_proxy_only_to_a_known_providers_
     finally:
         await service.aclose()
         await routes.aclose()
-        catalog.close()
 
     assert proxy.went == ["llm.known.example:443"]
     for why in [over_http, not_ticked]:
@@ -463,7 +471,6 @@ async def test_a_known_providers_llm_is_tried_through_the_proxy_not_looked_up_he
     finally:
         await service.aclose()
         await routes.aclose()
-        catalog.close()
 
     assert "公网地址" not in str(through_proxy.value) and "找不到" not in str(through_proxy.value)
     assert proxy.went and set(proxy.went) == {"llm.known.example:443"}
@@ -519,16 +526,15 @@ def test_known_providers_are_the_catalogs_hosts_and_those_written_down_by_name_o
     known = [
         host for host in (
             "llm.known.example", "LLM.Known.Example", "generativelanguage.googleapis.com",
-            "openrouter.ai", "lmstudio.example", "10.0.0.8", "llm.localhost",
-            "llm.unknown.example",
+            "openrouter.ai", "llm.relayed.example", "lmstudio.example", "10.0.0.8",
+            "llm.localhost", "llm.unknown.example",
         )
         if catalog.known_provider(host)
     ]
-    catalog.close()
 
     assert known == [
         "llm.known.example", "LLM.Known.Example", "generativelanguage.googleapis.com",
-        "openrouter.ai",
+        "openrouter.ai", "llm.relayed.example",
     ]
 
 

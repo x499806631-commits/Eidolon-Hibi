@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -15,6 +16,7 @@ import { AmbienceKey } from "@/components/conversations/AmbienceKey";
 import { MarkedAvatar } from "@/components/app/MarkedAvatar";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { copy } from "@/i18n";
@@ -36,6 +38,7 @@ import {
 import type { StandDirection } from "@/lib/standAnimations";
 import { cn } from "@/lib/utils";
 import {
+  CloseIcon,
   CollapseIcon,
   GiftIcon,
   HangUpIcon,
@@ -45,7 +48,9 @@ import {
   PhoneIcon,
   PhotoFailedIcon,
   PhotoIcon,
+  SendIcon,
   TextOnlyIcon,
+  TypingIcon,
 } from "@/theme/icons";
 import { Ja } from "@/theme/Ja";
 
@@ -77,6 +82,12 @@ type Props = {
   previousLine: Segment | null;
   /** 用户正在说、还没定稿的话。 */
   hearing: string;
+  /** 底栏换成了输入栏。 */
+  typing: boolean;
+  /** 这通电话里刚打出去的话，她开口前留在台词卡底部；没有时为 null。 */
+  typed: string | null;
+  /** 输入框里的字，和对话页的输入栏是同一份。 */
+  draft: string;
   /** 这通电话里她最近发来的照片，生成中、发出来了或者没发出来；还没有时为 null。 */
   photo: Photo | null;
   /** 刚刚一个回合让她的好感度有了变化，约 2.6 秒；状态行这时写这句话。 */
@@ -91,6 +102,10 @@ type Props = {
   /** 打开麦克风列表。 */
   onSwitchMic: () => void;
   onToggleTextOnly: () => void;
+  onOpenTyping: () => void;
+  onCloseTyping: () => void;
+  onDraft: (draft: string) => void;
+  onSend: () => void;
   onRedial: () => void;
   onDismiss: () => void;
   /** 结束页上「去设置自带密钥」。 */
@@ -150,6 +165,9 @@ export function LiveCallLayer({
       line={snapshot.line}
       previousLine={snapshot.previousLine}
       hearing={snapshot.hearing}
+      typing={snapshot.typing}
+      typed={snapshot.typed}
+      draft={snapshot.draft}
       photo={snapshot.callPhoto}
       affinityCue={snapshot.affinityCue}
       standDirection={snapshot.stand}
@@ -159,6 +177,10 @@ export function LiveCallLayer({
       onToggleMic={() => live.toggleMic()}
       onSwitchMic={() => live.openMicPicker()}
       onToggleTextOnly={() => live.toggleTextOnly()}
+      onOpenTyping={() => live.openTyping()}
+      onCloseTyping={() => live.closeTyping()}
+      onDraft={(draft) => live.setDraft(draft)}
+      onSend={() => void live.submit()}
       // 要在这次点击里同步调用：她的声音趁这一下唤醒 AudioContext。
       onRedial={() => void live.startCall()}
       onDismiss={() => live.dismissEnd()}
@@ -179,11 +201,20 @@ export function LiveCallLayer({
  * 没有立绘时中部是 112px 头像、名字和状态行；她有立绘时（`character.stand`）立绘做底，名字和状态行缩进头部，
  * 底部压暗。台词放在底部的毛玻璃卡里，再下面是毛玻璃底栏；结束后台词卡换成同样毛玻璃的结束卡。
  * 她在这通电话里发来照片时，台词卡上方出一张小卡（电脑）或一颗胶囊（手机），结束卡上不带。
+ * 底栏的打字键把底栏换成输入栏，打出去的话她照常用声音回（GLOSSARY.md「打断」「补充」）。
  */
 export function CallLayer(props: Props) {
-  const { character, call, isCollapsed, isFullScreen, isReducedMotion, layerRef } = props;
+  const { character, call, isCollapsed, isFullScreen, isReducedMotion, layerRef, typing } = props;
   const ended = call.phase === "ended";
   const hasStand = Boolean(character.stand);
+
+  // 收起输入栏回到底栏时，焦点落回打字键；通话结束带走的输入栏不算。
+  const typeKey = useRef<HTMLButtonElement>(null);
+  const wasTyping = useRef(typing);
+  useEffect(() => {
+    if (wasTyping.current && !typing && call.phase === "connected") typeKey.current?.focus();
+    wasTyping.current = typing;
+  }, [typing, call.phase]);
 
   // Esc 收起（结束页上是回到对话）；按键时取最新的回调。
   const onEscape = useRef(() => {});
@@ -297,7 +328,11 @@ export function CallLayer(props: Props) {
         )}
       </div>
 
-      {!ended && <Dock {...props} isConnected={call.phase === "connected"} />}
+      {typing ? (
+        <TypingBar {...props} />
+      ) : (
+        !ended && <Dock {...props} isConnected={call.phase === "connected"} typeKey={typeKey} />
+      )}
     </section>
   );
 }
@@ -431,7 +466,9 @@ function Ripple({ isOn, children }: { isOn: boolean; children: ReactNode }) {
  * 台词卡：她当前这句的日语原文在上、字幕在下；「只看文字」开着时上一句以 45% 不透明度留在上面。
  * 她还没开口时是一句提示。用户正在说、还没定稿的话放在最下面。
  */
-function LineCard({ line, previousLine, hearing, textOnly }: Props) {
+function LineCard({ line, previousLine, hearing, typed, textOnly }: Props) {
+  // 卡底一行：用户正在说的话，不在说时是刚打出去的那句。
+  const foot = hearing ? t.hearing(hearing) : typed && t.typed(typed);
   return (
     <div className="w-full max-w-[34em] rounded-3xl bg-white/12 px-5 py-4 text-center text-balance backdrop-blur-md">
       <div aria-live="polite">
@@ -451,10 +488,10 @@ function LineCard({ line, previousLine, hearing, textOnly }: Props) {
             {line.zh && <p className="mt-1 text-sm text-white/80">{line.zh}</p>}
           </>
         ) : (
-          <p className="text-sm text-white/80">{textOnly ? t.repliesInText : t.speakFreely}</p>
+          !typed && <p className="text-sm text-white/80">{textOnly ? t.repliesInText : t.speakFreely}</p>
         )}
       </div>
-      {hearing && <p className="mt-3 text-sm text-white/80">{t.hearing(hearing)}</p>}
+      {foot && <p className="mt-3 text-sm text-white/80">{foot}</p>}
     </div>
   );
 }
@@ -581,10 +618,18 @@ function Ended({
 }
 
 /**
- * 底栏：一条毛玻璃胶囊。静音、切换麦克风是 56px 圆形图标键（静音按下时白底黑图标），
- * 挂断是带「挂断」二字的挂断红胶囊。呼叫中静音和切换麦克风置灰，只能挂断。
+ * 底栏：一条毛玻璃胶囊。静音、切换麦克风、打字是 56px 圆形图标键（静音按下时白底黑图标），
+ * 挂断是带「挂断」二字的挂断红胶囊。呼叫中静音、切换麦克风和打字置灰，只能挂断。
  */
-function Dock({ isConnected, micMuted, onToggleMic, onHangUp, onSwitchMic }: Props & { isConnected: boolean }) {
+function Dock({
+  isConnected,
+  micMuted,
+  onToggleMic,
+  onHangUp,
+  onSwitchMic,
+  onOpenTyping,
+  typeKey,
+}: Props & { isConnected: boolean; typeKey: RefObject<HTMLButtonElement | null> }) {
   return (
     <footer className="relative flex justify-center px-4 pt-2 pb-8">
       <div className="flex items-center gap-2 rounded-full bg-white/12 p-2 backdrop-blur-md">
@@ -597,11 +642,80 @@ function Dock({ isConnected, micMuted, onToggleMic, onHangUp, onSwitchMic }: Pro
         />
         <RoundKey label={t.switchMic} icon={MicSwitchIcon} isDisabled={!isConnected} onClick={onSwitchMic} />
         <AmbienceKey isDisabled={!isConnected} />
+        <RoundKey label={t.type} icon={TypingIcon} isDisabled={!isConnected} onClick={onOpenTyping} keyRef={typeKey} />
         <Button variant="hangup" size="call-dock" onClick={onHangUp} className="ml-2">
           <HangUpIcon aria-hidden />
           {t.hangUp}
         </Button>
       </div>
+    </footer>
+  );
+}
+
+/**
+ * 输入栏：底栏换成的同一条毛玻璃胶囊，里面是收起输入栏（✕）、输入框和白底发送键，都是 44px 高。
+ * 打开时输入框拿到焦点；回车发送、Shift+回车换行，输入法选字时的回车不算；Esc 回到底栏，不收起通话层。
+ * 发送键按下时不抢焦点，发完键盘不收。
+ *
+ * 开着时 viewport 带 `interactive-widget=resizes-content`：手机键盘弹起时整层缩到键盘上方，
+ * 页首和她的脸留在屏幕上（浏览器默认会把整页往上推）；收起时去掉。iOS Safari 不认这一条。
+ */
+function TypingBar({ draft, onDraft, onSend, onCloseTyping }: Props) {
+  const field = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+    const before = meta?.content;
+    if (meta && !before?.includes("interactive-widget")) meta.content = `${before}, interactive-widget=resizes-content`;
+    // 先改 viewport 再拿焦点，键盘弹起时已经按缩整层的办法排。
+    field.current?.focus();
+    return () => {
+      if (meta && before !== undefined) meta.content = before;
+    };
+  }, []);
+  const canSend = draft.trim() !== "";
+  return (
+    <footer className="relative flex justify-center px-4 pt-2 pb-3">
+      <form
+        className="flex w-full max-w-[34em] items-end gap-1.5 rounded-3xl bg-white/12 p-1.5 backdrop-blur-md"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (canSend) onSend();
+        }}
+      >
+        <Button type="button" variant="call-round" size="icon-call" aria-label={t.closeTyping} onClick={onCloseTyping}>
+          <CloseIcon aria-hidden />
+        </Button>
+        <Textarea
+          ref={field}
+          variant="call"
+          rows={1}
+          value={draft}
+          onChange={(e) => onDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              if (canSend) onSend();
+            } else if (e.key === "Escape" && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              onCloseTyping();
+            }
+          }}
+          placeholder={copy.conversation.placeholder}
+          aria-label={copy.conversation.placeholder}
+          className="flex-1"
+        />
+        {/* 按下时不抢输入框的焦点：手机上一失焦键盘就收，这一下点击落空 */}
+        <Button
+          type="submit"
+          variant="call-solid"
+          size="icon-call"
+          aria-label={copy.conversation.send}
+          disabled={!canSend}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <SendIcon aria-hidden />
+        </Button>
+      </form>
     </footer>
   );
 }
@@ -612,18 +726,21 @@ function RoundKey({
   isPressed,
   isDisabled,
   onClick,
+  keyRef,
 }: {
   label: string;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   isPressed?: boolean;
   isDisabled?: boolean;
   onClick: () => void;
+  keyRef?: RefObject<HTMLButtonElement | null>;
 }) {
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           <Button
+            ref={keyRef}
             variant="call-round"
             size="icon-call-dock"
             aria-label={label}

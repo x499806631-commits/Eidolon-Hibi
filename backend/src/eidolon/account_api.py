@@ -20,13 +20,13 @@ import logging
 import secrets
 from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Path, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import (
     BaseModel, Field, Secret, StrictBool, StringConstraints, field_validator, model_validator,
 )
 
-from eidolon.accounts import SignInRefused, is_admin
+from eidolon.accounts import SignInRefused, signs_in_as_admin
 from eidolon.activity import host
 from eidolon.assembly import Backend
 from eidolon.voice_settings_api import may_change as may_change_voice
@@ -43,15 +43,17 @@ from eidolon.config import (
     ReasoningEffort,
     SttKey,
     SttProvider,
+    checked_base_url,
     checked_extra_body,
     effort_problem,
 )
 from eidolon.features import FEATURES, Feature
 from eidolon.identity import PROVIDER_NAMES, IdentityError
 from eidolon.own_keys import NO_PHOTOS, BroughtKeys, OwnKeyRejected, named_services
-from eidolon.price_catalog import describe_thinking
+from eidolon.price_catalog import describe_offer, describe_provider, describe_thinking
 from eidolon.reach_outs import ReachOutsOff
 from eidolon.store import LastSignInMethod
+from eidolon.throttle import Throttle
 from eidolon.sessions import (
     SESSION_COOKIE,
     SignedIn,
@@ -90,6 +92,17 @@ ApiKey = Secret[
 """A user's own key as a request brings it, never shown in a repr or traceback."""
 
 
+class OwnLLMListInput(BaseModel):
+    """Where the user's LLM is and their key, for the service to list the models it offers
+    the key."""
+
+    base_url: str = Field(min_length=1, max_length=500)
+    api_key: ApiKey
+    protocol: LLMProtocol = "chat-completions"
+
+    _base_url = field_validator("base_url")(checked_base_url)
+
+
 class OwnLLMInput(BaseModel):
     """A model of the user's own, as their browser keeps it and brings it with each text
     turn and call: its effort and extra body checked here each time, as the admin console
@@ -102,6 +115,8 @@ class OwnLLMInput(BaseModel):
     protocol: LLMProtocol = "chat-completions"
     reasoning_effort: ReasoningEffort | None = None
     extra_body: dict[str, Any] | None = None
+
+    _base_url = field_validator("base_url")(checked_base_url)
 
     @field_validator("extra_body", mode="before")
     @classmethod
@@ -273,11 +288,11 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
     def callback_url(provider: str) -> str:
         return f"{settings.public_origin}/api/auth/{provider}/callback"
 
-    def signed_in(user_id: str, response: Response, request: Request) -> None:
+    async def signed_in(user_id: str, response: Response, request: Request) -> None:
         """Start a session for the user in this browser, ending the one it had."""
         if old := request.cookies.get(SESSION_COOKIE):
-            store.end_session(old)
-        set_session_cookie(response, store.create_session(user_id, clock()), settings)
+            await store.end_session(old)
+        set_session_cookie(response, await store.create_session(user_id, clock()), settings)
 
     @app.get("/api/auth/providers")
     def sign_in_providers() -> dict:
@@ -291,14 +306,16 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
         }
 
     @app.get("/api/auth/{provider}/start")
-    def start_sign_in(provider: str, request: Request, link: bool = False) -> RedirectResponse:
+    async def start_sign_in(
+        provider: str, request: Request, link: bool = False
+    ) -> RedirectResponse:
         """Off to the provider to sign in, or with `link`, to link another identity to the
         signed-in user."""
         identity_provider = providers.get(provider)  # pyright: ignore[reportArgumentType]
         if identity_provider is None:
             raise HTTPException(404, "没有这种登录方式")
         if link:
-            user = session_user(request)
+            user = await session_user(request)
             if user is None or user.consented_at is None:
                 return RedirectResponse("/login", status_code=302)
         state = secrets.token_urlsafe(24)
@@ -353,27 +370,27 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
             return go(f"{back}?error=provider")
         try:
             if linking:
-                user = session_user(request)
+                user = await session_user(request)
                 if user is None or user.consented_at is None:
                     return go("/login?error=state")
-                accounts.link(user.id, identity)
+                await accounts.link(user.id, identity)
                 return go(f"/settings/sign-in?linked={provider}")
-            user = accounts.sign_in(identity)
+            user = await accounts.sign_in(identity)
         except SignInRefused as e:
             return go(f"{back}?error={e.reason}")
         response = go("/conversations")
-        signed_in(user.id, response, request)
+        await signed_in(user.id, response, request)
         return response
 
     @app.post("/api/auth/logout", status_code=204)
-    def logout(request: Request, response: Response) -> None:
+    async def logout(request: Request, response: Response) -> None:
         """Sign this browser out; its session ends even if it has already expired."""
         if token := request.cookies.get(SESSION_COOKIE):
-            store.end_session(token)
+            await store.end_session(token)
         clear_session_cookie(response, settings)
 
     @app.get("/api/account")
-    def account(user_id: UserId) -> dict:
+    async def account(user_id: UserId) -> dict:
         """The signed-in user, by the id their browser keeps their own keys apart by, the
         identities they sign in with, whether they are an admin, who may enter the admin
         console, the exempting keys now (GLOSSARY.md「免限额密钥」), in a fixed order, and
@@ -383,57 +400,61 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
         (GLOSSARY.md「朗读」), whether they may change the deployment's speech synthesis from
         their settings, and the version of the sponsor code
         (GLOSSARY.md「赞赏」) while users are shown it, else None."""
-        switches = backend.features.of(user_id)
+        sponsor = await backend.sponsor.state()
+        user = await store.get_user(user_id)
+        methods = await store.sign_in_methods(user_id)
+        reach_outs = await backend.reach_outs.switch_of(user_id)
+        switches = await backend.features.of(user_id)
         return {
             "id": user_id,
-            "name": store.get_user(user_id).name,
+            "name": user.name,
             "sign_in_methods": [
                 {"provider": m.provider, "display_name": m.display_name, "email": m.email}
-                for m in store.sign_in_methods(user_id)
+                for m in methods
             ],
-            "is_admin": is_admin(store, settings, user_id),
+            "is_admin": signs_in_as_admin(methods, settings),
             "exempting_keys": [s for s in SERVICES if s in backend.config.exempting_keys],
-            "reach_outs": backend.reach_outs.switch_of(user_id),
+            "reach_outs": reach_outs,
             "features": {f: switches[f] for f in available_features(backend)},
             "web_search": backend.web is not None,
             "read_aloud": backend.read_aloud.available(),
-            "voice_settings": may_change_voice(backend, user_id),
-            "sponsor_version": backend.sponsor.state().version,
+            "voice_settings": await may_change_voice(backend, user_id),
+            "sponsor_version": sponsor.version,
         }
 
     @app.put("/api/account/reach-outs", status_code=204)
-    def switch_reach_outs(body: ReachOutSwitch, user_id: UserId) -> None:
+    async def switch_reach_outs(body: ReachOutSwitch, user_id: UserId) -> None:
         """Turn the user's own switch for reach-outs on or off, for all the characters; 409
         where the deployer has reach-outs off."""
         try:
-            backend.reach_outs.switch(user_id, body.on)
+            await backend.reach_outs.switch(user_id, body.on)
         except ReachOutsOff:
             raise HTTPException(409, "搭话没有开放") from None
 
     @app.put("/api/account/features/{feature}", status_code=204)
-    def switch_feature(feature: str, body: FeatureSwitch, user_id: UserId) -> None:
+    async def switch_feature(feature: str, body: FeatureSwitch, user_id: UserId) -> None:
         """Turn the user's own switch for `feature` on or off, for all the characters
         (GLOSSARY.md「玩法开关」); 404 for one the deployment does not have."""
         for known in available_features(backend):
             if known == feature:
-                backend.features.switch(user_id, known, body.on)
+                await backend.features.switch(user_id, known, body.on)
                 return
         raise HTTPException(404, "没有这个玩法")
 
     @app.delete("/api/account/sign-in-methods/{provider}", status_code=204)
-    def unlink(provider: str, user_id: UserId) -> None:
+    async def unlink(provider: str, user_id: UserId) -> None:
         """Stop signing in with the identity at `provider`; never the last one."""
         try:
-            found = store.remove_sign_in_method(user_id, provider)
+            found = await store.remove_sign_in_method(user_id, provider)
         except LastSignInMethod:
             raise HTTPException(409, "这是你唯一的登录方式，解绑后就无法再登录了") from None
         if not found:
             raise HTTPException(404, "没有绑定这种登录方式")
 
     @app.post("/api/account/logout-everywhere", status_code=204)
-    def logout_everywhere(user_id: UserId, response: Response) -> None:
+    async def logout_everywhere(user_id: UserId, response: Response) -> None:
         """Sign the user out on every device, this one included."""
-        store.end_sessions(user_id)
+        await store.end_sessions(user_id)
         clear_session_cookie(response, settings)
 
     @app.post("/api/account/delete", status_code=204)
@@ -444,6 +465,7 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
         clear_session_cookie(response, settings)
 
     own_keys = backend.own_keys
+    throttle = Throttle(backend.clock)
 
     @app.exception_handler(OwnKeyRejected)
     async def own_key_rejected(_: Request, e: OwnKeyRejected) -> JSONResponse:
@@ -469,7 +491,8 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
         failed, or with why its effort or extra body cannot be sent. Its address and model
         as the browser is to keep them."""
         own = body.chat_settings()
-        await own_keys.check_llm(own)
+        with throttle.asking(user_id):
+            await own_keys.check_llm(own)
         return {"base_url": own.text.base_url, "model": own.text.model}
 
     @app.post("/api/account/keys/memory-llm/check")
@@ -478,11 +501,12 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
         it, as `check_own_llm` does their LLM; why it failed comes after saying it was this
         one."""
         own = body.settings()
-        await own_keys.check_memory_llm(own)
+        with throttle.asking(user_id):
+            await own_keys.check_memory_llm(own)
         return {"base_url": own.base_url, "model": own.model}
 
     @app.get("/api/account/keys/llm/efforts")
-    def llm_efforts(
+    async def llm_efforts(
         user_id: UserId,
         protocol: LLMProtocol,
         base_url: Annotated[str, Query(max_length=500)],
@@ -503,11 +527,55 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
             return None
         return describe_thinking(thinking, protocol)
 
+    @app.post("/api/account/keys/llm/models")
+    async def list_own_llm_models(body: OwnLLMListInput, user_id: UserId) -> dict:
+        """The models the user's key is offered at the address, as the service lists them
+        (`listing.list_models`), for the settings page to pick one from; keeping nothing
+        here, and asked as often as a key is tried (`throttle`). 422 with what the service
+        said if it did not list them."""
+        with throttle.asking(user_id):
+            try:
+                models = await own_keys.list_llm_models(
+                    body.protocol, body.base_url, body.api_key.get_secret_value()
+                )
+            except OwnKeyRejected as e:
+                raise HTTPException(422, f"获取模型失败：{e}") from None
+        return {"models": models}
+
+    @app.get("/api/account/keys/llm/providers")
+    async def llm_providers(user_id: UserId, response: Response) -> dict:
+        """The providers an LLM may be picked from, as models.dev lists them
+        (`price_catalog.parse_offers`): where each serves its models and over which
+        protocol, for the settings page and the admin console to fill in, and every address
+        its models are at, for them to tell which an LLM saved is at. None (an empty list)
+        before the catalogs are first fetched, which has them fetched if they were last
+        tried a while ago. No key needed, nothing kept."""
+        catalog = backend.prices.catalog
+        providers = catalog.providers()
+        if not providers:
+            catalog.refresh_soon(missing=True)
+        else:  # the same for everyone, and fetched again once a day
+            response.headers["Cache-Control"] = "private, max-age=3600"
+        return {"providers": [describe_provider(p, catalog.offers(p.id)) for p in providers]}
+
+    @app.get("/api/account/keys/llm/providers/{provider}/models")
+    def llm_provider_models(
+        user_id: UserId, provider: Annotated[str, Path(max_length=200)], response: Response
+    ) -> dict:
+        """The models `provider` serves that an LLM may be picked from, each with where and
+        over which protocol (a provider may serve some over another); none for a provider
+        not listed."""
+        offers = backend.prices.catalog.offers(provider)
+        if offers:
+            response.headers["Cache-Control"] = "private, max-age=3600"
+        return {"models": [describe_offer(o) for o in offers]}
+
     @app.post("/api/account/keys/tts/check")
     async def check_own_tts(body: OwnTTSInput, user_id: UserId) -> dict:
         """Try the user's own key for speech synthesis before their browser keeps it,
         keeping nothing here; 422 with what the service said if the try failed."""
-        await own_keys.check_tts(body.api_key.get_secret_value(), body.model)
+        with throttle.asking(user_id):
+            await own_keys.check_tts(body.api_key.get_secret_value(), body.model)
         return {}
 
     @app.post("/api/account/keys/stt/check")
@@ -516,7 +584,8 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
         their browser keeps it, keeping nothing here; 422 with what the service said if
         the try failed. A DashScope key is tried in each region: the one it works in, for
         the browser to keep with it (None for Soniox)."""
-        key = await own_keys.check_stt(body.provider, body.api_key.get_secret_value())
+        with throttle.asking(user_id):
+            key = await own_keys.check_stt(body.provider, body.api_key.get_secret_value())
         return {"region": key.region}
 
     @app.post("/api/account/keys/image/check")
@@ -529,18 +598,19 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
         if backend.config.judge_settings is None:
             raise OwnKeyRejected(NO_PHOTOS)
         own = body.settings()
-        await own_keys.check_image(own)
+        with throttle.asking(user_id):
+            await own_keys.check_image(own)
         return {"base_url": own.base_url, "model": own.model}
 
     @app.post("/api/account/consent", status_code=204)
-    def consent(body: Consent, user: SignedIn) -> None:
+    async def consent(body: Consent, user: SignedIn) -> None:
         """Agree to the privacy policy and terms of use, which the rest of the API waits for."""
-        store.consent(user.id, clock())
+        await store.consent(user.id, clock())
 
     if settings.dev_login:
 
         @app.post("/api/auth/dev-login", status_code=204)
-        def dev_login(body: DevLogin, request: Request, response: Response) -> None:
+        async def dev_login(body: DevLogin, request: Request, response: Response) -> None:
             """Sign in as the user with this name, made if there is none (development only)."""
-            user = store.first_user_named(body.name) or store.create_user(body.name)
-            signed_in(user.id, response, request)
+            user = await store.first_user_named(body.name) or await store.create_user(body.name)
+            await signed_in(user.id, response, request)

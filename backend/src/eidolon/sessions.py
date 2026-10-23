@@ -78,12 +78,12 @@ def session_middleware(
     return middleware
 
 
-def session_user(request: Request) -> User | None:
+async def session_user(request: Request) -> User | None:
     """The user whose session the request's cookie carries, if any; renews the session
     (and, through the session middleware, the cookie) now and then."""
     backend: "Backend" = request.app.state.backend
     token = request.cookies.get(SESSION_COOKIE)
-    session = backend.store.use_session(token, backend.clock()) if token else None
+    session = await backend.store.use_session(token, backend.clock()) if token else None
     if session is None:
         return None
     if session.renewed:
@@ -91,10 +91,10 @@ def session_user(request: Request) -> User | None:
     return session.user
 
 
-def signed_in_user(request: Request) -> User:
+async def signed_in_user(request: Request) -> User:
     """The signed-in user; 401 if the browser is not signed in, 403 if the user is banned
     (banning ends their sessions, so only a request under way when it did gets this)."""
-    user = session_user(request)
+    user = await session_user(request)
     if user is None:
         raise HTTPException(401, "请先登录")
     if user.banned_at is not None:

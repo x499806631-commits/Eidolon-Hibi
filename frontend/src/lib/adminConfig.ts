@@ -207,6 +207,7 @@ export const LIMIT_FIELDS = [
   "photos_per_hour",
   "call_minutes",
   "turns_per_call",
+  "concurrent_calls",
   "history_turns",
 ];
 
@@ -547,6 +548,20 @@ export async function saveItem(name: ItemName, change: Change): Promise<AdminCon
       body: JSON.stringify(change),
     }),
   );
+}
+
+/** The models the service offers the key, as it lists them, for a model slot to pick one from: the key
+ * in effect now if none is given, at its own address only (ADR-0027). */
+export async function listItemModels(
+  name: "chat_llm" | "memory_llm",
+  asked: { protocol: string; base_url: string; api_key?: string },
+): Promise<string[]> {
+  const listed = await api(`/api/admin/config/${name}/models`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(asked),
+  });
+  return (await json<{ models: string[] }>(listed)).models;
 }
 
 /** Back to `.env`'s, from the next turn and call on. */

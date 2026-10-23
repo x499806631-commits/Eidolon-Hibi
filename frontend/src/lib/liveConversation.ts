@@ -1,8 +1,8 @@
 // The conversation page for one character: opening her conversation (or starting a new
 // one), its log, the text turn under way, the call and how the call layer is shown, her
 // stand as the call moves it on (by the rules in `standDirection.ts`), and her affinity as
-// each turn leaves it, and the photos she sent as they come out, kept outside React so the page
-// only renders a snapshot and passes on clicks.
+// each turn leaves it, the stages of her achievements each turn unlocks, and the photos she sent
+// as they come out, kept outside React so the page only renders a snapshot and passes on clicks.
 
 import type { AffinityChange, AffinityStatus } from "@/lib/affinity";
 import type { AmbienceKind } from "@/lib/ambience";
@@ -38,9 +38,12 @@ import {
   nextPacedAt,
   pacedCard,
   previousLineOf,
+  typedOf,
   type LineCard,
   type LineCardEvent,
 } from "@/lib/linePacing";
+import type { Rewarded } from "@/lib/rewards";
+import { later } from "@/lib/seenOnDevice";
 import { CALM, type StandDirection } from "@/lib/standAnimations";
 import { directionOf, directStand, startingStand, type StandEvent, type StandState } from "@/lib/standDirection";
 
@@ -69,11 +72,19 @@ export type CallState =
  * status line (spec「页首标识」「变化胶囊和通话里的提示」). */
 export const CUE_MS = 2600;
 
+/** How long the trophy pops up beside her affinity badge as a turn unlocks stages of her
+ * achievements (spec「她的对话页」). */
+export const TROPHY_MS = 3000;
+
 /** How often a photo she sent that is still being generated is asked after (GLOSSARY.md「照片」). */
 export const PHOTO_POLL_MS = 2000;
 
 /** A change of her affinity just recorded, shown for `CUE_MS`; `key` tells one from the next. */
 export type AffinityCue = { change: AffinityChange; key: number };
+
+/** Stages of her achievements a turn just unlocked, shown for `TROPHY_MS`: the draws they gave;
+ * `key` tells one from the next. */
+export type Trophy = { draws: number; key: number };
 
 /** A call under way: dialing or connected. Leaving the page hangs it up. */
 export type LiveCall = Extract<CallState, { phase: "dialing" | "connected" }>;
@@ -120,6 +131,12 @@ export type Snapshot = {
   layer: Layer | null;
   /** The list of microphones is open; only while the call is connected. */
   pickingMic: boolean;
+  /** The call layer's dock is swapped for the input bar, to type to her; only while the call is
+   * connected, and each call starts without it. */
+  typing: boolean;
+  /** What the user typed in the call, shown at the line card's foot until her reply to it is
+   * said (`linePacing.ts`); null for nothing. */
+  typed: string | null;
   /** What the user is saying in the call so far. */
   hearing: string;
   /** The line the call screen's line card shows, by the rules in `linePacing.ts`: with her
@@ -161,6 +178,14 @@ export type Snapshot = {
   affinity: AffinityStatus | null;
   /** The change of her affinity the last turn made, for `CUE_MS` after it was recorded. */
   affinityCue: AffinityCue | null;
+  /** Stages of her own achievements (lib/achievements) the last turn unlocked, for `TROPHY_MS`
+   * after it was recorded; not while the call layer covers the header, nor for another
+   * character's stages or those of all together. */
+  trophy: Trophy | null;
+  /** When a turn on this page last unlocked stages of her own achievements (ISO, server time),
+   * shown under the call layer or not: the page's dots light up at once, before her achievements
+   * are read again. Null until one does. */
+  herUnlockedAt: string | null;
   /** She is in a cooldown with the user (GLOSSARY.md「冷却」), until `affinity.cooldown_until`:
    * no text turns, no calls, until it ends by itself. A new conversation can still be started. */
   cooling: boolean;
@@ -180,7 +205,16 @@ export type Snapshot = {
 
 type State = Omit<
   Snapshot,
-  "entries" | "line" | "previousLine" | "stand" | "canDial" | "canStartNew" | "cooling" | "ended" | "callPhoto"
+  | "entries"
+  | "line"
+  | "previousLine"
+  | "typed"
+  | "stand"
+  | "canDial"
+  | "canStartNew"
+  | "cooling"
+  | "ended"
+  | "callPhoto"
 > & {
   log: ConversationLog;
   /** The photo she sent last in the call under way or the last one, by its id. */
@@ -198,6 +232,7 @@ const IDLE: Omit<State, "log" | "card" | "stand" | "dial" | "callPhotoId"> = {
   call: { phase: "idle" },
   layer: null,
   pickingMic: false,
+  typing: false,
   hearing: "",
   micMuted: false,
   micId: "",
@@ -208,6 +243,8 @@ const IDLE: Omit<State, "log" | "card" | "stand" | "dial" | "callPhotoId"> = {
   failure: null,
   affinity: null,
   affinityCue: null,
+  trophy: null,
+  herUnlockedAt: null,
   newPhoto: false,
 };
 
@@ -218,6 +255,7 @@ export const NOT_OPEN: Snapshot = {
   entries: [],
   line: null,
   previousLine: null,
+  typed: null,
   stand: CALM,
   canDial: false,
   canStartNew: false,
@@ -276,6 +314,9 @@ export type Ports = {
   /** The conversation list's line for her has changed: a turn was recorded, or a
    * conversation was started. Told even after the page is left. */
   onListChanged: () => void;
+  /** A turn recorded, typed or in a call, was rewarded (lib/rewards): told even after the page
+   * is left, for the dot on 「礼物」. */
+  onRewarded: (rewarded: Rewarded) => void;
   /** `asmr` for an ASMR call (ASMR 模式通话). */
   startCall: (
     conversationId: string,
@@ -317,6 +358,8 @@ export class LiveConversation {
   private pacing: ReturnType<typeof setTimeout> | null = null;
   /** Stops showing the change of her affinity; null while none is shown. */
   private cueing: ReturnType<typeof setTimeout> | null = null;
+  /** Stops showing the trophy; null while none is shown. */
+  private trophying: ReturnType<typeof setTimeout> | null = null;
   /** Ends the cooldown she is in as it is due to; null while she is in none. */
   private thawing: ReturnType<typeof setTimeout> | null = null;
   /** Asks after the photos in the log still being generated when next due to; null while it
@@ -365,6 +408,7 @@ export class LiveConversation {
     this.disposed = true;
     if (this.pacing !== null) clearTimeout(this.pacing);
     if (this.cueing !== null) clearTimeout(this.cueing);
+    if (this.trophying !== null) clearTimeout(this.trophying);
     if (this.thawing !== null) clearTimeout(this.thawing);
     if (this.polling !== null) clearTimeout(this.polling);
     this.attempt = null;
@@ -429,7 +473,7 @@ export class LiveConversation {
       // The call takes it up like speech; its reply arrives as call events. Typed while she
       // speaks, it interrupts her.
       this.call.sendText(text);
-      this.moveCard({ type: "interrupted" }, { stand: this.directed({ type: "typed" }) });
+      this.moveCard({ type: "interrupted", typed: text }, { stand: this.directed({ type: "typed" }) });
       return;
     }
     this.apply({ type: "submitted", text, at: this.isoNow() }, { busy: true });
@@ -593,7 +637,9 @@ export class LiveConversation {
   /** Collapse the call layer onto the conversation, while the call is under way. */
   collapse(): void {
     const layer = this.state.layer;
-    if (isLive(this.state.call) && layer && !layer.collapsed) this.update({ layer: { ...layer, collapsed: true } });
+    // The input bar goes with it: folded away it would leave the viewport as the bar sets it.
+    if (isLive(this.state.call) && layer && !layer.collapsed)
+      this.update({ layer: { ...layer, collapsed: true }, typing: false });
   }
 
   /** Unfold the call layer, while the call is under way: once it is over it cannot open again.
@@ -634,6 +680,16 @@ export class LiveConversation {
 
   closeMicPicker(): void {
     if (this.state.pickingMic) this.update({ pickingMic: false });
+  }
+
+  /** Swap the call layer's dock for the input bar, to type to her in the call. */
+  openTyping(): void {
+    if (this.state.call.phase === "connected" && !this.state.typing) this.update({ typing: true });
+  }
+
+  /** Back to the dock; what is typed stays in the input box. */
+  closeTyping(): void {
+    if (this.state.typing) this.update({ typing: false });
   }
 
   /** Mic mute: the microphone's track only, in the browser; typing still goes to the call. */
@@ -768,8 +824,32 @@ export class LiveConversation {
     // Recorded: the list's line for her now ends with it, even if the page has been left.
     if (event.type === "done") {
       this.ports.onListChanged();
+      if (event.rewarded) {
+        this.ports.onRewarded(event.rewarded);
+        this.unlocked(event.rewarded);
+      }
       this.affinityLeft(event.affinity, event.message.affinity);
     }
+  }
+
+  /** A recorded turn was rewarded: for stages of her own achievements, the trophy pops up with
+   * the draws they gave, for `TROPHY_MS`, unless the call layer covers the header. */
+  private unlocked(rewarded: Rewarded): void {
+    const hers = rewarded.achievements.filter((a) => a.character_id === this.characterId);
+    if (hers.length === 0) return;
+    const herUnlockedAt = later(this.state.herUnlockedAt, rewarded.rewarded_at);
+    const layer = this.state.layer;
+    if (layer !== null && !layer.collapsed) {
+      this.update({ herUnlockedAt });
+      return;
+    }
+    if (this.trophying !== null) clearTimeout(this.trophying);
+    const draws = hers.reduce((n, a) => n + a.draws, 0);
+    this.update({ herUnlockedAt, trophy: { draws, key: (this.state.trophy?.key ?? 0) + 1 } });
+    this.trophying = setTimeout(() => {
+      this.trophying = null;
+      this.update({ trophy: null });
+    }, TROPHY_MS);
   }
 
   /** Her affinity as a recorded turn left it, and how the turn changed it, shown for
@@ -970,13 +1050,15 @@ export class LiveConversation {
  * How the call screen follows the call, from one state to the next: the layer draws the call
  * under way, and dialing, and a call ending for a reason, open it up again, so the user sees
  * the call or why it ended. Back at idle it keeps that last call, folded away, until the next
- * call. The microphone list is only for a connected call.
+ * call. The microphone list and the input bar are only for a connected call.
  */
 function withCallScreenRules(before: State, next: State): State {
   const layer = nextLayer(before, next);
-  const pickingMic = next.pickingMic && next.call.phase === "connected";
-  if (layer === next.layer && pickingMic === next.pickingMic) return next;
-  return { ...next, layer, pickingMic };
+  const connected = next.call.phase === "connected";
+  const pickingMic = next.pickingMic && connected;
+  const typing = next.typing && connected;
+  if (layer === next.layer && pickingMic === next.pickingMic && typing === next.typing) return next;
+  return { ...next, layer, pickingMic, typing };
 }
 
 /** The layer for the next state: the call under way, or the last one kept folded away. */
@@ -1028,6 +1110,7 @@ function toSnapshot(state: State): Snapshot {
     entries: log.entries,
     line: lineOf(card),
     previousLine: previousLineOf(card),
+    typed: typedOf(card),
     stand: directionOf(stand),
     canDial: free && !isCooling(state) && !isEnded(state),
     canStartNew: canStartNew(state),

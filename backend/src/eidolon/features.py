@@ -13,11 +13,10 @@ off too. Her trip photos are within both. Her keepsakes still come with the pict
 emoji standing for each.
 """
 
-import threading
-from pathlib import Path
+import sqlite3
 from typing import Literal, get_args
 
-from eidolon.database import connect
+from eidolon.data_access import Database
 
 Feature = Literal[
     "scenes", "diary", "letters", "keepsakes", "schedules", "sleep", "bath",
@@ -45,53 +44,57 @@ CREATE TABLE IF NOT EXISTS features_off (
 
 
 class Features:
-    """Every user's switches, in the database at `path` beside the users they belong to."""
+    """Every user's switches, in `db` beside the users they belong to (ADR-0028)."""
 
-    def __init__(self, path: Path) -> None:
-        self._db = connect(path)
-        self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
+    def __init__(self, db: Database) -> None:
+        self._db = db
+        db.prepare(_open)
 
-    def on(self, user_id: str, feature: Feature) -> bool:
+    async def on(self, user_id: str, feature: Feature) -> bool:
         """Whether the user has `feature` on, and the features it is part of, if any."""
-        off = self._off(user_id)
+        return await self._db.read(self.read_on, user_id, feature)
+
+    def read_on(self, db: sqlite3.Connection, user_id: str, feature: Feature) -> bool:
+        """`on`, read through `db`, in the caller's transaction."""
+        off = _off(db, user_id)
         return feature not in off and not any(f in off for f in WITHIN.get(feature, ()))
 
-    def of(self, user_id: str) -> dict[Feature, bool]:
+    async def of(self, user_id: str) -> dict[Feature, bool]:
         """The user's own switch for every feature, as they set it (not as `on` reads it)."""
-        off = self._off(user_id)
+        off = await self._db.read(_off, user_id)
         return {f: f not in off for f in FEATURES}
 
-    def switch(self, user_id: str, feature: Feature, on: bool) -> None:
+    async def switch(self, user_id: str, feature: Feature, on: bool) -> None:
         """Switch `feature` on or off for the user, for all the characters."""
-        with self._lock, self._db:
-            if on:
-                self._db.execute(
-                    "DELETE FROM features_off WHERE user_id = ? AND feature = ?", (user_id, feature)
-                )
-            else:
-                self._db.execute(
-                    "INSERT OR IGNORE INTO features_off (user_id, feature) VALUES (?, ?)",
-                    (user_id, feature),
-                )
+        await self._db.write(_switch, user_id, feature, on)
 
-    def close(self) -> None:
-        with self._lock:
-            self._db.close()
 
-    def _off(self, user_id: str) -> set[str]:
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT feature FROM features_off WHERE user_id = ?", (user_id,)
-            ).fetchall()
-        return {feature for (feature,) in rows}
+def _open(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+
+
+def _off(db: sqlite3.Connection, user_id: str) -> set[str]:
+    rows = db.execute("SELECT feature FROM features_off WHERE user_id = ?", (user_id,)).fetchall()
+    return {feature for (feature,) in rows}
+
+
+def _switch(db: sqlite3.Connection, user_id: str, feature: Feature, on: bool) -> None:
+    if on:
+        db.execute("DELETE FROM features_off WHERE user_id = ? AND feature = ?", (user_id, feature))
+    else:
+        db.execute(
+            "INSERT OR IGNORE INTO features_off (user_id, feature) VALUES (?, ?)",
+            (user_id, feature),
+        )
 
 
 class AllOn:
     """Every feature on for everyone: where no switches are kept (tests building parts alone)."""
 
-    def on(self, user_id: str, feature: Feature) -> bool:
+    async def on(self, user_id: str, feature: Feature) -> bool:
+        return True
+
+    def read_on(self, db: sqlite3.Connection, user_id: str, feature: Feature) -> bool:
         return True
 
 

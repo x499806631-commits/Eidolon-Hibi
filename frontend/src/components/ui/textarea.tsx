@@ -13,6 +13,10 @@ const textareaVariants = cva(
         // 一行起、随字数长高（field-sizing），最多长到 8rem，再多就在框里滚动。
         composer:
           "max-h-32 min-h-9 resize-none rounded-bubble border-0 bg-muted px-4 py-1.5 text-body leading-6",
+        // eidolon: 通话层输入栏的输入框（DESIGN.md「Call layer」的「打字」）：15% 白底、白字，44px 高起，
+        // 和两边的圆键齐平；同样随字数长高，最多 8rem。
+        call:
+          "max-h-32 min-h-11 resize-none rounded-bubble border-0 bg-white/15 px-4 py-2.5 text-body leading-6 text-white placeholder:text-white/60 focus-visible:ring-white/60",
       },
     },
     defaultVariants: {

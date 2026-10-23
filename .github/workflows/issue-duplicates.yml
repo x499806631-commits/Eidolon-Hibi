@@ -1,0 +1,57 @@
+# 新 issue 打开时让 LLM 在以前的 issue 里找同一个问题，找到就评论列出来（scripts/issue_duplicates.py，
+# 见 docs/deploy.md「issue 查重」）。只评论，不打标签、不关 issue。LLM 和 Release 共用 RELEASE_LLM_*，没配就跳过。
+#
+# 也可以在 Actions 页面手动对某个 issue 跑一次，默认只看结果不评论，用来试效果。
+name: Issue duplicates
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      number:
+        description: issue 编号
+        type: number
+        required: true
+      comment:
+        description: 找到了就评论（不勾只在运行日志里看结果）
+        type: boolean
+        default: false
+
+concurrency:
+  group: issue-duplicates-${{ github.event.issue.number || inputs.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  find:
+    # 玩法仓库登记不是问题或建议，交给 fork-showcase.yml
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.user.type != 'Bot' && !contains(github.event.issue.labels.*.name, 'fork-showcase'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts
+
+      - name: 找重复的 issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_LLM_BASE_URL: ${{ vars.RELEASE_LLM_BASE_URL }}
+          RELEASE_LLM_MODEL: ${{ vars.RELEASE_LLM_MODEL }}
+          RELEASE_LLM_API_KEY: ${{ secrets.RELEASE_LLM_API_KEY }}
+          NUMBER: ${{ github.event.issue.number || inputs.number }}
+          COMMENT: ${{ github.event_name == 'issues' || inputs.comment }}
+        run: |
+          if [ -z "$RELEASE_LLM_BASE_URL" ] || [ -z "$RELEASE_LLM_MODEL" ] || [ -z "$RELEASE_LLM_API_KEY" ]; then
+            echo "::notice::没配 RELEASE_LLM_BASE_URL、RELEASE_LLM_MODEL、RELEASE_LLM_API_KEY，跳过查重"
+            exit 0
+          fi
+          flags=()
+          if [ "$COMMENT" != true ]; then flags=(--no-comment); fi
+          python3 scripts/issue_duplicates.py "$NUMBER" "${flags[@]}"

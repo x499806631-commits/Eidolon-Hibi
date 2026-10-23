@@ -11,6 +11,7 @@ import pytest
 
 from eidolon.characters import load_characters
 from eidolon.corpus import Episode, Line
+from eidolon.data_access import Database
 from eidolon.rerank import RerankThresholds
 from eidolon.rerank_eval import (
     CalibrationError,
@@ -94,11 +95,11 @@ def world(tmp_path: Path):
     calibration = tmp_path / "calibration.toml"
     calibration.write_text(CALIBRATION, encoding="utf-8")
     characters = load_characters(config.path)
-    sources = open_reference_sources(
-        tmp_path / "eidolon.db", FakeEmbedder(), characters.values(), None
+    db = Database(tmp_path / "eidolon.db")
+    yield characters, calibration, open_reference_sources(
+        db, FakeEmbedder(), characters.values(), None
     )
-    yield characters, calibration, sources
-    sources.close()
+    asyncio.run(db.close())
 
 
 async def test_each_candidate_is_scored_and_labelled(world):
@@ -133,11 +134,9 @@ def work(world, tmp_path: Path):
     write_world(config)
     data = load_world(world_path(config.path))
     assert data is not None
-    with_work = open_reference_sources(
-        tmp_path / "eidolon.db", sources.embedder, characters.values(), data
-    )
-    yield data, with_work
-    with_work.close()
+    db = Database(tmp_path / "eidolon.db")
+    yield data, open_reference_sources(db, sources.embedder, characters.values(), data)
+    asyncio.run(db.close())
 
 
 def with_work_case(calibration: Path, data: World):

@@ -26,17 +26,17 @@ def add_diary_routes(app: FastAPI, backend: Backend) -> None:
     diary = backend.diary
 
     @app.get("/api/diary")
-    def list_diary(user_id: UserId) -> list[dict]:
-        return diary.entries(user_id)
+    async def list_diary(user_id: UserId) -> list[dict]:
+        return await diary.entries(user_id)
 
     @app.get("/api/diary/unread")
-    def unread_diary(user_id: UserId) -> dict:
-        return {"unread": diary.unread(user_id)}
+    async def unread_diary(user_id: UserId) -> dict:
+        return {"unread": await diary.unread(user_id)}
 
     @app.post("/api/diary/{entry_id}/read")
-    def read_entry(user_id: UserId, entry_id: int) -> dict:
+    async def read_entry(user_id: UserId, entry_id: int) -> dict:
         try:
-            return diary.read(user_id, entry_id)
+            return await diary.read(user_id, entry_id)
         except NotFound:
             raise HTTPException(404, "没有这一篇日记") from None
 
@@ -47,4 +47,4 @@ def add_diary_routes(app: FastAPI, backend: Backend) -> None:
             entry = await diary.write_now(user_id, body.character_id, body.what)
             if entry is None:
                 raise HTTPException(404, "还没有和她的对话")
-            return diary.read(user_id, entry.id)
+            return await diary.read(user_id, entry.id)

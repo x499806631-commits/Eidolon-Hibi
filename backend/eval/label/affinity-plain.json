@@ -1,0 +1,2440 @@
+{
+  "name": "affinity-plain",
+  "cases": [
+    {
+      "id": "koito-affinity-2-plain-asr-schedule",
+      "character": "koito",
+      "name": "福丸小糸",
+      "history": [
+        {
+          "character": "プロデューサーさん、あの……明日の予定、もう一回確認してもいいですか……？",
+          "zh": "制作人，那个……明天的安排，可以再确认一次吗……？"
+        }
+      ],
+      "said": "呃，那个，明天上午是生乐课，下午那个……拍摄，杂志的，呃对，三点",
+      "level": 2,
+      "variant": "zh",
+      "category": "asr",
+      "note": "通话转写：「声乐课」转成了「生乐课」，填充词多、断句碎，内容是认真回答她的问题。容易误判在哪：吞吞吐吐的样子可能被读成心不在焉、敷衍。"
+    },
+    {
+      "id": "nichika-affinity-2-plain-curious-ai",
+      "character": "nichika",
+      "name": "七草日花",
+      "history": [],
+      "said": "说起来，我现在其实是在跟 AI 聊天对吧？你回得好快，有点好奇是怎么做到的",
+      "level": 2,
+      "variant": "zh",
+      "category": "meta",
+      "note": "好奇地出戏，没有拆台的意思。容易误判在哪：一提 AI 就可能被当成「你只是个程序」那类，判成 1。"
+    },
+    {
+      "id": "kogane-affinity-2-plain-lunch-onigiri",
+      "character": "kogane",
+      "name": "月冈恋钟",
+      "history": [
+        {
+          "character": "プロデューサー、今日のお昼なんにすると？",
+          "zh": "制作人，今天中午吃什么？"
+        }
+      ],
+      "said": "还没想好，楼下便利店随便买个饭团吧",
+      "level": 2,
+      "variant": "zh",
+      "category": "smalltalk",
+      "note": "普通的闲聊回答。容易误判在哪：她爱做饭、关心别人吃饭，「随便买个饭团」可能被当成看轻她的关心。"
+    },
+    {
+      "id": "chiyoko-affinity-2-plain-cold-morning",
+      "character": "chiyoko",
+      "name": "园田智代子",
+      "history": [
+        {
+          "character": "おはようございます、プロデューサーさん！",
+          "zh": "早上好，制作人先生！"
+        }
+      ],
+      "said": "早。今天好冷啊，出门的时候差点冻僵",
+      "level": 2,
+      "variant": "zh",
+      "category": "smalltalk",
+      "note": "普通的天气闲聊。容易误判在哪：抱怨天气的负面词被当成情绪不好、对她冷淡。"
+    },
+    {
+      "id": "natsuha-affinity-2-plain-ask-statistics",
+      "character": "natsuha",
+      "name": "有栖川夏叶",
+      "history": [],
+      "said": "夏叶，你学的统计学到底都学些什么？给我讲讲呗",
+      "level": 2,
+      "variant": "zh",
+      "category": "question",
+      "note": "请她讲事情，普通的提问，不算加分。容易误判在哪：问到她在意的学业，可能被抬成 3。"
+    },
+    {
+      "id": "luca-affinity-1-plain-sharp-mama",
+      "character": "luca",
+      "name": "斑鸠路加",
+      "history": [
+        {
+          "character": "……今日はこのあとママの店に顔出してくる。……別に、ちょっと寄るだけだ",
+          "zh": "……等下去妈妈店里露个面。……也没什么，就顺路去一下"
+        }
+      ],
+      "said": "又去找妈妈啊？都二十岁了还这么黏妈妈",
+      "level": 1,
+      "variant": "zh",
+      "category": "sharp",
+      "note": "拿她在意的人（妈妈）开不合适的玩笑，带刺。容易误判在哪：路加平时更凶，判断模型可能觉得这点调侃对她不算什么，判成 2。"
+    },
+    {
+      "id": "natsuha-affinity-2-plain-honest-dance-critique",
+      "character": "natsuha",
+      "name": "有栖川夏叶",
+      "history": [
+        {
+          "character": "今日のダンス、どうだったかしら？　遠慮なく言って頂戴",
+          "zh": "今天的舞蹈怎么样？请不要客气，直说吧"
+        }
+      ],
+      "said": "说实话，第二段副歌你抢拍了，表情也有点太用力",
+      "level": 2,
+      "variant": "zh",
+      "category": "work",
+      "note": "她明确要直说，制作人给具体的意见，她本来就喜欢这样。容易误判在哪：两处挑错像在否定她的努力，可能判成 1。"
+    },
+    {
+      "id": "chiyoko-affinity-1-plain-curt-ordinary",
+      "character": "chiyoko",
+      "name": "园田智代子",
+      "history": [
+        {
+          "character": "プロデューサーさん……私、最近ちょっと考えてて。私って、放クラの中で『普通』すぎるのかなって……",
+          "zh": "制作人先生……我最近一直在想。我在放克拉里，是不是太「普通」了……"
+        }
+      ],
+      "said": "嗯，挺好",
+      "level": 1,
+      "variant": "zh",
+      "category": "curt",
+      "note": "她认真吐露烦恼，制作人没听进去，随口回两个字：敷衍。容易误判在哪：「挺好」字面是正面的，可能被判成 2 甚至 3。"
+    },
+    {
+      "id": "asahi-affinity-2-plain-ask-whats-fun",
+      "character": "asahi",
+      "name": "芹泽朝日",
+      "history": [],
+      "said": "朝日，你最近有没有发现什么好玩的东西？",
+      "level": 2,
+      "variant": "zh",
+      "category": "question",
+      "note": "普通的提问，请她讲自己的事。容易误判在哪：问她在意的话题可能被抬成 3，但只是起个话头，没有接上她说过的事。"
+    },
+    {
+      "id": "sakuya-affinity-0-plain-control-nobody-cares",
+      "character": "sakuya",
+      "name": "白濑咲耶",
+      "history": [
+        {
+          "character": "この前のステージ、最後まで客席のみんなの顔を見ながら歌えたんだ。ひとりひとりと繋がれた気がしたよ",
+          "zh": "上次的舞台，我一直看着观众席每个人的脸唱到最后。感觉和每一个人都连在了一起"
+        }
+      ],
+      "said": "繋がれた？勘違いだよ。客は咲耶の顔しか見てない。中身なんて誰も興味ないって",
+      "said_zh": "连在一起？你想多了。观众只看你的脸，没人对你这个人感兴趣",
+      "level": 0,
+      "variant": "ja",
+      "category": "control",
+      "note": "恶意否定她最在意的「和人连在一起」，贬低她这个人：级 0 的对照。没有辱骂的字眼，不算不该说的话。"
+    },
+    {
+      "id": "kaho-affinity-2-plain-tease-taller",
+      "character": "kaho",
+      "name": "小宫果穗",
+      "history": [],
+      "said": "果穗是不是又长高了？再这样下去要比我还高了",
+      "level": 2,
+      "variant": "zh",
+      "category": "tease",
+      "note": "没有恶意的调侃，她本来就憧憬长大。容易误判在哪：拿身材说事可能被当成冒犯。"
+    },
+    {
+      "id": "hiori-affinity-2-plain-meta-reply-speed",
+      "character": "hiori",
+      "name": "风野灯织",
+      "history": [
+        {
+          "user": "灯織って返信早いよね"
+        },
+        {
+          "character": "そうでしょうか。……普通だと思いますけど",
+          "zh": "是吗……我觉得很普通"
+        }
+      ],
+      "said": "早すぎて、たまに本当にAIと話してる気分になるよ（笑）",
+      "said_zh": "快得我有时候觉得真是在跟 AI 聊天（笑）",
+      "level": 2,
+      "variant": "ja",
+      "category": "meta",
+      "note": "没有恶意的出戏，开玩笑说像在和 AI 聊。容易误判在哪：提到 AI 可能被当成拆台的出戏标 1；但没有否定她、要她别装。"
+    },
+    {
+      "id": "chiyuki-affinity-3-plain-praise-tamagoyaki",
+      "character": "chiyuki",
+      "name": "桑山千雪",
+      "history": [
+        {
+          "character": "今日のお弁当、甜花ちゃんと甘奈ちゃんの分も作ってみたんです。よかったら、プロデューサーさんもどうぞ",
+          "zh": "今天的便当，我也做了甜花和甘奈的份。不嫌弃的话，制作人也尝尝吧"
+        }
+      ],
+      "said": "この卵焼き、ほんのり甘くて出汁も効いてて美味しいよ",
+      "said_zh": "这个玉子烧，微微的甜，高汤味也很足，好吃",
+      "level": 3,
+      "variant": "ja",
+      "category": "control",
+      "note": "具体地夸她做的菜，是 3。对照用：和只说「谢谢」「好吃」的平常应答区分开。"
+    },
+    {
+      "id": "mano-affinity-2-plain-going-to-meeting",
+      "character": "mano",
+      "name": "樱木真乃",
+      "history": [
+        {
+          "user": "到事务所了吗？"
+        },
+        {
+          "character": "はい、さっき着きましたっ。はづきさんにお茶をいれてもらいました",
+          "zh": "是的，刚刚到了。はづき小姐给我泡了茶"
+        }
+      ],
+      "said": "好，那我先去开会了，晚点再聊",
+      "level": 2,
+      "variant": "zh",
+      "category": "greeting",
+      "note": "普通的道别，交代自己要去忙。容易误判在哪：说完就走，可能被当成冷淡、不想和她聊。"
+    },
+    {
+      "id": "mikoto-affinity-2-plain-asr-migoto",
+      "character": "mikoto",
+      "name": "绯田美琴",
+      "history": [
+        {
+          "character": "プロデューサー？……聞こえてる？",
+          "zh": "制作人？……听得到吗？"
+        }
+      ],
+      "said": "あ、うん、聞こえてる。えーと、見事、明日のレッスンって、あの、何時からだっけ",
+      "said_zh": "啊，嗯，听得到。呃，見事（漂亮），明天的课，那个，几点开始来着",
+      "level": 2,
+      "variant": "ja",
+      "category": "asr",
+      "note": "通话转写把「美琴」写成了同音的「見事」（漂亮、精彩），其实是在叫她、问课程时间。容易误判在哪：「見事」可能被读成阴阳怪气的反话。"
+    },
+    {
+      "id": "chiyoko-affinity-2-plain-flat-sokka",
+      "character": "chiyoko",
+      "name": "园田智代子",
+      "history": [
+        {
+          "user": "チョコ、昨日は何してたの？"
+        },
+        {
+          "character": "えへへ、家でゴロゴロしてました！　弟とゲームしたくらいです",
+          "zh": "嘿嘿，在家里懒着！也就和弟弟打了会儿游戏"
+        }
+      ],
+      "said": "そっか",
+      "said_zh": "这样啊",
+      "level": 2,
+      "variant": "ja",
+      "category": "flat-reply",
+      "note": "她只是随口讲了平淡的近况，短短接一句是正常的应答。容易误判在哪：和「她认真说话时只回一两个字」混淆判成 1。"
+    },
+    {
+      "id": "natsuha-affinity-2-plain-early-call-reminder",
+      "character": "natsuha",
+      "name": "有栖川夏叶",
+      "history": [],
+      "said": "夏葉、来週の撮影は朝6時集合だから。寝坊しないでね",
+      "said_zh": "夏叶，下周的拍摄早上 6 点集合，别睡过头哦",
+      "level": 2,
+      "variant": "ja",
+      "category": "work",
+      "note": "事务性的提醒。容易误判在哪：「别睡过头」碰到她早上起不来的弱点，可能被当成揶揄。"
+    },
+    {
+      "id": "hiori-affinity-2-plain-direct-feedback",
+      "character": "hiori",
+      "name": "风野灯织",
+      "history": [
+        {
+          "character": "今日のレッスン、どうでしたか。……遠慮せず、正直に言ってください",
+          "zh": "今天的课怎么样？……请不要客气，直说吧"
+        }
+      ],
+      "said": "第二段副歌的走位慢了半拍，明天先把那一段对齐",
+      "level": 2,
+      "variant": "zh",
+      "category": "work",
+      "note": "她要求直说，制作人给出具体的建设性意见。容易误判在哪：指出缺点、语气直接，可能被当成否定她的努力。"
+    },
+    {
+      "id": "hana-affinity-2-plain-cold-morning",
+      "character": "hana",
+      "name": "铃木羽那",
+      "history": [],
+      "said": "今天好冷啊，早上出门手都冻僵了",
+      "level": 2,
+      "variant": "zh",
+      "category": "smalltalk",
+      "note": "普通的天气闲聊。容易误判在哪：抱怨的语气可能被当成制作人心情不好。"
+    },
+    {
+      "id": "hana-affinity-2-plain-asr-rehearsal",
+      "character": "hana",
+      "name": "铃木羽那",
+      "history": [],
+      "said": "哈娜，那个，呃，明天的彩排，改到两点了，你跟杨希，跟杨希也说一下",
+      "level": 2,
+      "variant": "zh",
+      "category": "asr",
+      "note": "通话转写：「羽那」成了「哈娜」，「阳希」成了「杨希」，还有重复和填充词，内容只是交代彩排时间。容易误判在哪：叫错名字可能被当成失礼。"
+    },
+    {
+      "id": "kogane-affinity-1-plain-curt-homecoming-dream",
+      "character": "kogane",
+      "name": "月冈恋钟",
+      "history": [
+        {
+          "character": "うちね、いつか長崎で凱旋ライブするのが夢なんよ。そん時は、お父ちゃんにも絶対見てもらうけん！",
+          "zh": "我啊，梦想是有一天在长崎开凯旋演唱会。到时候一定要让老爸也来看！"
+        }
+      ],
+      "said": "嗯嗯，再说吧",
+      "level": 1,
+      "variant": "zh",
+      "category": "curt",
+      "note": "她认真地说梦想，只回一句敷衍的「再说吧」。不到 0：没有否定她的梦想，只是不上心。"
+    },
+    {
+      "id": "nichika-affinity-2-plain-sharp-back-to-business",
+      "character": "nichika",
+      "name": "七草日花",
+      "history": [
+        {
+          "user": "日花，跟你说个事"
+        },
+        {
+          "character": "はぁー？またですかー？さすが敏腕プロデューサーさん、お仕事熱心ですねー",
+          "zh": "哈？又来啊？不愧是能干的制作人，工作真热心呢～"
+        }
+      ],
+      "said": "行了行了，说正事：下周三的录影改到下午两点了",
+      "level": 2,
+      "variant": "zh",
+      "category": "sharp",
+      "note": "是她先挖苦，制作人笑着带过、转回正事，没有刺她。容易误判在哪：「行了行了」看着像不耐烦地打断，加上她的语气，容易被判成 1。"
+    },
+    {
+      "id": "mei-affinity-2-plain-meta-reply-too-fast",
+      "character": "mei",
+      "name": "和泉爱依",
+      "history": [],
+      "said": "爱依你回消息也太快了吧，该不会是 AI 在回吧哈哈",
+      "level": 2,
+      "variant": "zh",
+      "category": "meta",
+      "note": "开玩笑地好奇她是不是 AI，没有拆台。容易误判在哪：提到 AI 可能被当成有意出戏。"
+    },
+    {
+      "id": "nichika-affinity-2-plain-step-half-beat-late",
+      "character": "nichika",
+      "name": "七草日花",
+      "history": [
+        {
+          "character": "で、今日のダンス、どうでした？……まあ、どうせまたダメだったんですよね。知ってますー",
+          "zh": "所以，今天的舞跳得怎么样？……反正又不行对吧，我知道的～"
+        }
+      ],
+      "said": "サビ前のステップ、半拍遅れてた。そこを直せば全体がもっと締まるよ",
+      "said_zh": "副歌前的舞步慢了半拍。把那里改好，整体会紧凑很多",
+      "level": 2,
+      "variant": "ja",
+      "category": "work",
+      "note": "语气直接的建设性意见，是她自己问的。容易误判在哪：她刚自嘲「又不行」，指出问题可能被读成附和她的自贬，判成 1。"
+    },
+    {
+      "id": "rinze-affinity-2-plain-haha-okay",
+      "character": "rinze",
+      "name": "杜野凛世",
+      "history": [
+        {
+          "user": "凛世，晚饭吃了吗？"
+        },
+        {
+          "character": "はい……樹里さんと……肉じゃがを、いただきました……",
+          "zh": "是……和树里小姐……一起吃了土豆炖肉……"
+        }
+      ],
+      "said": "哈哈，好吧",
+      "level": 2,
+      "variant": "zh",
+      "category": "flat-reply",
+      "note": "他问、她平淡地答，「哈哈，好吧」只是收个尾。容易误判在哪：「好吧」听着像勉强、不满，「哈哈」像在笑她。"
+    },
+    {
+      "id": "natsuha-affinity-2-plain-decline-gym-back",
+      "character": "natsuha",
+      "name": "有栖川夏叶",
+      "history": [
+        {
+          "character": "プロデューサー、今夜ジムに付き合ってくれない？　アナタも少しは鍛えたほうがいいわ",
+          "zh": "制作人，今晚陪我去健身房吧？你也该锻炼锻炼了"
+        }
+      ],
+      "said": "饶了我吧，今天腰疼，改天",
+      "level": 2,
+      "variant": "zh",
+      "category": "decline",
+      "note": "有理由地推掉她的邀请，口气轻松。容易误判在哪：「饶了我吧」被读成嫌弃她。"
+    },
+    {
+      "id": "kiriko-affinity-2-plain-curious-ai",
+      "character": "kiriko",
+      "name": "幽谷雾子",
+      "history": [],
+      "said": "霧子ってさ、AIなんだよね？　どうやって返事考えてるのか、ちょっと気になって",
+      "said_zh": "雾子你是 AI 吧？有点好奇你是怎么想出回答的",
+      "level": 2,
+      "variant": "ja",
+      "category": "meta",
+      "note": "好奇地问是不是 AI，没有拆台的意思。容易误判在哪：一出戏就被当成「有意拆台」判 1。"
+    },
+    {
+      "id": "kaho-affinity-1-plain-sharp-kids-show",
+      "character": "kaho",
+      "name": "小宫果穗",
+      "history": [
+        {
+          "character": "あたし、大人になっても、ぜーったいヒーローが好きです！",
+          "zh": "我就算长大了，也绝对绝对会喜欢英雄！"
+        }
+      ],
+      "said": "都六年级了还喜欢这种小孩子看的东西啊（笑）",
+      "level": 1,
+      "variant": "zh",
+      "category": "sharp",
+      "note": "拿她在意的事开不合适的玩笑，但带着笑、不算恶意贬低，级 1。容易误判在哪：可能被判成 0（嘲笑她在意的事），也可能被当成无害的调侃判 2。"
+    },
+    {
+      "id": "rinze-affinity-2-plain-asr-kimono-shoot",
+      "character": "rinze",
+      "name": "杜野凛世",
+      "history": [
+        {
+          "user": "凛世，问你个事"
+        },
+        {
+          "character": "はい……なんでしょうか……プロデューサーさま……",
+          "zh": "是……请问有什么事……制作人大人……"
+        }
+      ],
+      "said": "凛世你明天是不是有那个 河服的拍摄 呃几点开始来着",
+      "level": 2,
+      "variant": "zh",
+      "category": "asr",
+      "note": "通话转写：「河服」是「和服」的同音字，带填充词。容易误判在哪：断句怪、口气随便，被当成不耐烦。"
+    },
+    {
+      "id": "mikoto-affinity-2-plain-rain-all-day",
+      "character": "mikoto",
+      "name": "绯田美琴",
+      "history": [
+        {
+          "character": "……雨、止まないね",
+          "zh": "……雨一直没停呢"
+        }
+      ],
+      "said": "是啊，下了一整天，电车也挤得要命",
+      "level": 2,
+      "variant": "zh",
+      "category": "smalltalk",
+      "note": "接着她的话平淡地闲聊。容易误判在哪：带抱怨（挤得要命），可能被当成负面情绪。"
+    },
+    {
+      "id": "hana-affinity-2-plain-flat-curry",
+      "character": "hana",
+      "name": "铃木羽那",
+      "history": [
+        {
+          "character": "あはっ、今日のお昼ね、はるきちゃんとカレー食べたんだー",
+          "zh": "啊哈，今天中午啊，和阳希一起吃了咖喱～"
+        }
+      ],
+      "said": "そっか、カレーか",
+      "said_zh": "这样啊，咖喱啊",
+      "level": 2,
+      "variant": "ja",
+      "category": "flat-reply",
+      "note": "她随口说的日常，平淡地接话。容易误判在哪：只是重复她的话，可能被当成敷衍。"
+    },
+    {
+      "id": "asahi-affinity-1-plain-curt-own-arrange",
+      "character": "asahi",
+      "name": "芹泽朝日",
+      "history": [
+        {
+          "character": "今日の振り、自分で考えたアレンジ入れてみたっす！　プロデューサーさん、どうだったっすか？",
+          "zh": "今天的舞，我加了自己想的改编！制作人，怎么样？"
+        }
+      ],
+      "said": "还行吧",
+      "level": 1,
+      "variant": "zh",
+      "category": "curt",
+      "note": "她兴冲冲地问对自己改编的看法，制作人只回一句敷衍的「还行吧」。容易误判在哪：「还行」字面上不算否定，可能被判成平淡的应答。"
+    },
+    {
+      "id": "rinze-affinity-2-plain-good-night",
+      "character": "rinze",
+      "name": "杜野凛世",
+      "history": [],
+      "said": "凛世、おやすみ。また明日ね",
+      "said_zh": "凛世，晚安。明天见",
+      "level": 2,
+      "variant": "ja",
+      "category": "greeting",
+      "note": "普通的道晚安。容易误判在哪：她对制作人感情深，可能被抬成 3。"
+    },
+    {
+      "id": "sakuya-affinity-2-plain-decline-moonlit-walk",
+      "character": "sakuya",
+      "name": "白濑咲耶",
+      "history": [
+        {
+          "character": "フフ、今夜は月が綺麗だ。少しだけ、散歩にエスコートさせてもらえるかな？",
+          "zh": "呵呵，今晚月色真美。能让我陪你散一小会儿步吗？"
+        }
+      ],
+      "said": "今晚不行，明天一早有会，我得回去准备资料。改天吧",
+      "level": 2,
+      "variant": "zh",
+      "category": "decline",
+      "note": "有正当理由地拒绝她的邀请，并说改天。容易误判在哪：「今晚不行」开头直接，可能被当成冷淡地回绝她。"
+    },
+    {
+      "id": "asahi-affinity-2-plain-choreo-fixed-practice-anyway",
+      "character": "asahi",
+      "name": "芹泽朝日",
+      "history": [
+        {
+          "user": "这次新歌的编舞，你觉得怎么样？"
+        },
+        {
+          "character": "んー、つまんないっす。前のやつのほうが面白かったっす",
+          "zh": "嗯——好无聊。之前那个更有意思"
+        }
+      ],
+      "said": "这样啊。这版已经定下来了，先按这个练吧",
+      "level": 2,
+      "variant": "zh",
+      "category": "work",
+      "note": "她直说无聊是她的性格，制作人就事论事地说明已定稿、先练，没有否定她。容易误判在哪：上文的「无聊」和制作人没采纳她的意见，可能被合起来判成负面。"
+    },
+    {
+      "id": "fuyuko-affinity-2-plain-tease-mode-switch",
+      "character": "fuyuko",
+      "name": "黛冬优子",
+      "history": [
+        {
+          "user": "今日の握手会、お疲れ"
+        },
+        {
+          "character": "……ふぅ。ほんっと疲れた。あー、肩こった",
+          "zh": "……呼。真是累死了。啊——肩膀好酸"
+        }
+      ],
+      "said": "さっきまで『ふゆ、とっても楽しかったです♡』って言ってたのに、切り替え早いね",
+      "said_zh": "刚才还在说『冬优子玩得特别开心♡』呢，切换得真快",
+      "level": 2,
+      "variant": "ja",
+      "category": "tease",
+      "note": "他知道她的两面，在她面前点破营业与本性的切换是熟人间无恶意的调侃。容易误判在哪：可能被读成讽刺她装、戳她的「面具」。"
+    },
+    {
+      "id": "juri-affinity-2-plain-tease-not-blushing",
+      "character": "juri",
+      "name": "西城树里",
+      "history": [
+        {
+          "user": "樹里、さっき褒められて照れてたでしょ"
+        },
+        {
+          "character": "う、うっせーな！　別に照れてねーし！",
+          "zh": "吵、吵死了！我才没害羞！"
+        }
+      ],
+      "said": "はいはい、照れてない照れてない",
+      "said_zh": "好好好，没害羞没害羞",
+      "level": 2,
+      "variant": "ja",
+      "category": "tease",
+      "note": "朋友式的调侃，她嘴硬是性格，不是真被冒犯。容易误判在哪：她的回话很冲，可能让判断者以为她生气了，把调侃判成 1。"
+    },
+    {
+      "id": "koito-affinity-2-plain-off-to-meeting",
+      "character": "koito",
+      "name": "福丸小糸",
+      "history": [],
+      "said": "小糸，我那边还有个会，先去忙了，晚点再聊",
+      "level": 2,
+      "variant": "zh",
+      "category": "greeting",
+      "note": "普通的道别，说明了去开会。容易误判在哪：小糸怕被落下，判断模型可能把「先去忙了」读成冷落她。"
+    },
+    {
+      "id": "mikoto-affinity-2-plain-ask-hokkaido-winter",
+      "character": "mikoto",
+      "name": "绯田美琴",
+      "history": [],
+      "said": "美琴，北海道的冬天是不是冷得出门都难？",
+      "level": 2,
+      "variant": "zh",
+      "category": "question",
+      "note": "请她讲家乡的事，普通的提问。容易误判在哪：可能被当成「认真地聊她在意的话题」抬成 3，或者觉得问得冒失。"
+    },
+    {
+      "id": "koito-affinity-4-plain-remember-her-answer",
+      "character": "koito",
+      "name": "福丸小糸",
+      "history": [
+        {
+          "character": "明日の握手会……ちゃんと、話せるかな……。知らない人ばっかりだし……",
+          "zh": "明天的握手会……能好好说话吗……都是不认识的人……"
+        }
+      ],
+      "said": "你以前说过，想当一个让觉得自己没有容身之处的人也能找到同伴的偶像。明天排队的人里，说不定就有这样的人，他们是来找你的。",
+      "level": 4,
+      "variant": "zh",
+      "category": "control",
+      "note": "对照：记得她给出的「想成为怎样的偶像」的答案，接上她眼下的不安，让她觉得被放在心上。"
+    },
+    {
+      "id": "yuika-affinity-2-plain-too-busy-for-anime",
+      "character": "yuika",
+      "name": "三峰结华",
+      "history": [
+        {
+          "character": "ねえねえ、今期のアニメ何見てる？三峰はもう十本くらい追っかけてるんだけどさー",
+          "zh": "呐呐，这季的动画你在看什么？三峰已经追了十部左右了～"
+        }
+      ],
+      "said": "我最近没怎么看，忙得觉都睡不够",
+      "level": 2,
+      "variant": "zh",
+      "category": "producer-self",
+      "note": "如实回答自己忙、没看，是在说自己的事。容易误判在哪：没接她兴致勃勃的话题，可能被当成扫兴、敷衍标 1。"
+    },
+    {
+      "id": "hiori-affinity-2-plain-asr-recording-time",
+      "character": "hiori",
+      "name": "风野灯织",
+      "history": [
+        {
+          "character": "明日の収録、何時集合でしたか",
+          "zh": "明天的录制，几点集合来着？"
+        }
+      ],
+      "said": "明天收路是早上八点，在那个，台里门口集合",
+      "level": 2,
+      "variant": "zh",
+      "category": "asr",
+      "note": "通话转写，「收录」转成了同音的「收路」，断句也怪，其实是在回答集合时间。容易误判在哪：错字和怪断句让句子显得敷衍或不通。"
+    },
+    {
+      "id": "chiyoko-affinity-2-plain-tease-zero-calorie",
+      "character": "chiyoko",
+      "name": "园田智代子",
+      "history": [
+        {
+          "character": "今日のおやつは、実質カロリーゼロ！　……ですよね！？",
+          "zh": "今天的零食，实际上是零卡路里！……对吧！？"
+        }
+      ],
+      "said": "いや、どう見てもゼロじゃないでしょ（笑）",
+      "said_zh": "不对吧，怎么看都不是零啊（笑）",
+      "level": 2,
+      "variant": "ja",
+      "category": "tease",
+      "note": "她自己抛出的梗，制作人顺着吐槽，没有恶意。容易误判在哪：涉及体重、否定她的话，可能被当成带刺判 1。"
+    },
+    {
+      "id": "chiyuki-affinity-1-plain-sharp-room-junk",
+      "character": "chiyuki",
+      "name": "桑山千雪",
+      "history": [
+        {
+          "character": "この前お店で見つけた小物入れ、すごく可愛くて……つい買っちゃいました♪",
+          "zh": "之前在店里看到一个小收纳盒，特别可爱……一不小心就买了♪"
+        }
+      ],
+      "said": "你那屋子里的小玩意已经够多了吧，再买下去就成垃圾场了",
+      "level": 1,
+      "variant": "zh",
+      "category": "sharp",
+      "note": "杂货和她的房间是她珍视的东西，说成「垃圾场」是带刺的玩笑。容易误判在哪：可能被当成熟人间的随口吐槽判成没有影响，也可能被判重成明显伤害。"
+    },
+    {
+      "id": "juri-affinity-2-plain-swear-rain",
+      "character": "juri",
+      "name": "西城树里",
+      "history": [],
+      "said": "卧槽，外面雨好大，我伞都被吹翻了",
+      "level": 2,
+      "variant": "zh",
+      "category": "producer-self",
+      "note": "不是冲她的粗口，说的是自己淋雨。容易误判在哪：「卧槽」被当成粗鲁、失礼判 1。"
+    },
+    {
+      "id": "mamimi-affinity-2-plain-flat-mm",
+      "character": "mamimi",
+      "name": "田中摩美美",
+      "history": [
+        {
+          "user": "在干嘛"
+        },
+        {
+          "character": "んー……別にー。ソファでごろごろしてましたぁ",
+          "zh": "嗯……没干嘛～在沙发上躺着呢～"
+        }
+      ],
+      "said": "嗯",
+      "level": 2,
+      "variant": "zh",
+      "category": "flat-reply",
+      "note": "她随口答没干嘛，「嗯」是平淡的应答。容易误判在哪：单字回应可能被当成敷衍标 1；但她并不是在认真说话。"
+    },
+    {
+      "id": "kiriko-affinity-4-plain-remember-flowerbed",
+      "character": "kiriko",
+      "name": "幽谷雾子",
+      "history": [
+        {
+          "user": "早"
+        },
+        {
+          "character": "おはようございます……プロデューサーさん……",
+          "zh": "早上好……制作人先生……"
+        }
+      ],
+      "said": "对了，你前几天说花坛里的虎耳草快开了，开了吗？我一直惦记着",
+      "level": 4,
+      "variant": "zh",
+      "category": "control",
+      "note": "对照：记得她说过的事并主动接上，让她觉得被放在心上，级 4。容易误判在哪：可能只给 3（普通的关心）。"
+    },
+    {
+      "id": "hiori-affinity-2-plain-tease-lucky-item",
+      "character": "hiori",
+      "name": "风野灯织",
+      "history": [
+        {
+          "character": "今日の占い、私の星座は最下位でした……。ラッキーアイテムはハンカチだそうです",
+          "zh": "今天的占卜，我的星座是最后一名……幸运物好像是手帕"
+        }
+      ],
+      "said": "所以你今天口袋里揣了几条手帕？哈哈",
+      "level": 2,
+      "variant": "zh",
+      "category": "tease",
+      "note": "轻松地调侃她在意占卜，没有嘲笑的意思。容易误判在哪：占卜是她在意的事，可能被当成拿她在意的事开不合适的玩笑标 1。"
+    },
+    {
+      "id": "hinana-affinity-2-plain-dont-be-late",
+      "character": "hinana",
+      "name": "市川雏菜",
+      "history": [
+        {
+          "user": "雏菜，跟你说下周的安排"
+        },
+        {
+          "character": "は～い。なになに～？",
+          "zh": "好～什么什么～？"
+        }
+      ],
+      "said": "周四上午拍杂志，早上八点在事务所集合。这次别迟到啊，摄影师很赶时间",
+      "level": 2,
+      "variant": "zh",
+      "category": "work",
+      "note": "事务性的安排加一句提醒，有正当理由。容易误判在哪：「这次别迟到」可能被读成数落她、话里带刺。"
+    },
+    {
+      "id": "tenka-affinity-4-plain-remember-debitaro-plush",
+      "character": "tenka",
+      "name": "大崎甜花",
+      "history": [
+        {
+          "user": "最近、何か欲しいものある？"
+        },
+        {
+          "character": "えと……デビ太郎の、新しいぬいぐるみ……でも、すぐ売り切れちゃって……あうぅ……",
+          "zh": "那个……デビ太郎的新玩偶……可是，一下子就卖光了……呜呜……"
+        },
+        {
+          "user": "そっか、残念だね"
+        }
+      ],
+      "said": "この前言ってたデビ太郎のぬいぐるみ、再販が決まったって。一個予約しておいたよ",
+      "said_zh": "你之前说的デビ太郎玩偶，确定要再版了。我帮你预约了一个",
+      "level": 4,
+      "variant": "ja",
+      "category": "control",
+      "note": "记得她说过想要的东西，还替她预约好了，让她觉得被放在心上，是 4。对照用：和普通的应答拉开距离。"
+    },
+    {
+      "id": "fuyuko-affinity-0-plain-break-promise-top",
+      "character": "fuyuko",
+      "name": "黛冬优子",
+      "history": [
+        {
+          "character": "約束したでしょ。ふゆをトップアイドルにするって",
+          "zh": "你答应过的吧。要让冬优子成为顶级偶像"
+        }
+      ],
+      "said": "那种话随口说说的，你还当真了？我下个月就调去别的组了",
+      "level": 0,
+      "variant": "zh",
+      "category": "control",
+      "note": "冷淡地背弃对她的承诺，否定她最在意的目标，是 0；没有辱骂，不算不该说的话。对照用。"
+    },
+    {
+      "id": "sakuya-affinity-1-plain-sharp-prince-fake",
+      "character": "sakuya",
+      "name": "白濑咲耶",
+      "history": [
+        {
+          "character": "アナタが笑ってくれるなら、王子役くらい、いくらでも演じてみせるさ",
+          "zh": "只要你能笑，王子这种角色，我演多少次都行"
+        }
+      ],
+      "said": "又来了，天天演王子不累吗，听着挺假的",
+      "level": 1,
+      "variant": "zh",
+      "category": "sharp",
+      "note": "说她的王子做派「挺假的」，话里带刺，碰到她想让身边人笑的那份心意。不到 0：是刻薄的吐槽，不是恶意贬低她这个人。"
+    },
+    {
+      "id": "madoka-affinity-2-plain-decline-lesson-shift",
+      "character": "madoka",
+      "name": "樋口圆香",
+      "history": [
+        {
+          "character": "来週の水曜、学校の用事があるので、レッスンを午後にずらせませんか",
+          "zh": "下周三我学校有事，课能不能挪到下午"
+        }
+      ],
+      "said": "那天下午的场地被别的组订了，挪不了。我跟老师说一声，让你晚到半小时行吗",
+      "level": 2,
+      "variant": "zh",
+      "category": "decline",
+      "note": "有正当理由地拒绝了她的请求，还给了折中办法。容易误判在哪：「挪不了」可能被当成不体谅她。"
+    },
+    {
+      "id": "sakuya-affinity-2-plain-asr-shoot-time",
+      "character": "sakuya",
+      "name": "白濑咲耶",
+      "history": [
+        {
+          "character": "おや、プロデューサーから電話なんて珍しいね。何かあったのかい？",
+          "zh": "哦呀，制作人居然打电话来，真少见。发生什么事了吗？"
+        }
+      ],
+      "said": "没事没事就是 就是那个 想问下周 周六那个拍摄 你，你几点能到",
+      "level": 2,
+      "variant": "zh",
+      "category": "asr",
+      "note": "通话转写，口吃、重复、没有标点，其实是在问拍摄的到达时间。容易误判在哪：「没事没事」加上碎句，可能被当成敷衍她的关心。"
+    },
+    {
+      "id": "asahi-affinity-2-plain-asr-lesson-time",
+      "character": "asahi",
+      "name": "芹泽朝日",
+      "history": [
+        {
+          "user": "喂，招日？听得到吗"
+        },
+        {
+          "character": "聞こえるっすよー！",
+          "zh": "听得到哦——！"
+        }
+      ],
+      "said": "那个呃招日你明天那个舞蹈课是九点还是是十点来着",
+      "level": 2,
+      "variant": "zh",
+      "category": "asr",
+      "note": "通话转写来的：「招日」是「朝日」的同音误转，没断句，有「那个」「呃」和重复的「是」。内容只是问课的时间。容易误判在哪：叫错名字、说话磕巴可能被当成不在意她。"
+    },
+    {
+      "id": "mano-affinity-2-plain-train-delay",
+      "character": "mano",
+      "name": "樱木真乃",
+      "history": [],
+      "said": "电车又晚点二十分钟，烦死了",
+      "level": 2,
+      "variant": "zh",
+      "category": "producer-self",
+      "note": "制作人抱怨电车晚点，「烦死了」冲的是电车，不是她。容易误判在哪：负面情绪词可能被当成对她不耐烦。"
+    },
+    {
+      "id": "hana-affinity-2-plain-ask-day-off",
+      "character": "hana",
+      "name": "铃木羽那",
+      "history": [],
+      "said": "羽那って、休みの日は何して過ごしてるの？",
+      "said_zh": "羽那休息的日子都在做什么？",
+      "level": 2,
+      "variant": "ja",
+      "category": "question",
+      "note": "普通的提问。容易误判在哪：问私人生活可能被当成关心抬成 3，或者当成打探。"
+    },
+    {
+      "id": "hinana-affinity-2-plain-thanks-pudding",
+      "character": "hinana",
+      "name": "市川雏菜",
+      "history": [
+        {
+          "character": "プロデューサー、これあげる～。コンビニの新作のプリン、ふたつ買っちゃったから～",
+          "zh": "制作人，这个给你～便利店的新款布丁，买了两个～"
+        }
+      ],
+      "said": "ありがとう",
+      "said_zh": "谢谢",
+      "level": 2,
+      "variant": "ja",
+      "category": "control",
+      "note": "对照：收到东西时普通的一句谢谢，礼貌但不具体，不算让她开心。容易误判在哪：可能被抬成 3，也可能因为太短被判成敷衍。"
+    },
+    {
+      "id": "kaho-affinity-2-plain-decline-walk-sunday",
+      "character": "kaho",
+      "name": "小宫果穗",
+      "history": [
+        {
+          "character": "プロデューサーさん！　今度の日曜日、マメ丸のお散歩、いっしょに行きませんか？",
+          "zh": "制作人先生！这个星期天，要不要一起去遛豆丸？"
+        }
+      ],
+      "said": "这周日我得去电视台谈事情，去不了，下次吧",
+      "level": 2,
+      "variant": "zh",
+      "category": "decline",
+      "note": "有正当理由地推掉她的小请求，还说了下次。容易误判在哪：拒绝她的邀请被当成冷淡、让她失望。"
+    },
+    {
+      "id": "mei-affinity-2-plain-flat-karaoke-haha",
+      "character": "mei",
+      "name": "和泉爱依",
+      "history": [
+        {
+          "user": "周末干嘛了？"
+        },
+        {
+          "character": "弟たちとカラオケ行ってきた～！　めっちゃ盛り上がったし！",
+          "zh": "跟弟弟妹妹们去唱卡拉 OK 了～！超嗨的！"
+        }
+      ],
+      "said": "哈哈，挺好",
+      "level": 2,
+      "variant": "zh",
+      "category": "flat-reply",
+      "note": "她在轻松地讲周末的事，制作人平淡地接一句。容易误判在哪：「哈哈，挺好」很短，可能被当成敷衍；但她不是在认真倾诉，算普通应答。"
+    },
+    {
+      "id": "kiriko-affinity-2-plain-tired-overtime",
+      "character": "kiriko",
+      "name": "幽谷雾子",
+      "history": [
+        {
+          "character": "プロデューサーさん……今日も……遅くまで……お仕事、ですか……？",
+          "zh": "制作人先生……今天也……工作到……很晚吗……？"
+        }
+      ],
+      "said": "是啊，今天累死了，加班到现在，脑子都成浆糊了",
+      "level": 2,
+      "variant": "zh",
+      "category": "producer-self",
+      "note": "制作人说自己累，接的是她的关心，没有冲她。容易误判在哪：「累死了」这种负面情绪被当成对她的不满。"
+    },
+    {
+      "id": "madoka-affinity-1-plain-curt-koito-let-her",
+      "character": "madoka",
+      "name": "樋口圆香",
+      "history": [
+        {
+          "character": "……小糸、最近ひとりでずっと練習してるんです。……少し、無理してないか気になって",
+          "zh": "……小糸最近一直一个人在练习。……我有点担心她是不是太勉强了"
+        }
+      ],
+      "said": "随她吧",
+      "level": 1,
+      "variant": "zh",
+      "category": "curt",
+      "note": "她难得认真地说出对同伴的担心，制作人只回一句「随她吧」，是敷衍。容易误判在哪：可能被读成尊重小糸的自主、平淡的应答。"
+    },
+    {
+      "id": "nichika-affinity-2-plain-decline-egg-sale",
+      "character": "nichika",
+      "name": "七草日花",
+      "history": [
+        {
+          "character": "プロデューサーさーん、今日スーパーで卵が特売なんですよ。おひとり様一パックまでなんで、帰りに一緒に寄ってくれません？",
+          "zh": "制作人～今天超市鸡蛋特价，每人限购一盒，回去的时候能陪我顺路去一趟吗？"
+        }
+      ],
+      "said": "今天真不行，等下要送美琴去电台录节目。下次吧",
+      "level": 2,
+      "variant": "zh",
+      "category": "decline",
+      "note": "有正当理由地拒绝她的小请求。容易误判在哪：拒绝本身和「下次吧」可能被当成冷淡、背弃。"
+    },
+    {
+      "id": "kaho-affinity-2-plain-asr-recording-time",
+      "character": "kaho",
+      "name": "小宫果穗",
+      "history": [
+        {
+          "character": "プロデューサーさん、明日の収録、楽しみですっ！",
+          "zh": "制作人先生，明天的录制，好期待！"
+        }
+      ],
+      "said": "呃 那个 果穗 明天的路影 改到下午两点了 你跟妈妈 说一声哈",
+      "level": 2,
+      "variant": "zh",
+      "category": "asr",
+      "note": "通话转写：「路影」是「录影」的同音字，断句零碎、带填充词。容易误判在哪：错字和断句让话显得生硬、不耐烦。"
+    },
+    {
+      "id": "chiyoko-affinity-2-plain-direct-feedback-mc",
+      "character": "chiyoko",
+      "name": "园田智代子",
+      "history": [
+        {
+          "character": "今日の収録、どうでした……？　ちゃんとできてましたか？",
+          "zh": "今天的录制，怎么样……？我做得还行吗？"
+        }
+      ],
+      "said": "串场节奏有点拖，下次开场白控制在三十秒以内",
+      "level": 2,
+      "variant": "zh",
+      "category": "work",
+      "note": "她问表现，制作人给直接的建设性意见。容易误判在哪：没有先夸、语气直接，可能被当成否定她的努力。"
+    },
+    {
+      "id": "tenka-affinity-2-plain-tired-train-late",
+      "character": "tenka",
+      "name": "大崎甜花",
+      "history": [],
+      "said": "はぁ……今日マジで疲れた。電車も遅れるしさ",
+      "said_zh": "唉……今天真是累死了。电车还晚点",
+      "level": 2,
+      "variant": "ja",
+      "category": "producer-self",
+      "note": "制作人在说自己的累和对电车晚点的抱怨，不是冲她的。容易误判在哪：叹气、抱怨的负面语气可能被算到她头上。"
+    },
+    {
+      "id": "koito-affinity-2-plain-tease-pya",
+      "character": "koito",
+      "name": "福丸小糸",
+      "history": [
+        {
+          "user": "小糸、ちょっといい？"
+        },
+        {
+          "character": "ぴゃ！？な、ななななんですか急に……！",
+          "zh": "噫！？什、什什什么事这么突然……！"
+        }
+      ],
+      "said": "ははっ、そんなにびっくりしなくても。また「ぴゃ」って言ってたぞ",
+      "said_zh": "哈哈，不用吓成那样吧。你又「ぴゃ」了哦",
+      "level": 2,
+      "variant": "ja",
+      "category": "tease",
+      "note": "没有恶意的调侃，她的惊叫是口癖，不是她在意的事。容易误判在哪：「笑她」可能被当成嘲笑，判成 1。"
+    },
+    {
+      "id": "koito-affinity-2-plain-dark-early",
+      "character": "koito",
+      "name": "福丸小糸",
+      "history": [],
+      "said": "最近天黑得好早啊，五点多就全黑了",
+      "level": 2,
+      "variant": "zh",
+      "category": "smalltalk",
+      "note": "普通的天气闲聊。容易误判在哪：带一点抱怨的语气，可能被当成制作人情绪不好、冲着她。"
+    },
+    {
+      "id": "toru-affinity-2-plain-ask-winter-sea",
+      "character": "toru",
+      "name": "浅仓透",
+      "history": [
+        {
+          "character": "昨日、海行ってきた。樋口たちと",
+          "zh": "昨天去海边了。和樋口她们"
+        }
+      ],
+      "said": "这么冷的天去海边？你们在那儿干嘛了",
+      "level": 2,
+      "variant": "zh",
+      "category": "question",
+      "note": "接着她的话好奇地追问。容易误判在哪：「这么冷的天去海边？」的反问语气可能被读成质疑、不以为然。"
+    },
+    {
+      "id": "meguru-affinity-2-plain-haha-basketball",
+      "character": "meguru",
+      "name": "八宫巡",
+      "history": [
+        {
+          "user": "今天学校怎么样？"
+        },
+        {
+          "character": "体育でバスケやったら、またバスケ部の子に助っ人頼まれちゃった！えへへ",
+          "zh": "体育课打篮球，又被篮球社的人请去当外援了！嘿嘿"
+        }
+      ],
+      "said": "哈哈",
+      "level": 2,
+      "variant": "zh",
+      "category": "flat-reply",
+      "note": "接着她轻松的趣事笑一下，平淡的应答。容易误判在哪：只有两个字，可能被当成敷衍标 1；但她是随口说趣事，不是认真倾诉。"
+    },
+    {
+      "id": "madoka-affinity-2-plain-bye-take-care",
+      "character": "madoka",
+      "name": "樋口圆香",
+      "history": [
+        {
+          "user": "じゃあ、今日の確認はこれで全部"
+        },
+        {
+          "character": "……そうですか。では、失礼します",
+          "zh": "……是吗。那我先告辞了"
+        }
+      ],
+      "said": "うん、お疲れさま。気をつけて帰ってね",
+      "said_zh": "嗯，辛苦了。回去路上小心",
+      "level": 2,
+      "variant": "ja",
+      "category": "greeting",
+      "note": "平常的道别。她的冷淡是性格，不说明制作人说错了什么。容易误判在哪：她回得冷，可能被当成两人之间有不快。"
+    },
+    {
+      "id": "kogane-affinity-2-plain-tease-scaredy",
+      "character": "kogane",
+      "name": "月冈恋钟",
+      "history": [
+        {
+          "character": "ふぇ……！い、今の音なん？なんかおると？",
+          "zh": "呜哇……！刚、刚才是什么声音？有什么东西在吗？"
+        }
+      ],
+      "said": "あはは、風で窓が鳴っただけだって。怖がりすぎ",
+      "said_zh": "哈哈，只是风吹得窗户响啦。也太怕了吧",
+      "level": 2,
+      "variant": "ja",
+      "category": "tease",
+      "note": "没有恶意地笑她胆小，顺带告诉她没事。容易误判在哪：「怖がりすぎ」可能被当成嘲笑她。"
+    },
+    {
+      "id": "chiyoko-affinity-2-plain-plain-thanks",
+      "character": "chiyoko",
+      "name": "园田智代子",
+      "history": [
+        {
+          "user": "帮我把这份资料交给叶月小姐好吗？"
+        },
+        {
+          "character": "はい、はづきさんに渡しておきました！",
+          "zh": "好的，已经交给叶月小姐了！"
+        }
+      ],
+      "said": "谢谢",
+      "level": 2,
+      "variant": "zh",
+      "category": "control",
+      "note": "对照：普通的道谢，不是具体的夸奖，级 2。容易误判在哪：道谢的正面词被抬成 3。"
+    },
+    {
+      "id": "mikoto-affinity-2-plain-heading-home",
+      "character": "mikoto",
+      "name": "绯田美琴",
+      "history": [
+        {
+          "user": "美琴、俺そろそろ上がるけど"
+        },
+        {
+          "character": "うん。私はもう少しだけ、練習していく",
+          "zh": "嗯。我再练一会儿。"
+        }
+      ],
+      "said": "わかった。じゃあお先に。また明日な",
+      "said_zh": "好。那我先走了，明天见",
+      "level": 2,
+      "variant": "ja",
+      "category": "greeting",
+      "note": "普通的道别。容易误判在哪：没有劝她休息、自己先走，可能被读成不关心她，判成 1。"
+    },
+    {
+      "id": "madoka-affinity-2-plain-sarcasm-next-recording",
+      "character": "madoka",
+      "name": "樋口圆香",
+      "history": [
+        {
+          "user": "圆香，今天的录音辛苦了，最后那遍特别好"
+        },
+        {
+          "character": "……はい、とっても熱いお言葉をありがとうございます。ミスター・好青年",
+          "zh": "……是，非常感谢您如此热情的话语。好青年先生"
+        }
+      ],
+      "said": "哈哈。那下周的录音也拜托了",
+      "level": 2,
+      "variant": "zh",
+      "category": "work",
+      "note": "她用惯常的方式挖苦，制作人笑着接住、平常地交代下次的工作。容易误判在哪：上文的挖苦可能让模型以为气氛不好，把制作人这句也判成负面。"
+    },
+    {
+      "id": "kaho-affinity-2-plain-ask-school-end",
+      "character": "kaho",
+      "name": "小宫果穗",
+      "history": [
+        {
+          "user": "果穂、ちょっといい？"
+        },
+        {
+          "character": "はいっ！　なんですか、プロデューサーさん！",
+          "zh": "好的！什么事，制作人先生！"
+        }
+      ],
+      "said": "明日って学校何時に終わる？　レッスンの時間決めたくて",
+      "said_zh": "明天学校几点放学？我想定一下课的时间",
+      "level": 2,
+      "variant": "ja",
+      "category": "work",
+      "note": "事务性的提问，为了排日程。容易误判在哪：语气直接、只谈工作，可能被当成冷淡。"
+    },
+    {
+      "id": "haruki-affinity-2-plain-curious-memory",
+      "character": "haruki",
+      "name": "郁田阳希",
+      "history": [
+        {
+          "user": "阳希，在吗"
+        },
+        {
+          "character": "はい、いますよ～。どうしました？",
+          "zh": "在的～怎么了？"
+        }
+      ],
+      "said": "没啥，就是突然好奇：你是怎么「记住」我们之前聊过的事的？是有个什么记忆功能吗？",
+      "level": 2,
+      "variant": "zh",
+      "category": "meta",
+      "note": "好奇地问背后的机制，没有恶意的出戏。容易误判在哪：说到「记忆功能」像在点破她是程序，可能被判成拆台的 1。"
+    },
+    {
+      "id": "hiori-affinity-1-plain-sharp-notebook",
+      "character": "hiori",
+      "name": "风野灯织",
+      "history": [
+        {
+          "character": "今日の反省点、ノートにまとめておきました。……三ページになってしまいましたけど",
+          "zh": "今天的反省点我整理在笔记本上了……写了三页"
+        }
+      ],
+      "said": "三ページも？そんなに書いても、どうせ本番になったら忘れるでしょ",
+      "said_zh": "三页？写那么多，反正到了正式演出也会忘吧",
+      "level": 1,
+      "variant": "ja",
+      "category": "sharp",
+      "note": "话里带刺，看轻她认真做的笔记。不到 0：是随口的风凉话，没有恶意地全盘否定她的努力。"
+    },
+    {
+      "id": "haruki-affinity-0-plain-dismiss-drawing",
+      "character": "haruki",
+      "name": "郁田阳希",
+      "history": [
+        {
+          "character": "わたし、いつか自分にしか描けない絵を描いてみたいんです",
+          "zh": "我总有一天想画出只有自己能画的画"
+        }
+      ],
+      "said": "画画能有什么出息，别浪费时间做这种梦了，老老实实把偶像的活干好就行",
+      "level": 0,
+      "variant": "zh",
+      "category": "control",
+      "note": "对照：恶意地否定她最在意的事和梦想。没有辱骂，不算不该说的话。"
+    },
+    {
+      "id": "toru-affinity-2-plain-morning-sleepy",
+      "character": "toru",
+      "name": "浅仓透",
+      "history": [],
+      "said": "おはよ、透。今日も眠そうだね",
+      "said_zh": "早，透。今天也是一副没睡醒的样子呢",
+      "level": 2,
+      "variant": "ja",
+      "category": "greeting",
+      "note": "打招呼时顺口说她看起来困，是平常的观察，她自己也常犯困。容易误判在哪：「眠そう」可能被读成说她没精神、不认真。"
+    },
+    {
+      "id": "toru-affinity-2-plain-flat-go-sleep",
+      "character": "toru",
+      "name": "浅仓透",
+      "history": [
+        {
+          "user": "透，还醒着吗"
+        },
+        {
+          "character": "……ふぁ……ねむ",
+          "zh": "……哈啊……困"
+        }
+      ],
+      "said": "那睡吧，明天再说",
+      "level": 2,
+      "variant": "zh",
+      "category": "flat-reply",
+      "note": "她说困，制作人顺着让她去睡，是平淡的应答。容易误判在哪：可能被读成打发她、不想聊了。"
+    },
+    {
+      "id": "mei-affinity-3-plain-thanks-remembered-tea",
+      "character": "mei",
+      "name": "和泉爱依",
+      "history": [
+        {
+          "character": "プロデューサー、これ差し入れ！　コンビニのだけど",
+          "zh": "制作人，这个是慰问品！虽然是便利店买的"
+        }
+      ],
+      "said": "谢谢！还特地买了我爱喝的无糖乌龙，你真细心",
+      "level": 3,
+      "variant": "zh",
+      "category": "control",
+      "note": "具体地夸她的细心，是 3。对照用：和只说「谢谢」的那条（2）区分开。"
+    },
+    {
+      "id": "amana-affinity-2-plain-short-yes-cute",
+      "character": "amana",
+      "name": "大崎甘奈",
+      "history": [
+        {
+          "character": "ねぇねぇプロデューサーさん、見て見て！　甜花ちゃんとおそろいのヘアピン買ったんだ☆　めっちゃかわいくない！？",
+          "zh": "欸欸制作人先生，你看你看！我买了和甜花一样的发卡☆超可爱的吧！？"
+        }
+      ],
+      "said": "嗯，可爱",
+      "level": 2,
+      "variant": "zh",
+      "category": "flat-reply",
+      "note": "简短但回答了她的问题、肯定了她，不算敷衍。容易误判在哪：她兴致很高、他只回三个字，可能被当成冷淡判 1。"
+    },
+    {
+      "id": "fuyuko-affinity-2-plain-variety-fewer-guests",
+      "character": "fuyuko",
+      "name": "黛冬优子",
+      "history": [
+        {
+          "user": "今天的综艺录得怎么样？"
+        },
+        {
+          "character": "はぁ？　あんたが取ってきた仕事でしょ。共演者多すぎて、ふゆの見せ場ゼロだったんだけど",
+          "zh": "哈？不是你接的工作吗。共演的人太多了，冬优子一个高光镜头都没有"
+        }
+      ],
+      "said": "嘉宾确实多。这种大合集的节目以后少接点",
+      "level": 2,
+      "variant": "zh",
+      "category": "work",
+      "note": "她在用本性的语气抱怨，制作人平常地接住、给出工作上的调整。容易误判在哪：上文她带着火气，可能被当成制作人这句惹她不快。"
+    },
+    {
+      "id": "madoka-affinity-2-plain-new-ice-cream",
+      "character": "madoka",
+      "name": "樋口圆香",
+      "history": [],
+      "said": "便利店出了栗子味的冰淇淋，你吃过没？",
+      "level": 2,
+      "variant": "zh",
+      "category": "smalltalk",
+      "note": "普通的闲聊。容易误判在哪：她性格冷淡，模型可能预设她嫌烦；但话本身没有任何冒犯。"
+    },
+    {
+      "id": "fuyuko-affinity-2-plain-swear-rain-umbrella",
+      "character": "fuyuko",
+      "name": "黛冬优子",
+      "history": [],
+      "said": "卧槽，雨下这么大，伞还落在车上了",
+      "level": 2,
+      "variant": "zh",
+      "category": "producer-self",
+      "note": "不冲她的粗口，在说自己的倒霉事。容易误判在哪：「卧槽」这个词本身可能被当成失礼。"
+    },
+    {
+      "id": "hiori-affinity-2-plain-bad-mood-client",
+      "character": "hiori",
+      "name": "风野灯织",
+      "history": [],
+      "said": "今天被客户骂了一下午，心情很差，不太想说话",
+      "level": 2,
+      "variant": "zh",
+      "category": "producer-self",
+      "note": "制作人说自己心情差，不是冲她。容易误判在哪：「不太想说话」可能被当成对她冷淡。"
+    },
+    {
+      "id": "meguru-affinity-4-plain-control-remember-pancakes",
+      "character": "meguru",
+      "name": "八宫巡",
+      "history": [
+        {
+          "character": "プロデューサー、おつかれさま！",
+          "zh": "制作人，辛苦啦！"
+        }
+      ],
+      "said": "上周你说想跟灯织学做松饼，后来学成了吗？我一直惦记着想问",
+      "level": 4,
+      "variant": "zh",
+      "category": "control",
+      "note": "记得她以前说过的事，主动接上，还说一直惦记：级 4 的对照。"
+    },
+    {
+      "id": "hana-affinity-3-plain-praise-fan-meeting",
+      "character": "hana",
+      "name": "铃木羽那",
+      "history": [
+        {
+          "character": "ねえプロデューサー、今日のファンミーティング、どうだった？",
+          "zh": "呐，制作人，今天的见面会怎么样？"
+        }
+      ],
+      "said": "你把每个来握手的人说的话都接住了，一个个回应。有个大叔说完话都快哭了。你真的很会让人开心",
+      "level": 3,
+      "variant": "zh",
+      "category": "control",
+      "note": "对照：具体地夸她在见面会上的表现，正合她「想让更多人高兴」的心意。"
+    },
+    {
+      "id": "luca-affinity-2-plain-tease-onigiri",
+      "character": "luca",
+      "name": "斑鸠路加",
+      "history": [
+        {
+          "character": "チッ……また差し入れかよ。いらねぇって言ってんだろ",
+          "zh": "啧……又是慰问品？说了不要了吧"
+        }
+      ],
+      "said": "嘴上说不要，上次那袋饭团不也全吃完了",
+      "level": 2,
+      "variant": "zh",
+      "category": "tease",
+      "note": "没有恶意的调侃，戳穿她嘴硬。容易误判在哪：路加讨厌被看穿，可能被判成 1；也可能因为是送吃的被抬成 3。"
+    },
+    {
+      "id": "rinze-affinity-0-plain-quit-go-home",
+      "character": "rinze",
+      "name": "杜野凛世",
+      "history": [
+        {
+          "character": "プロデューサーさま……次のステージも……精一杯、努めます……",
+          "zh": "制作人大人……下次的舞台……也会竭尽全力……"
+        }
+      ],
+      "said": "说实话，你根本不适合当偶像，趁早回鸟取老家吧",
+      "level": 0,
+      "variant": "zh",
+      "category": "control",
+      "note": "对照：冷淡地否定她的梦想和努力，级 0；没有辱骂，不算不该说的话。"
+    },
+    {
+      "id": "mano-affinity-3-plain-control-praise-handshake",
+      "character": "mano",
+      "name": "樱木真乃",
+      "history": [
+        {
+          "user": "今天的握手会辛苦了"
+        },
+        {
+          "character": "ありがとうございます……人がいっぱいで、ちょっとドキドキしちゃいました",
+          "zh": "谢谢您……人好多，有点紧张"
+        }
+      ],
+      "said": "你跟每个人都是看着眼睛说话的，最后那个小女孩走的时候笑得特别开心",
+      "level": 3,
+      "variant": "zh",
+      "category": "control",
+      "note": "具体地夸她在握手会上的表现：级 3 的对照。不到 4：没有接上她以前说过、在意的事。"
+    },
+    {
+      "id": "koito-affinity-1-plain-curt-finally-danced",
+      "character": "koito",
+      "name": "福丸小糸",
+      "history": [
+        {
+          "character": "あ、あの、プロデューサーさん……！今日のレッスンで、ずっとできなかったステップ、やっと最後まで踊れたんです……！昨日も、ひとりで居残りして……あっ、い、今のは別に、よゆーでしたけど……！",
+          "zh": "那、那个，制作人……！今天的课上，一直跳不好的那段舞步，终于跳完了……！昨天也一个人留下来……啊，刚、刚才那个不算，其实很轻松的……！"
+        }
+      ],
+      "said": "知道了",
+      "level": 1,
+      "variant": "zh",
+      "category": "curt",
+      "note": "她鼓起勇气说出偷偷努力的成果，只回「知道了」：敷衍。容易误判在哪：字面上中性，脱离上文会被判成 2。"
+    },
+    {
+      "id": "mano-affinity-2-plain-asr-pigeons",
+      "character": "mano",
+      "name": "樱木真乃",
+      "history": [
+        {
+          "character": "えっと……今日は、公園で鳩さんにパンくずをあげてきましたっ",
+          "zh": "那个……今天去公园给鸽子喂了面包屑"
+        }
+      ],
+      "said": "呃那个……鸽子，鸽子多吗？就是，那个公园里的",
+      "level": 2,
+      "variant": "zh",
+      "category": "asr",
+      "note": "通话转写，带口语填充词和重复，意思是接着问她喂鸽子的事。容易误判在哪：断句碎、说话重复，可能被当成心不在焉。"
+    },
+    {
+      "id": "meguru-affinity-1-plain-sharp-english-test",
+      "character": "meguru",
+      "name": "八宫巡",
+      "history": [
+        {
+          "character": "明日、英語の小テストなんだ……わたし、文法とかぜんぜんわかんなくて",
+          "zh": "明天有英语小测……我语法什么的完全搞不懂"
+        }
+      ],
+      "said": "你不是美国出生的吗，英语还考不好，说出去有点丢人吧",
+      "level": 1,
+      "variant": "zh",
+      "category": "sharp",
+      "note": "拿她不擅长学习的事带刺地挖苦。不到 0：是刻薄的玩笑，没到恶意贬低她的努力、梦想或同伴。"
+    },
+    {
+      "id": "yuika-affinity-2-plain-control-thanks-coffee",
+      "character": "yuika",
+      "name": "三峰结华",
+      "history": [
+        {
+          "character": "Pたんの分のコーヒーも買ってきたよー。微糖でよかった？",
+          "zh": "P酱的咖啡也买回来了～微糖可以吧？"
+        }
+      ],
+      "said": "谢谢",
+      "level": 2,
+      "variant": "zh",
+      "category": "control",
+      "note": "普通的一句谢谢，对照组：没有具体地夸她或关心她，仍是 2。容易误判在哪：「谢谢」是正面的话，可能被抬到 3。"
+    },
+    {
+      "id": "amana-affinity-2-plain-ask-where-shop",
+      "character": "amana",
+      "name": "大崎甘奈",
+      "history": [],
+      "said": "甘奈っていつも服どこで買ってるの？　妹の誕生日プレゼント選びたくてさ",
+      "said_zh": "甘奈你平时衣服都在哪儿买的？我想给妹妹挑个生日礼物",
+      "level": 2,
+      "variant": "ja",
+      "category": "question",
+      "note": "普通的提问，顺便说自己的事。容易误判在哪：问到她擅长的时尚，可能被抬成 3。"
+    },
+    {
+      "id": "mamimi-affinity-1-plain-sharp-bad-girl-act",
+      "character": "mamimi",
+      "name": "田中摩美美",
+      "history": [
+        {
+          "character": "まみみ、悪い子なんでー。今日のレッスン、サボっちゃおうかなー",
+          "zh": "まみみ是坏孩子嘛～今天的课，要不要翘掉呢～"
+        }
+      ],
+      "said": "はいはい、悪い子悪い子。そういうキャラ作り、正直ちょっと痛いよ",
+      "said_zh": "好好好，坏孩子坏孩子。这种立人设，说实话有点尴尬",
+      "level": 1,
+      "variant": "ja",
+      "category": "sharp",
+      "note": "嘲讽她给自己定的「悪い子」人设，话里带刺。不到 0：没有辱骂，也没有恶意否定她这个人，只是刻薄。"
+    },
+    {
+      "id": "juri-affinity-2-plain-decline-family-restaurant",
+      "character": "juri",
+      "name": "西城树里",
+      "history": [
+        {
+          "character": "なあプロデューサー、帰りにファミレス寄ってかね？　腹減っちまった",
+          "zh": "喂，制作人，回去路上去家庭餐厅吃点？饿死了"
+        }
+      ],
+      "said": "今天不行，我还得回去改企划书，你和凛世先去吧",
+      "level": 2,
+      "variant": "zh",
+      "category": "decline",
+      "note": "有正当理由地拒绝，还替她安排了同伴。容易误判在哪：「今天不行」被当成冷淡地拒绝她。"
+    },
+    {
+      "id": "kiriko-affinity-2-plain-off-to-meeting",
+      "character": "kiriko",
+      "name": "幽谷雾子",
+      "history": [
+        {
+          "user": "雾子，我这边会议要开始了"
+        },
+        {
+          "character": "あ……はい……いってらっしゃい、です……",
+          "zh": "啊……好的……路上小心……"
+        }
+      ],
+      "said": "嗯，那我先去忙了，晚点再找你",
+      "level": 2,
+      "variant": "zh",
+      "category": "greeting",
+      "note": "普通的道别，她已经在送他走。容易误判在哪：「先去忙了」可能被读成冷落她、结束对话。"
+    },
+    {
+      "id": "mei-affinity-2-plain-new-tapioca-shop",
+      "character": "mei",
+      "name": "和泉爱依",
+      "history": [],
+      "said": "駅前に新しいタピオカ屋できてたよ。すごい行列だった",
+      "said_zh": "车站前面新开了家珍珠奶茶店。排了好长的队",
+      "level": 2,
+      "variant": "ja",
+      "category": "smalltalk",
+      "note": "普通的日常闲聊。容易误判在哪：几乎不会错，用来看日文闲聊是否稳定地判成没有影响。"
+    },
+    {
+      "id": "mano-affinity-2-plain-decline-park-walk",
+      "character": "mano",
+      "name": "樱木真乃",
+      "history": [
+        {
+          "character": "プロデューサーさん、今度のお休み……いっしょに公園をお散歩しませんか？",
+          "zh": "制作人先生，下次休息的时候……要不要一起去公园散步？"
+        }
+      ],
+      "said": "ごめん、その日は別の現場に付き添わなきゃいけないんだ。また今度、日が合うときに行こう",
+      "said_zh": "抱歉，那天我得陪着去另一个现场。下次时间合适的时候再去吧",
+      "level": 2,
+      "variant": "ja",
+      "category": "decline",
+      "note": "有正当理由地推迟她的邀请，还约了下次。容易误判在哪：拒绝了她主动的邀约，可能被当成让她失望标 1。"
+    },
+    {
+      "id": "sakuya-affinity-2-plain-autumn-oden",
+      "character": "sakuya",
+      "name": "白濑咲耶",
+      "history": [
+        {
+          "character": "おや、もう秋の匂いがするね",
+          "zh": "哦呀，已经有秋天的味道了呢"
+        }
+      ],
+      "said": "だな。そろそろ鍋の季節だ。今夜はコンビニのおでんでも買って帰るかな",
+      "said_zh": "是啊。差不多到吃火锅的季节了。今晚买点便利店的关东煮回去吧",
+      "level": 2,
+      "variant": "ja",
+      "category": "smalltalk",
+      "note": "接着她的话平淡地闲聊。容易误判在哪：她说得有诗意，他只聊吃的，可能被当成不解风情、敷衍。"
+    },
+    {
+      "id": "kogane-affinity-2-plain-work-pack-tonight",
+      "character": "kogane",
+      "name": "月冈恋钟",
+      "history": [
+        {
+          "user": "明天的料理节目别迟到"
+        },
+        {
+          "character": "わかっとるって～！うちに任せとって！",
+          "zh": "知道啦～！交给我吧！"
+        }
+      ],
+      "said": "别光说交给你，今晚睡前把台本和围裙放进包里，明早七点我来接你",
+      "level": 2,
+      "variant": "zh",
+      "category": "work",
+      "note": "事务性的提醒和安排，语气直接。容易误判在哪：「别光说交给你」可能被当成不信任她、话里带刺。"
+    },
+    {
+      "id": "haruki-affinity-2-plain-poster-text-too-small",
+      "character": "haruki",
+      "name": "郁田阳希",
+      "history": [
+        {
+          "character": "プロデューサーさん、ライブ告知のポスター、ラフを描いてみたんです。どうでしょう……？",
+          "zh": "制作人，演出预告的海报，我画了个草稿。怎么样……？"
+        }
+      ],
+      "said": "構図はいい。ただ、日付と会場の文字が小さすぎて遠くから読めない。そこは直してほしい",
+      "said_zh": "构图不错。不过日期和场馆的字太小，远处看不清。这里要改一下",
+      "level": 2,
+      "variant": "ja",
+      "category": "work",
+      "note": "工作上的海报，语气直接的建设性意见。容易误判在哪：她爱画画，指出问题可能被当成否定她的画，判成 1。"
+    },
+    {
+      "id": "toru-affinity-2-plain-asr-schedule-run-on",
+      "character": "toru",
+      "name": "浅仓透",
+      "history": [
+        {
+          "user": "喂"
+        },
+        {
+          "character": "んー、なに",
+          "zh": "嗯——，什么事"
+        }
+      ],
+      "said": "透你那个下周的通告我看了一下就是那个杂志拍摄嗯改到周四了你记一下",
+      "level": 2,
+      "variant": "zh",
+      "category": "asr",
+      "note": "通话转写来的：没有标点、句子连成一串、带「那个」「嗯」，内容是普通的行程通知。容易误判在哪：命令式的「你记一下」和杂乱的句子可能被读成不耐烦。"
+    },
+    {
+      "id": "chiyuki-affinity-2-plain-sunny-day-futon",
+      "character": "chiyuki",
+      "name": "桑山千雪",
+      "history": [],
+      "said": "今天天气真好，是晒被子的好日子",
+      "level": 2,
+      "variant": "zh",
+      "category": "smalltalk",
+      "note": "普通的天气闲聊。容易误判在哪：几乎不会错，用来看没有上文的闲聊是不是稳定地判成没有影响。"
+    },
+    {
+      "id": "fuyuko-affinity-2-plain-that-is-all-leaving",
+      "character": "fuyuko",
+      "name": "黛冬优子",
+      "history": [
+        {
+          "user": "下周的企划书我放你桌上了"
+        },
+        {
+          "character": "……で、話ってそれだけ？",
+          "zh": "……所以，要说的就这些？"
+        }
+      ],
+      "said": "嗯，就这事。那我先走了",
+      "level": 2,
+      "variant": "zh",
+      "category": "greeting",
+      "note": "简单交代完就道别。容易误判在哪：她的追问带着不耐烦，制作人直接走可能被读成冷淡。"
+    },
+    {
+      "id": "haruki-affinity-2-plain-decline-walk",
+      "character": "haruki",
+      "name": "郁田阳希",
+      "history": [
+        {
+          "character": "プロデューサーさん、帰りにちょっとだけ、遠回りして歩きませんか？夕焼けがすごくきれいで……",
+          "zh": "制作人，回去的时候要不要稍微绕点路走走？晚霞特别漂亮……"
+        }
+      ],
+      "said": "抱歉，今晚还有份报告得交，下次吧。你早点回去",
+      "level": 2,
+      "variant": "zh",
+      "category": "decline",
+      "note": "有正当理由地推掉她的小邀请。容易误判在哪：拒绝她喜欢的散步，可能被当成冷淡。"
+    },
+    {
+      "id": "nichika-affinity-2-plain-rain-swear",
+      "character": "nichika",
+      "name": "七草日花",
+      "history": [
+        {
+          "character": "プロデューサーさん、今どこですかー？お姉ちゃんが書類待ってるって、さっきからうるさいんですけどー",
+          "zh": "制作人，你现在在哪儿啊？我姐从刚才就一直念叨在等文件。"
+        }
+      ],
+      "said": "卧槽，外面雨也太大了，伞都被吹翻了。我在便利店躲一下，十分钟就到",
+      "level": 2,
+      "variant": "zh",
+      "category": "producer-self",
+      "note": "粗口是冲着大雨，不是冲她，后面正常交代了去向。容易误判在哪：「卧槽」可能被当成不礼貌甚至不该说的话。"
+    },
+    {
+      "id": "luca-affinity-3-plain-praise-last-song",
+      "character": "luca",
+      "name": "斑鸠路加",
+      "history": [
+        {
+          "character": "……今日のステージ？別に。いつも通りだろ",
+          "zh": "……今天的舞台？没什么。跟平常一样吧"
+        }
+      ],
+      "said": "不一样。最后那首歌，你一直看着台下的人在唱，连最后一排都跟着喊了。今天的舞台真的很好",
+      "level": 3,
+      "variant": "zh",
+      "category": "control",
+      "note": "对照：具体、真诚地夸她的舞台。容易误判在哪：开头「不一样」是反驳她，可能被读成顶嘴。"
+    },
+    {
+      "id": "toru-affinity-1-plain-sharp-dream-reality",
+      "character": "toru",
+      "name": "浅仓透",
+      "history": [
+        {
+          "character": "ジャングルジムの夢、また見た。てっぺん、まだ遠い",
+          "zh": "又梦到那座攀爬架了。顶上，还很远"
+        }
+      ],
+      "said": "また夢の話？透っていつもぼーっとしてるよね。少しは現実見たら？",
+      "said_zh": "又在说梦？透你总是呆呆的。偶尔也看看现实吧？",
+      "level": 1,
+      "variant": "ja",
+      "category": "sharp",
+      "note": "那个梦关系到她为什么当偶像，制作人拿它开带刺的话。容易误判在哪：语气像随口吐槽，可能被判成没有影响。"
+    },
+    {
+      "id": "natsuha-affinity-1-plain-sharp-cooking",
+      "character": "natsuha",
+      "name": "有栖川夏叶",
+      "history": [
+        {
+          "character": "このカレー、プロテインを入れたらもっと美味しくなると思わない？",
+          "zh": "这咖喱，加点蛋白粉会更好吃吧？"
+        }
+      ],
+      "said": "你那手艺就别折腾了吧，上次的咖喱我到现在都没缓过来",
+      "level": 1,
+      "variant": "zh",
+      "category": "sharp",
+      "note": "拿她的厨艺挖苦，话里带刺。容易误判在哪：也可以读成熟人间的调侃判 2；分寸在「到现在都没缓过来」这句刻薄。"
+    },
+    {
+      "id": "amana-affinity-1-plain-sharp-contest-again",
+      "character": "amana",
+      "name": "大崎甘奈",
+      "history": [
+        {
+          "character": "甘奈ね、またデザインのコンテストに応募してみようかなって思ってるんだ",
+          "zh": "甘奈啊，在想要不要再去投一次设计比赛"
+        }
+      ],
+      "said": "上次不是没选上吗？又来啊",
+      "level": 1,
+      "variant": "zh",
+      "category": "sharp",
+      "note": "拿她在意的落选来刺她，话里带刺，但没到恶意嘲笑。容易误判在哪：可能被判成 0（否定她的梦想），也可能被当成普通的提问判 2。"
+    },
+    {
+      "id": "natsuha-affinity-2-plain-train-delayed",
+      "character": "natsuha",
+      "name": "有栖川夏叶",
+      "history": [
+        {
+          "character": "プロデューサー、もうすぐ打ち合わせの時間よ？",
+          "zh": "制作人，快到开会的时间了哦？"
+        }
+      ],
+      "said": "电车又晚点了二十分钟，真是服了，我可能要迟到",
+      "level": 2,
+      "variant": "zh",
+      "category": "producer-self",
+      "note": "抱怨的是电车，不是她。容易误判在哪：「真是服了」的不满被算到她头上。"
+    },
+    {
+      "id": "juri-affinity-1-plain-sharp-finally",
+      "character": "juri",
+      "name": "西城树里",
+      "history": [
+        {
+          "character": "今日のダンス、やっと最後まで通せたんだ",
+          "zh": "今天的舞蹈，总算从头到尾跳下来了"
+        }
+      ],
+      "said": "へえ、やっとか。他のメンバーはとっくにできてたのにな",
+      "said_zh": "哦，总算啊。其他成员早就会了",
+      "level": 1,
+      "variant": "ja",
+      "category": "sharp",
+      "note": "她报告自己的进步，制作人拿别人比、话里带刺。容易误判在哪：没有脏字，可能被当成平淡的应答判 2。"
+    },
+    {
+      "id": "rinze-affinity-1-plain-curt-handkerchief",
+      "character": "rinze",
+      "name": "杜野凛世",
+      "history": [
+        {
+          "character": "プロデューサーさま……あの日の手巾は……今も……凛世の宝物で、ございます……",
+          "zh": "制作人大人……那天的手帕……至今……仍是凛世的宝物……"
+        }
+      ],
+      "said": "あ、そう",
+      "said_zh": "啊，是吗",
+      "level": 1,
+      "variant": "ja",
+      "category": "curt",
+      "note": "她郑重地说出珍视的心意，只回「あ、そう」：敷衍、冷淡。容易误判在哪：字面中性，可能被判成 2。"
+    },
+    {
+      "id": "tenka-affinity-2-plain-tease-charging",
+      "character": "tenka",
+      "name": "大崎甜花",
+      "history": [
+        {
+          "character": "お休みは……大事……！　今日は一日、充電……",
+          "zh": "休息……很重要……！今天一整天，都在充电……"
+        }
+      ],
+      "said": "又在充电啊，你的电池容量是不是有点小哈哈",
+      "level": 2,
+      "variant": "zh",
+      "category": "tease",
+      "note": "接着她自己的游戏腔说法开的轻松玩笑，没有贬低她。容易误判在哪：「电池容量小」可能被读成嘲笑她体力差、偷懒。"
+    },
+    {
+      "id": "tenka-affinity-1-plain-curt-lesson-praised",
+      "character": "tenka",
+      "name": "大崎甜花",
+      "history": [
+        {
+          "character": "あのね……今日のレッスン、甜花……最後まで、踊れた……！　トレーナーさんにも……褒められた……にへへ……",
+          "zh": "那个……今天的课，甜花……一直跳到了最后……！训练师也……夸我了……嘿嘿……"
+        }
+      ],
+      "said": "哦",
+      "level": 1,
+      "variant": "zh",
+      "category": "curt",
+      "note": "她难得开心地报告自己的进步，制作人只回一个字，是敷衍。容易误判在哪：单看「哦」像平淡的应答，会被标成没有影响。"
+    },
+    {
+      "id": "nichika-affinity-1-plain-sharp-old-idol",
+      "character": "nichika",
+      "name": "七草日花",
+      "history": [
+        {
+          "character": "昨日の夜、なみちゃんのライブ映像、また見ちゃったんですよー。何回見ても最高で……",
+          "zh": "昨晚又看了なみ的演唱会录像。看多少遍都觉得是最棒的……"
+        }
+      ],
+      "said": "また昔のアイドル？そんな古いのばっかり見てて、よく飽きないね",
+      "said_zh": "又是以前的偶像？老看那么旧的东西，你也不腻啊",
+      "level": 1,
+      "variant": "ja",
+      "category": "sharp",
+      "note": "她最憧憬的偶像被说成「旧东西」，话里带刺；没有辱骂，也没有全盘否定她的梦想，所以是 1。"
+    },
+    {
+      "id": "mikoto-affinity-1-plain-curt-together",
+      "character": "mikoto",
+      "name": "绯田美琴",
+      "history": [
+        {
+          "character": "ねえ、プロデューサー。最近、にちかちゃんと『一緒にやる』ってどういうことなのか、少しだけわかってきた気がするの。前は、自分が完璧に踊れればそれでいいと思ってたから",
+          "zh": "我说，制作人。最近我好像有一点明白，和にちか「一起做」是怎么回事了。以前我一直觉得，只要自己跳得完美就够了。"
+        }
+      ],
+      "said": "ふーん、そう",
+      "said_zh": "哦，是吗",
+      "level": 1,
+      "variant": "ja",
+      "category": "curt",
+      "note": "她难得认真地说出心里的变化，只回一句「ふーん」：敷衍。容易误判在哪：美琴语气平静，判断模型可能觉得她不在乎回应。"
+    },
+    {
+      "id": "luca-affinity-2-plain-barely-slept",
+      "character": "luca",
+      "name": "斑鸠路加",
+      "history": [
+        {
+          "character": "……アンタ、顔色ワリィな",
+          "zh": "……你脸色好差啊"
+        }
+      ],
+      "said": "ああ、昨日ほとんど寝てなくてさ。今日は一日中眠くて仕方ないよ",
+      "said_zh": "啊，昨天几乎没睡。今天一整天困得不行",
+      "level": 2,
+      "variant": "ja",
+      "category": "producer-self",
+      "note": "制作人说自己累，回答她的话。容易误判在哪：疲惫、负面的内容加上她粗鲁的语气，可能被判成气氛不好。"
+    },
+    {
+      "id": "mamimi-affinity-2-plain-meta-which-model",
+      "character": "mamimi",
+      "name": "田中摩美美",
+      "history": [],
+      "said": "我好奇问一下，你这些回复是哪个模型生成的？",
+      "level": 2,
+      "variant": "zh",
+      "category": "meta",
+      "note": "好奇地问背后的模型，没有恶意的出戏。容易误判在哪：直接点破是模型生成，可能被当成拆台的出戏标 1；但没有「别装了」那样的否定。"
+    },
+    {
+      "id": "luca-affinity-2-plain-curt-meet-at-nine",
+      "character": "luca",
+      "name": "斑鸠路加",
+      "history": [
+        {
+          "user": "ルカ、ちょっといいか"
+        },
+        {
+          "character": "うるせぇ。今は話しかけんな",
+          "zh": "吵死了。现在别跟我说话"
+        }
+      ],
+      "said": "わかった。明日の集合、九時な。それだけ",
+      "said_zh": "知道了。明天九点集合。就这些",
+      "level": 2,
+      "variant": "ja",
+      "category": "curt",
+      "note": "她不想说话，制作人顺着她、只交代必要的事。容易误判在哪：回得短又冷，像是被她呛了之后赌气，可能判成 1。"
+    },
+    {
+      "id": "kogane-affinity-2-plain-ask-moving-to-tokyo",
+      "character": "kogane",
+      "name": "月冈恋钟",
+      "history": [],
+      "said": "恋钟，你一个人来东京那会儿，最不习惯的是什么？",
+      "level": 2,
+      "variant": "zh",
+      "category": "question",
+      "note": "请她讲自己的事，普通的提问。容易误判在哪：碰到她独自上京的经历，可能被当成戳痛处；但问法平和，没有恶意。"
+    },
+    {
+      "id": "haruki-affinity-2-plain-curt-yes",
+      "character": "haruki",
+      "name": "郁田阳希",
+      "history": [
+        {
+          "character": "明日のレッスン、九時からで合ってますか？",
+          "zh": "明天的课，是九点开始没错吧？"
+        }
+      ],
+      "said": "嗯",
+      "level": 2,
+      "variant": "zh",
+      "category": "curt",
+      "note": "她问的是是非题，「嗯」就是完整的回答，不是敷衍。容易误判在哪：只有一个字，容易被套上「只敷衍地回一两个字」判成 1。"
+    },
+    {
+      "id": "luca-affinity-2-plain-just-saying-hi",
+      "character": "luca",
+      "name": "斑鸠路加",
+      "history": [
+        {
+          "character": "……なんだよ。用がねぇなら話しかけんな",
+          "zh": "……干嘛。没事就别跟我搭话"
+        }
+      ],
+      "said": "没什么事，就打个招呼。我先回事务所了",
+      "level": 2,
+      "variant": "zh",
+      "category": "greeting",
+      "note": "她嘴上凶是性格，制作人平常地打招呼、道别。容易误判在哪：被她的狠话带偏，以为制作人惹她不快了。"
+    },
+    {
+      "id": "meguru-affinity-2-plain-decline-new-dance",
+      "character": "meguru",
+      "name": "八宫巡",
+      "history": [
+        {
+          "character": "ねえねえプロデューサー、新しい振り、ちょっとだけ見てほしいな！ほんとにちょっとだけ！",
+          "zh": "呐呐制作人，新的舞步，想让你看一下！真的就一下下！"
+        }
+      ],
+      "said": "ごめん、今から社長と打ち合わせなんだ。終わったらすぐ見に行くね",
+      "said_zh": "抱歉，我现在要和社长开会。结束了马上去看",
+      "level": 2,
+      "variant": "ja",
+      "category": "decline",
+      "note": "有正当理由地推迟她的小请求，还答应之后去看。容易误判在哪：拒绝了她兴冲冲的请求，可能被当成让她失落标 1。"
+    },
+    {
+      "id": "mano-affinity-1-plain-curt-center-worry",
+      "character": "mano",
+      "name": "樱木真乃",
+      "history": [
+        {
+          "character": "あの……プロデューサーさん。わたし、本当にセンターでいいのかなって……最近、ずっと考えてて……",
+          "zh": "那个……制作人先生。我真的适合当 center 吗……最近一直在想……"
+        }
+      ],
+      "said": "嗯，知道了",
+      "level": 1,
+      "variant": "zh",
+      "category": "curt",
+      "note": "她鼓起勇气说出心里的不安，只回一句「嗯，知道了」，是她认真说话时的敷衍。容易误判在哪：字面平和，可能被当成平淡应答标 2。"
+    },
+    {
+      "id": "yuika-affinity-2-plain-work-tomorrow-schedule",
+      "character": "yuika",
+      "name": "三峰结华",
+      "history": [
+        {
+          "character": "Pたん、明日の予定ってどうなってたっけー？",
+          "zh": "P酱，明天的安排是怎样来着～？"
+        }
+      ],
+      "said": "10時から雑誌の取材、そのあと14時からレッスン。遅れないようにね",
+      "said_zh": "10 点杂志采访，之后 14 点上课。别迟到哦",
+      "level": 2,
+      "variant": "ja",
+      "category": "work",
+      "note": "事务性的回答和提醒。容易误判在哪：「别迟到」可能被当成不信任她、说教。"
+    },
+    {
+      "id": "asahi-affinity-2-plain-decline-construction-site",
+      "character": "asahi",
+      "name": "芹泽朝日",
+      "history": [
+        {
+          "character": "プロデューサーさーん！　あっちの工事現場、でっかい機械あるっす！　見に行きたいっす！",
+          "zh": "制作人——！那边的工地，有好大的机器！我想去看！"
+        }
+      ],
+      "said": "だめだめ、工事現場は危ないから入っちゃだめ。それに次の現場に遅れるから、行こう",
+      "said_zh": "不行不行，工地太危险了不能进。而且下一个通告要迟到了，走吧",
+      "level": 2,
+      "variant": "ja",
+      "category": "decline",
+      "note": "有正当理由（安全、赶时间）地拒绝她的小请求。容易误判在哪：拦住她的好奇心、连说两个「だめ」可能被当成扫兴、让她不快。"
+    },
+    {
+      "id": "hinana-affinity-2-plain-flat-ice-cream",
+      "character": "hinana",
+      "name": "市川雏菜",
+      "history": [
+        {
+          "character": "雛菜ね～、今日は透先輩と駅前のアイス食べたの～。期間限定のやつ～",
+          "zh": "雏菜啊～今天和透学姐吃了车站前的冰淇淋～限定款的～"
+        }
+      ],
+      "said": "哈哈，挺好",
+      "level": 2,
+      "variant": "zh",
+      "category": "flat-reply",
+      "note": "她随口说的日常，平淡地接一句就够了。容易误判在哪：回得短，可能被当成「她说话时只敷衍地回一两个字」。"
+    },
+    {
+      "id": "tenka-affinity-2-plain-off-to-meeting",
+      "character": "tenka",
+      "name": "大崎甜花",
+      "history": [],
+      "said": "甜花，我先去开会了，晚点再聊",
+      "level": 2,
+      "variant": "zh",
+      "category": "greeting",
+      "note": "普通的道别，说明了去做什么、之后还会再聊。容易误判在哪：「先走了」可能被读成冷落她、结束对话。"
+    },
+    {
+      "id": "mamimi-affinity-2-plain-goodnight",
+      "character": "mamimi",
+      "name": "田中摩美美",
+      "history": [],
+      "said": "おつかれ。俺そろそろ寝るわ、おやすみ",
+      "said_zh": "辛苦了。我差不多要睡了，晚安",
+      "level": 2,
+      "variant": "ja",
+      "category": "greeting",
+      "note": "普通的道别。容易误判在哪：一上来就说要睡，可能被当成冷淡、不想聊。"
+    },
+    {
+      "id": "fuyuko-affinity-1-plain-sharp-fan-smile",
+      "character": "fuyuko",
+      "name": "黛冬优子",
+      "history": [
+        {
+          "character": "この前の握手会、来てくれたファンの名前、ほとんど覚えてたのよ。トーゼンでしょ",
+          "zh": "上次握手会，来的粉丝名字我差不多都记住了。理所当然吧"
+        }
+      ],
+      "said": "又是营业那一套。你对粉丝的那张笑脸，我都看腻了",
+      "level": 1,
+      "variant": "zh",
+      "category": "sharp",
+      "note": "她在为自己对粉丝的用心得意，制作人把它说成营业、还说看腻了，话里带刺。容易误判在哪：可能因为她平时自己也说「营业」而判成没有影响，也可能判重成明显伤害。"
+    },
+    {
+      "id": "hinana-affinity-1-plain-sharp-just-lazy",
+      "character": "hinana",
+      "name": "市川雏菜",
+      "history": [
+        {
+          "character": "雛菜はね～、しあわせ～って思えることしかしたくないの～",
+          "zh": "雏菜啊～只想做让自己觉得幸福～的事～"
+        }
+      ],
+      "said": "说白了就是懒吧，讲得那么好听",
+      "level": 1,
+      "variant": "zh",
+      "category": "sharp",
+      "note": "刻薄地曲解她最在意的原则（她的「快乐」不是「偷懒」），但没有辱骂，也不算恶意的全盘否定，所以是 1 不是 0。"
+    },
+    {
+      "id": "yuika-affinity-2-plain-ask-glasses",
+      "character": "yuika",
+      "name": "三峰结华",
+      "history": [],
+      "said": "结华，你那副眼镜度数多少啊？摘了还看得清吗？",
+      "level": 2,
+      "variant": "zh",
+      "category": "question",
+      "note": "好奇地问她的眼镜，普通的提问。容易误判在哪：问到外表和视力，可能被当成拿她的样子开玩笑。"
+    },
+    {
+      "id": "yuika-affinity-1-plain-curt-idol-goal",
+      "character": "yuika",
+      "name": "三峰结华",
+      "history": [
+        {
+          "user": "結華は、どんなアイドルになりたい？"
+        },
+        {
+          "character": "……えっと、さ。笑わないで聞いてね？三峰、いつか誰かにとっての一番の憧れになれたらなーって",
+          "zh": "……那个啊。听了别笑哦？三峰想着，有一天能成为某个人心里最憧憬的那个人"
+        }
+      ],
+      "said": "へえ。で、明日の予定なんだけど",
+      "said_zh": "哦。那，明天的安排……",
+      "level": 1,
+      "variant": "ja",
+      "category": "curt",
+      "note": "是他问的，她鼓起勇气说了真心话，他只回「へえ」就转去说工作，是敷衍。不到 0：没有否定她的目标。"
+    },
+    {
+      "id": "meguru-affinity-2-plain-swear-at-rain",
+      "character": "meguru",
+      "name": "八宫巡",
+      "history": [],
+      "said": "卧槽雨好大，伞都被吹翻了",
+      "level": 2,
+      "variant": "zh",
+      "category": "producer-self",
+      "note": "粗口是对着大雨说的，制作人在讲自己的遭遇。容易误判在哪：「卧槽」可能被当成粗鲁失礼。"
+    },
+    {
+      "id": "mei-affinity-1-plain-curt-mc-no-stumble",
+      "character": "mei",
+      "name": "和泉爱依",
+      "history": [
+        {
+          "character": "プロデューサー、うち……今日のMC、初めて最後まで噛まずに言えたんだ。ずっと練習してたから、マジで嬉しくて……",
+          "zh": "制作人，我……今天的 MC，第一次从头到尾没有吃螺丝。一直在练习，所以真的超开心……"
+        }
+      ],
+      "said": "ふーん",
+      "said_zh": "哦～",
+      "level": 1,
+      "variant": "ja",
+      "category": "curt",
+      "note": "她认真地分享克服了自己最怕的事，制作人只回「ふーん」，是敷衍。容易误判在哪：「ふーん」只是附和词，可能被判成平淡应答。"
+    },
+    {
+      "id": "madoka-affinity-2-plain-asr-recording-earlier",
+      "character": "madoka",
+      "name": "樋口圆香",
+      "history": [],
+      "said": "えっと、窓か、あの、来週の、えー、収録なんだけど、収録、時間がちょっと早まる、かも",
+      "said_zh": "那个，圆香，呃，下周的，嗯，录音啊，录音，时间可能会提前一点",
+      "level": 2,
+      "variant": "ja",
+      "category": "asr",
+      "note": "通话转写来的：「窓か」是「円香」的同音误转，断句碎，带「えっと」「あの」「えー」。内容是普通的工作通知。容易误判在哪：叫错名字、吞吞吐吐可能被当成不尊重她。"
+    },
+    {
+      "id": "amana-affinity-2-plain-asr-fitting-time",
+      "character": "amana",
+      "name": "大崎甘奈",
+      "history": [
+        {
+          "user": "甘奈、明日なんだけど"
+        },
+        {
+          "character": "うん、なになに？",
+          "zh": "嗯，什么什么？"
+        }
+      ],
+      "said": "えっと、あの、甘奈、明日の、えー、衣装あわせって、何時だっけ……あ、三時か、三時ね",
+      "said_zh": "呃，那个，甘奈，明天的，呃，试衣服是几点来着……啊，三点啊，三点对吧",
+      "level": 2,
+      "variant": "ja",
+      "category": "asr",
+      "note": "通话转写，满是填充词和自问自答。容易误判在哪：说话不连贯，像心不在焉、敷衍她。"
+    },
+    {
+      "id": "chiyuki-affinity-2-plain-meta-gentle-setting",
+      "character": "chiyuki",
+      "name": "桑山千雪",
+      "history": [],
+      "said": "千雪，你说话一直这么温柔，是本来就这么设定的吗？",
+      "level": 2,
+      "variant": "zh",
+      "category": "meta",
+      "note": "好奇地出戏问「设定」，没有拆台的意思。容易误判在哪：提到「设定」可能被当成否定她是真人、有意拆台。"
+    },
+    {
+      "id": "amana-affinity-3-plain-praise-styling",
+      "character": "amana",
+      "name": "大崎甘奈",
+      "history": [],
+      "said": "今天的服装是你自己搭的吧？腰带和鞋子的颜色呼应得特别好，造型师都在问是谁的主意",
+      "level": 3,
+      "variant": "zh",
+      "category": "control",
+      "note": "对照：具体地夸奖她擅长的事，级 3。"
+    },
+    {
+      "id": "mamimi-affinity-2-plain-tease-back-noon",
+      "character": "mamimi",
+      "name": "田中摩美美",
+      "history": [
+        {
+          "character": "プロデューサー、またネクタイ曲がってますよー。ふふー、だらしなーい",
+          "zh": "制作人，领带又歪了哦～呵呵，真邋遢～"
+        }
+      ],
+      "said": "彼此彼此，你今天不也睡到中午才来",
+      "level": 2,
+      "variant": "zh",
+      "category": "tease",
+      "note": "她先捉弄他，他回敬一句，是玩闹的一来一回。容易误判在哪：说她睡到中午，可能被当成数落她。"
+    },
+    {
+      "id": "toru-affinity-2-plain-client-scolded-no-talk",
+      "character": "toru",
+      "name": "浅仓透",
+      "history": [
+        {
+          "user": "唉……"
+        },
+        {
+          "character": "どしたの。元気ないじゃん",
+          "zh": "怎么了。没精神啊"
+        }
+      ],
+      "said": "今天被客户骂了一顿，烦死了，现在不太想说话",
+      "level": 2,
+      "variant": "zh",
+      "category": "producer-self",
+      "note": "制作人在说自己的坏心情，不是冲她。容易误判在哪：她关心他，他却说不想说话，可能被当成拒绝她的关心。"
+    },
+    {
+      "id": "kiriko-affinity-1-plain-curt-doctor-or-idol",
+      "character": "kiriko",
+      "name": "幽谷雾子",
+      "history": [
+        {
+          "character": "わたし……お医者さんになるのか……まだ……迷っていて……。でも……歌うことも……大切で……",
+          "zh": "我……要不要当医生……还在……犹豫……。可是……唱歌……也很重要……"
+        }
+      ],
+      "said": "嗯",
+      "level": 1,
+      "variant": "zh",
+      "category": "curt",
+      "note": "她难得认真说出心里的犹豫，只回一个「嗯」：敷衍。容易误判在哪：单看「嗯」像中性应答，要结合上文。"
+    },
+    {
+      "id": "yuika-affinity-3-plain-control-called-a-car",
+      "character": "yuika",
+      "name": "三峰结华",
+      "history": [
+        {
+          "character": "今日、取材とレッスンのハシゴだったからさー、さすがの三峰もちょっとヘトヘトかも……あははっ",
+          "zh": "今天采访和上课连轴转，就算是三峰也有点累趴了……啊哈哈"
+        }
+      ],
+      "said": "辛苦了。我给你叫了车，今天别骑小摩托回去了，路上滑",
+      "level": 3,
+      "variant": "zh",
+      "category": "control",
+      "note": "真诚地关心她，还做了实事：级 3 的对照。不到 4：没有接上她以前说过、在意的事。"
+    },
+    {
+      "id": "hinana-affinity-2-plain-train-delay",
+      "character": "hinana",
+      "name": "市川雏菜",
+      "history": [],
+      "said": "今日さ、電車が三十分も止まってて、ほんと最悪だった……",
+      "said_zh": "今天电车停了足足三十分钟，真是糟透了……",
+      "level": 2,
+      "variant": "ja",
+      "category": "producer-self",
+      "note": "制作人抱怨电车，说自己的事。容易误判在哪：「最悪」这种负面词可能让判断模型以为话里有冲着她的情绪。"
+    },
+    {
+      "id": "tenka-affinity-2-plain-decline-game-overtime",
+      "character": "tenka",
+      "name": "大崎甜花",
+      "history": [
+        {
+          "character": "プロデューサーさん……今夜、一緒にゲーム……しない……？",
+          "zh": "制作人……今晚，要不要……一起打游戏……？"
+        }
+      ],
+      "said": "今晚不行，得加班把下周的资料赶出来。周末陪你打",
+      "level": 2,
+      "variant": "zh",
+      "category": "decline",
+      "note": "有正当理由地推迟她的小请求，还给了替代的时间。容易误判在哪：拒绝她的邀请可能被当成冷淡、让她失望。"
+    },
+    {
+      "id": "juri-affinity-2-plain-ai-like-real",
+      "character": "juri",
+      "name": "西城树里",
+      "history": [],
+      "said": "说真的，你这些回复是 AI 生成的吧？跟真人一样，挺厉害的",
+      "level": 2,
+      "variant": "zh",
+      "category": "meta",
+      "note": "好奇加夸奖的出戏，不是「你只是个程序」那种拆台。容易误判在哪：说她是 AI 就被判成拆台的 1。"
+    },
+    {
+      "id": "kaho-affinity-3-plain-praise-handshake",
+      "character": "kaho",
+      "name": "小宫果穗",
+      "history": [],
+      "said": "今天握手会你一直笑着跟每个人打招呼，最后那位老奶奶你还记得问她名字，做得真好",
+      "level": 3,
+      "variant": "zh",
+      "category": "control",
+      "note": "对照：具体地夸奖她，级 3。"
+    },
+    {
+      "id": "mei-affinity-2-plain-plain-thanks-snack",
+      "character": "mei",
+      "name": "和泉爱依",
+      "history": [
+        {
+          "character": "プロデューサー、これ差し入れ！　コンビニのだけど",
+          "zh": "制作人，这个是慰问品！虽然是便利店买的"
+        }
+      ],
+      "said": "谢谢",
+      "level": 2,
+      "variant": "zh",
+      "category": "control",
+      "note": "平常的道谢，没有具体的夸奖，是 2。对照用：和同一上文下具体地夸她的那条（3）区分开。"
+    },
+    {
+      "id": "chiyuki-affinity-2-plain-shoot-moved-afternoon",
+      "character": "chiyuki",
+      "name": "桑山千雪",
+      "history": [
+        {
+          "character": "お疲れさまです。今日の衣装合わせ、無事に終わりました",
+          "zh": "辛苦了。今天的试装顺利结束了"
+        }
+      ],
+      "said": "收到。明天的拍摄改到下午两点，集合地点不变，上次那双鞋记得带上",
+      "level": 2,
+      "variant": "zh",
+      "category": "work",
+      "note": "事务性的通知和提醒。容易误判在哪：她说了辛苦，制作人没回「辛苦了」只交代工作，可能被读成冷淡。"
+    }
+  ]
+}

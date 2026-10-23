@@ -8,6 +8,7 @@ import { Notice } from "@/components/app/admin/Notice";
 import { NumberInput } from "@/components/app/admin/NumberInput";
 import { StatusDot } from "@/components/app/StatusDot";
 import { FailureNotice } from "@/components/app/FailureNotice";
+import { LLMProviderPicker, type ModelLister } from "@/components/app/LLMProviderPicker";
 import { ModelChoiceField } from "@/components/app/ModelChoiceField";
 import { EffortField, ExtraBodyField, useEffortHint } from "@/components/app/ReasoningEffortFields";
 import { OpenFormProvider, useOpenForm } from "@/components/admin/OpenForm";
@@ -66,6 +67,7 @@ import {
   type ItemName,
   type ReadOnlyItem,
   UNLIMITED,
+  listItemModels,
 } from "@/lib/adminConfig";
 import type { FishAudioModel, LLMProtocol } from "@/lib/localOwnKeys";
 import { EFFORT_UNSET, effortLabel } from "@/lib/reasoningEffort";
@@ -337,6 +339,21 @@ function ItemCard({
 }
 
 /**
+ * 向服务商查模型槽能用的模型（ADR-0027）：没填 key 时用正在生效的那把，只在它生效的地址上用。
+ * 还没填地址时是 null；不是模型槽是 undefined。
+ */
+function modelLister(name: ItemName, form: Form): ModelLister | null | undefined {
+  if (name !== "chat_llm" && name !== "memory_llm") return undefined;
+  const base_url = form.base_url?.trim() ?? "";
+  const api_key = form.api_key?.trim() ?? "";
+  if (!base_url) return null;
+  return {
+    key: `${name} ${form.protocol} ${base_url} ${api_key}`,
+    ask: () => listItemModels(name, { protocol: form.protocol, base_url, ...(api_key && { api_key }) }),
+  };
+}
+
+/**
  * 一项能改的配置：状态 Badge、各个值，卡里展开的修改表单（全页同一时间只开一张），CardFooter 里的
  * 「恢复成 .env 的值」。服务类的项保存时后端先试调，试不通照原话显示原因、不保存；阈值和限额不试调，
  * 保存键只写「保存」。
@@ -570,7 +587,8 @@ function AvailableItem({
                     </Field>
                   );
                 }
-                if (field.kind === "select" || field.kind === "minutes") {
+                /** 一项下拉选择。 */
+                const selectField = () => {
                   const options = (field.options ?? []).map((o) => ({ value: o, label: optionLabel(name, field.name, o) }));
                   const hint = fieldHint(name, field, keysEditable);
                   return (
@@ -595,7 +613,23 @@ function AvailableItem({
                       {hint && <FieldDescription>{hint}</FieldDescription>}
                     </Field>
                   );
+                };
+                // 模型的几项上面先放服务商和模型的下拉，选了填进协议、地址和模型名（ADR-0027）。
+                if (field.name === "protocol" && "base_url" in form && "model" in form) {
+                  return (
+                    <Fragment key={field.name}>
+                      <LLMProviderPicker
+                        id={fieldId}
+                        baseUrl={form.base_url}
+                        model={form.model}
+                        onPick={(pick) => setForm((f) => ({ ...f, ...pick }))}
+                        lister={modelLister(name, form)}
+                      />
+                      {selectField()}
+                    </Fragment>
+                  );
                 }
+                if (field.kind === "select" || field.kind === "minutes") return selectField();
                 const secret = field.kind === "secret";
                 const hint = fieldHint(name, field, keysEditable);
                 return (

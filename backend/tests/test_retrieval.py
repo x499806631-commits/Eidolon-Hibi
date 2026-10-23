@@ -11,13 +11,13 @@ import pytest
 
 from eidolon.characters import load_characters
 from eidolon.config import Settings
-from eidolon.corpus import StoryCorpus
 from eidolon.retrieval import FALLBACK_REFERENCES, MAX_REFERENCES
 from eidolon.story_import import import_csv_directory
 from tests.conftest import KOGANE_SHEET, MANO_SHEET, CharacterConfig, ClientFactory
 from tests.fakes import FakeBackgroundLLM, FakeEmbedder, FakeJudge, FakeLLM, FakeReranker, context_of, system_of
 from tests.test_live_config import until
 from tests.test_shared_memory import CAT, memorized
+from tests.stories import corpus_in
 from tests.test_text_turn import send_turn, start_conversation
 
 REPLY = ["<ja>はいっ</ja><zh>好的</zh>"]
@@ -56,12 +56,9 @@ def characters(tmp_path: Path) -> CharacterConfig:
 async def embedder(settings: Settings, story: Path) -> FakeEmbedder:
     """The embedder the sample stories were imported with."""
     embedder = FakeEmbedder()
-    corpus = StoryCorpus(settings.database_path, embedder)
-    try:
+    async with corpus_in(settings.database_path, embedder) as corpus:
         characters = load_characters(settings.characters_path)
         await import_csv_directory(story, corpus, characters.values())
-    finally:
-        corpus.close()
     return embedder
 
 

@@ -7,7 +7,6 @@ version since replaced, it is given the new one, not to keep."""
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, StrictBool
-from starlette.concurrency import run_in_threadpool
 
 from eidolon.admin_api import Admin
 from eidolon.assembly import Backend
@@ -35,9 +34,9 @@ def _described(state: SponsorState) -> dict:
 def add_sponsor_routes(app: FastAPI, backend: Backend) -> None:
     sponsor = backend.sponsor
 
-    def code_response(asked: str | None) -> Response:
+    async def code_response(asked: str | None) -> Response:
         """The code there is; kept for good only if it is the version `asked` for."""
-        found = sponsor.image()
+        found = await sponsor.image()
         if found is None:
             raise HTTPException(404, NOT_FOUND)
         image, version = found
@@ -45,13 +44,13 @@ def add_sponsor_routes(app: FastAPI, backend: Backend) -> None:
         return Response(image, media_type="image/png", headers=headers)
 
     @app.get("/api/admin/sponsor")
-    def state(_: Admin) -> dict:
-        return _described(sponsor.state())
+    async def state(_: Admin) -> dict:
+        return _described(await sponsor.state())
 
     @app.put("/api/admin/sponsor")
-    def switch(body: SponsorInput, _: Admin) -> dict:
+    async def switch(body: SponsorInput, _: Admin) -> dict:
         """Switch it on or off; on without a code, users see nothing yet."""
-        return _described(sponsor.switch(body.enabled))
+        return _described(await sponsor.switch(body.enabled))
 
     @app.put("/api/admin/sponsor/image")
     async def upload(request: Request, _: Admin) -> dict:
@@ -63,23 +62,23 @@ def add_sponsor_routes(app: FastAPI, backend: Backend) -> None:
             if len(body) > MAX_UPLOAD_BYTES:
                 raise HTTPException(413, _TOO_LARGE)
         try:
-            return _described(await run_in_threadpool(sponsor.upload, bytes(body)))
+            return _described(await sponsor.upload(bytes(body)))
         except NotAPicture:
             raise HTTPException(422, "不是 PNG、JPEG 或 WebP 图片") from None
 
     @app.delete("/api/admin/sponsor")
-    def clear(_: Admin) -> dict:
+    async def clear(_: Admin) -> dict:
         """Switch it off and delete the code."""
-        return _described(sponsor.clear())
+        return _described(await sponsor.clear())
 
     @app.get("/api/admin/sponsor/image")
-    def admin_code(_: Admin, v: str | None = None) -> Response:
+    async def admin_code(_: Admin, v: str | None = None) -> Response:
         """The code, switched on or not."""
-        return code_response(v)
+        return await code_response(v)
 
     @app.get("/api/sponsor/image")
-    def user_code(_: UserId, v: str | None = None) -> Response:
+    async def user_code(_: UserId, v: str | None = None) -> Response:
         """The code, only while users are shown it."""
-        if sponsor.state().version is None:
+        if (await sponsor.state()).version is None:
             raise HTTPException(404, NOT_FOUND)
-        return code_response(v)
+        return await code_response(v)

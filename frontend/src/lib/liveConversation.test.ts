@@ -17,6 +17,7 @@ import {
 import type { Call, CallHandlers, MicInUse } from "@/lib/call";
 import type { CallPreferences } from "@/lib/callPreferences";
 import { LiveConversation, NO_ANSWER_RINGS, type Ports } from "@/lib/liveConversation";
+import type { Rewarded } from "@/lib/rewards";
 import { CALM } from "@/lib/standAnimations";
 
 /** A call that has connected: records what the conversation asks of it. */
@@ -127,6 +128,8 @@ function opening(options: Options = {}) {
   /** Which conversation each call and text turn went to. */
   const sentTo: string[] = [];
   let listChanged = 0;
+  /** What each turn recorded was rewarded with, as the shell is told. */
+  const rewarded: Rewarded[] = [];
   /** What each reading of the preferences gave. */
   const loaded: CallPreferences[] = [];
   let stored: CallPreferences = {
@@ -150,6 +153,7 @@ function opening(options: Options = {}) {
     appeal: async () => ({ affinity: { tier: "trust", cooldown_until: null }, left: 2 }),
     getPhoto: async () => ({ status: "pending", reason: null }),
     onListChanged: () => listChanged++,
+    onRewarded: (r) => rewarded.push(r),
     startCall: (conversationId, preferences, handlers, asmr) => {
       sentTo.push(conversationId);
       // 麦克风一拨就打开；要看它打开之前的，测试自己换掉这个 port。
@@ -187,6 +191,7 @@ function opening(options: Options = {}) {
     preferences: () => stored,
     published: () => published,
     listChanged: () => listChanged,
+    rewarded,
   };
 }
 
@@ -767,6 +772,47 @@ describe("LiveConversation: the line card", () => {
     expect(card()).toEqual({ line: "に", previous: null });
   });
 
+  it("shows what the user typed at its foot until her reply to it is said", async () => {
+    const { live, emit } = await inCall();
+    emit(reply(1), ja(0, "一"), playing(1, 0));
+
+    live.setDraft("等一下");
+    await live.submit();
+    expect(live.snapshot().typed).toBe("等一下");
+
+    // Her reply to it arrives, but she has not said it yet.
+    emit(reply(2, "等一下"), ja(0, "二"));
+    expect(live.snapshot().typed).toBe("等一下");
+    emit(playing(2, 0));
+    expect(live.snapshot().typed).toBeNull();
+  });
+
+  it("keeps what was typed while the reply it came over plays on in text only", async () => {
+    const { live, emit } = await inCall({ textOnly: true });
+    vi.useFakeTimers();
+    emit(reply(1), ja(0, "一"), ja(1, "二"));
+    live.setDraft("等一下");
+    await live.submit();
+
+    vi.advanceTimersByTime(1500);
+    expect(live.snapshot()).toMatchObject({ line: { ja: "二" }, typed: "等一下" });
+
+    emit(reply(2, "等一下"), ja(0, "三"));
+    expect(live.snapshot()).toMatchObject({ line: { ja: "三" }, typed: null });
+  });
+
+  it("shows only the last thing typed, and nothing once the user speaks", async () => {
+    const { live, emit } = await inCall();
+    live.setDraft("一");
+    await live.submit();
+    live.setDraft("二");
+    await live.submit();
+    expect(live.snapshot().typed).toBe("二");
+
+    emit({ type: "user-started-speaking" });
+    expect(live.snapshot().typed).toBeNull();
+  });
+
   it("starts each call with nothing on it, not taking a line from the last call", async () => {
     const { live, attempts, emit, card } = await inCall();
     emit(reply(1), ja(0, "こんにちは"), playing(1, 0), recorded("こんにちは"));
@@ -777,6 +823,45 @@ describe("LiveConversation: the line card", () => {
 
     emit(reply(1), ja(0, "やあ"), playing(1, 0));
     expect(card()).toEqual({ line: "やあ", previous: null });
+  });
+});
+
+describe("LiveConversation: the typing bar", () => {
+  it("opens and closes only while the call is connected", async () => {
+    const { live, attempts } = await conversation();
+    void live.startCall();
+    live.openTyping();
+    expect(live.snapshot().typing).toBe(false);
+
+    await connected(live, attempts);
+    live.openTyping();
+    expect(live.snapshot().typing).toBe(true);
+    live.closeTyping();
+    expect(live.snapshot().typing).toBe(false);
+  });
+
+  it("closes as the call layer is folded away, what is typed staying in the input box", async () => {
+    const { live, attempts } = await conversation();
+    await connected(live, attempts);
+    live.openTyping();
+    live.setDraft("还没发");
+
+    live.collapse();
+    expect(live.snapshot()).toMatchObject({ typing: false, draft: "还没发" });
+    live.expand();
+    expect(live.snapshot().typing).toBe(false);
+  });
+
+  it("closes as the call ends, and each call starts without it", async () => {
+    const { live, attempts } = await conversation();
+    await connected(live, attempts);
+    live.openTyping();
+
+    await live.hangUp();
+    expect(live.snapshot().typing).toBe(false);
+
+    await connected(live, attempts);
+    expect(live.snapshot().typing).toBe(false);
   });
 });
 
@@ -2256,6 +2341,132 @@ describe("LiveConversation: the list", () => {
     await live.hangUp();
 
     expect(listChanged()).toBe(0);
+  });
+});
+
+describe("LiveConversation: rewards", () => {
+  const oneTurn: Rewarded = {
+    draws: 1,
+    reset_cards: 0,
+    daily_tasks: ["one_turn"],
+    achievements: [],
+    completed: [],
+    rewarded_at: "2026-10-20T08:00:00+00:00",
+  };
+
+  it("tells the shell what a text turn was rewarded with, and nothing for one rewarded with nothing", async () => {
+    const turns = [
+      scripted([
+        { type: "user", text: "你好" },
+        { type: "done", message: message(4, "character", "こんにちは"), affinity: null, rewarded: oneTurn },
+      ]),
+      scripted([
+        { type: "user", text: "再见" },
+        { type: "done", message: message(6, "character", "またね"), affinity: null, rewarded: null },
+      ]),
+    ];
+    const { live, rewarded } = await conversation({ turns: () => turns.shift()!() });
+    live.setDraft("你好");
+    await live.submit();
+    const once = [...rewarded];
+
+    live.setDraft("再见");
+    await live.submit();
+
+    expect(once).toEqual([oneTurn]);
+    expect(rewarded).toEqual([oneTurn]);
+  });
+
+  it("tells the shell what a turn in a call was rewarded with", async () => {
+    const { live, attempts, rewarded } = await conversation();
+    await connected(live, attempts);
+    const { handlers } = attempts[0];
+
+    handlers.onEvent({ type: "user", text: "你好", reply: 1 });
+    handlers.onEvent({ type: "done", message: message(4, "character", "こんにちは"), affinity: null, rewarded: oneTurn });
+
+    expect(rewarded).toEqual([oneTurn]);
+  });
+});
+
+describe("LiveConversation: the trophy", () => {
+  const at = "2026-10-20T08:00:00+00:00";
+  const unlocked = (...achievements: Rewarded["achievements"]): Rewarded => ({
+    draws: achievements.reduce((n, a) => n + a.draws, 0),
+    reset_cards: 0,
+    daily_tasks: [],
+    achievements,
+    completed: [],
+    rewarded_at: at,
+  });
+  const hers = { achievement: "turns", character_id: "hikari", stage: 2, draws: 2 };
+  const done = (rewarded: Rewarded): Extract<TurnEvent, { type: "done" }> => ({
+    type: "done",
+    message: message(4, "character", "こんにちは"),
+    affinity: null,
+    rewarded,
+  });
+  const turn = (rewarded: Rewarded) => scripted([{ type: "user", text: "你好" }, done(rewarded)]);
+
+  it("pops up with the draws her stages gave as a turn unlocks them, for 3s", async () => {
+    vi.useFakeTimers();
+    const together = { achievement: "characters", character_id: null, stage: 1, draws: 1 };
+    const opened = opening({
+      turns: turn(unlocked(hers, { achievement: "gifts", character_id: "hikari", stage: 1, draws: 1 }, together)),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const { live } = opened;
+
+    live.setDraft("你好");
+    await live.submit();
+    const shown = live.snapshot();
+    vi.advanceTimersByTime(2999);
+    const stillShown = live.snapshot().trophy;
+    vi.advanceTimersByTime(1);
+
+    expect(shown).toMatchObject({ trophy: { draws: 3, key: 1 }, herUnlockedAt: at });
+    expect(stillShown).not.toBeNull();
+    expect(live.snapshot()).toMatchObject({ trophy: null, herUnlockedAt: at });
+    vi.useRealTimers();
+  });
+
+  it("is not for another character's stages, nor those of all together", async () => {
+    const { live } = await conversation({
+      turns: turn(
+        unlocked(
+          { achievement: "turns", character_id: "mano", stage: 1, draws: 1 },
+          { achievement: "days", character_id: null, stage: 1, draws: 1 },
+        ),
+      ),
+    });
+
+    live.setDraft("你好");
+    await live.submit();
+
+    expect(live.snapshot()).toMatchObject({ trophy: null, herUnlockedAt: null });
+  });
+
+  it("does not pop up under the call layer, only leaving her stages unseen", async () => {
+    const { live, attempts } = await conversation();
+    await connected(live, attempts);
+    const { handlers } = attempts[0];
+
+    handlers.onEvent({ type: "user", text: "你好", reply: 1 });
+    handlers.onEvent(done(unlocked(hers)));
+
+    expect(live.snapshot()).toMatchObject({ trophy: null, herUnlockedAt: at });
+  });
+
+  it("pops up for a turn in a call with the call layer folded away", async () => {
+    const { live, attempts } = await conversation();
+    await connected(live, attempts);
+    live.collapse();
+    const { handlers } = attempts[0];
+
+    handlers.onEvent({ type: "user", text: "你好", reply: 1 });
+    handlers.onEvent(done(unlocked(hers)));
+
+    expect(live.snapshot().trophy).toEqual({ draws: 2, key: 1 });
   });
 });
 

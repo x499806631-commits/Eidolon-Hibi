@@ -18,7 +18,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from eidolon.backup import Backups
+from eidolon.backup import abandon_unfinished
 from eidolon.clock import Clock
 from eidolon.database import connect
 
@@ -56,11 +56,7 @@ def restore(source: Path, database: Path, clock: Clock) -> Restored:
     unpacked = _unpack(source, database)
     try:
         users = _users_in(unpacked)
-        backups = Backups(unpacked, clock)
-        try:
-            abandoned = backups.abandon_unfinished()
-        finally:
-            backups.close()
+        abandoned = abandon_unfinished(unpacked, clock)
         if database.exists():
             shutil.copymode(database, unpacked)
         # What the stopped server left in its log is in the database it is replacing.

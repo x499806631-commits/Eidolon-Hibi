@@ -68,7 +68,7 @@ async def test_a_day_that_mattered_is_written_of_once_it_is_over_and_once_only(
     client, llm, clock = await talked(make_client, settings, DIARY)
     backend = backend_of(client)
     me = user_id(settings.database_path, "producer")
-    backend.diary.moment(me, "mano", MOMENT, clock.now)
+    await backend.diary.moment(me, "mano", MOMENT, clock.now)
 
     clock.now = today_at(23, 50)
     await backend.diary.run_due()
@@ -111,7 +111,7 @@ async def test_off_nothing_is_noted_or_written(make_client: ClientFactory, setti
     conversation = await start_conversation(client)
     await send_turn(client, conversation, "我去练习了")
     backend = backend_of(client)
-    backend.diary.moment(user_id(settings.database_path, "producer"), "mano", MOMENT, clock.now)
+    await backend.diary.moment(user_id(settings.database_path, "producer"), "mano", MOMENT, clock.now)
     clock.now = today_at(0, 30, days=1)
 
     await backend.diary.run_due()
@@ -126,7 +126,7 @@ async def test_a_failed_entry_is_tried_again_later_then_let_go(
     failing = [LLMError("挂了")] * TRIES
     client, llm, clock = await talked(make_client, settings, *failing)
     backend = backend_of(client)
-    backend.diary.moment(user_id(settings.database_path, "producer"), "mano", MOMENT, clock.now)
+    await backend.diary.moment(user_id(settings.database_path, "producer"), "mano", MOMENT, clock.now)
     clock.now = today_at(0, 30, days=1)
 
     await backend.diary.run_due()
@@ -234,10 +234,10 @@ async def test_her_affinity_first_reaching_close_or_intimate_is_a_moment_once(
     me = user_id(settings.database_path, "producer")
     closer = Change(up=True, tier_changed=True, tier="close", cooldown=False)
 
-    diary.affinity_changed(me, "mano", closer, clock.now)
-    diary.affinity_changed(me, "mano", closer, clock.now + timedelta(days=3))
-    diary.affinity_changed(me, "mano", replace(closer, tier="trust"), clock.now)
-    diary.affinity_changed(me, "mano", replace(closer, tier_changed=False), clock.now)
+    await diary.affinity_changed(me, "mano", closer, clock.now)
+    await diary.affinity_changed(me, "mano", closer, clock.now + timedelta(days=3))
+    await diary.affinity_changed(me, "mano", replace(closer, tier="trust"), clock.now)
+    await diary.affinity_changed(me, "mano", replace(closer, tier_changed=False), clock.now)
 
     assert moments(settings.database_path) == [("closer", "和制作人的关系第一次变成了「亲近」")]
 
@@ -249,10 +249,10 @@ async def test_a_liked_gift_and_promises_kept_or_broken_are_moments(
     diary = backend_of(client).diary
     me = user_id(settings.database_path, "producer")
 
-    diary.gift_given(me, "mano", "布丁", False, None, clock.now)
-    diary.gift_given(me, "mano", "花束", True, None, clock.now)
-    diary.promise_kept(me, "mano", "给她一块布丁", clock.now)
-    diary.promise_broken(me, "mano", "带她去看海", clock.now)
+    await diary.gift_given(me, "mano", "布丁", False, None, clock.now)
+    await diary.gift_given(me, "mano", "花束", True, None, clock.now)
+    await diary.promise_kept(me, "mano", "给她一块布丁", clock.now)
+    await diary.promise_broken(me, "mano", "带她去看海", clock.now)
 
     assert moments(settings.database_path) == [
         ("gift", "制作人送了自己喜欢的花束"),
@@ -271,12 +271,12 @@ async def test_promises_tell_of_being_kept_and_of_her_first_complaint(
     me = user_id(settings.database_path, "producer")
     today = clock.now.date()
 
-    promises.record(me, "mano", [NewPromise("给她一块布丁", today)], clock.now)
-    promises.record(me, "mano", [NewPromise("带她去看海", today)], clock.now)
-    pudding, sea = sorted(promises.open_for(me), key=lambda p: p.text)
-    promises.fulfil(me, pudding.id)
-    promises.complained(sea.id, clock.now, "Etc/GMT")
-    promises.complained(sea.id, clock.now + timedelta(days=1), "Etc/GMT")
+    await promises.record(me, "mano", [NewPromise("给她一块布丁", today)], clock.now)
+    await promises.record(me, "mano", [NewPromise("带她去看海", today)], clock.now)
+    pudding, sea = sorted(await promises.open_for(me), key=lambda p: p.text)
+    await promises.fulfil(me, pudding.id)
+    await promises.complained(sea.id, clock.now, "Etc/GMT")
+    await promises.complained(sea.id, clock.now + timedelta(days=1), "Etc/GMT")
 
     assert [kind for kind, _ in moments(settings.database_path)] == [
         "promise_kept", "promise_broken",

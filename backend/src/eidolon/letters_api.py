@@ -27,22 +27,22 @@ class WriteNow(BaseModel):
 def add_letter_routes(app: FastAPI, backend: Backend) -> None:
     store, clock, keepsakes = backend.store, backend.clock, backend.keepsakes
 
-    def shown(user_id: str, letter: Letter) -> dict:
-        keepsake = keepsakes.for_letter(user_id, letter.id)
+    async def shown(user_id: str, letter: Letter) -> dict:
+        keepsake = await keepsakes.for_letter(user_id, letter.id)
         return letter.shown() | {"keepsake": keepsake.shown() if keepsake else None}
 
     @app.get("/api/letters")
-    def list_letters(user_id: UserId, character: str | None = None) -> list[dict]:
-        return [shown(user_id, letter) for letter in store.letters(user_id, character, clock())]
+    async def list_letters(user_id: UserId, character: str | None = None) -> list[dict]:
+        return [await shown(user_id, letter) for letter in await store.letters(user_id, character, clock())]
 
     @app.get("/api/letters/unread")
-    def unread_letters(user_id: UserId) -> dict:
-        return {"unread": store.unread_letters(user_id, clock())}
+    async def unread_letters(user_id: UserId) -> dict:
+        return {"unread": await store.unread_letters(user_id, clock())}
 
     @app.post("/api/letters/{letter_id}/read")
-    def read_letter(user_id: UserId, letter_id: int) -> dict:
+    async def read_letter(user_id: UserId, letter_id: int) -> dict:
         try:
-            return shown(user_id, store.read_letter(user_id, letter_id, clock()))
+            return await shown(user_id, await store.read_letter(user_id, letter_id, clock()))
         except NotFound:
             raise HTTPException(404, "没有这封信") from None
 

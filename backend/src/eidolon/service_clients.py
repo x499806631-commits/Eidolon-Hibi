@@ -16,11 +16,14 @@ released.
 import asyncio
 import threading
 from collections.abc import Awaitable, Callable
-from typing import Generic, Protocol, TypeVar
+from typing import Generic, Literal, Protocol, TypeVar
 
-from eidolon.config import ChatModelSettings, JudgeSettings, LLMSettings, ProxySettings
+from eidolon.config import (
+    ChatModelSettings, JudgeSettings, LLMProtocol, LLMSettings, ProxySettings,
+)
 from eidolon.judge import JUDGE_TIMEOUT, JudgeModel, open_judge
 from eidolon.llm import ChatLLM, ChatModels
+from eidolon.llm import listing
 from eidolon.llm.providers import LLM_TIMEOUT, open_chat_models, open_llm
 from eidolon.proxy import ProxyRoutes
 
@@ -42,6 +45,14 @@ class ServiceClients(Protocol):
         """The judge model `settings` choose."""
         ...
 
+    async def list_models(
+        self, service: Literal["chat_llm", "memory_llm"], protocol: LLMProtocol,
+        base_url: str, api_key: str,
+    ) -> list[str]:
+        """The models the service at `base_url` offers `api_key`, asked as `service`'s
+        requests go; raises LLMError saying why not."""
+        ...
+
 
 class ProviderClients:
     """The clients of the real services, each going through the proxy or direct as
@@ -58,6 +69,13 @@ class ProviderClients:
 
     def judge_model(self, settings: JudgeSettings) -> JudgeModel:
         return open_judge(settings, self._routes.client("judge", JUDGE_TIMEOUT))
+
+    async def list_models(
+        self, service: Literal["chat_llm", "memory_llm"], protocol: LLMProtocol,
+        base_url: str, api_key: str,
+    ) -> list[str]:
+        async with self._routes.client(service, listing.LIST_TIMEOUT) as client:
+            return await listing.list_models(client, protocol, base_url, api_key)
 
 
 class Closable(Protocol):

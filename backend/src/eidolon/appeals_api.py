@@ -15,14 +15,14 @@ def add_appeal_routes(app: FastAPI, appeals: Appeals) -> None:
         return JSONResponse({"detail": e.reason, "code": e.reason}, status_code=409)
 
     @app.get("/api/appeals")
-    def read_appeals(user_id: UserId) -> dict:
+    async def read_appeals(user_id: UserId) -> dict:
         """How many appeals the user has left today."""
-        return {"left": appeals.left(user_id)}
+        return {"left": await appeals.left(user_id)}
 
     @app.post("/api/messages/{message_id}/appeal")
-    def appeal(message_id: int, user_id: UserId) -> dict:
+    async def appeal(message_id: int, user_id: UserId) -> dict:
         """Appeal her reply: her affinity as it left it, and how many are left today."""
         try:
-            return appeals.appeal(user_id, message_id).shown()
+            return (await appeals.appeal(user_id, message_id)).shown()
         except NoSuchReply:
             raise HTTPException(404, "no such reply") from None

@@ -82,7 +82,8 @@ async def test_a_call_that_connects_answers_her_but_a_gift_or_a_call_that_never_
         make_client, REACH_OUT, settings=gifting, random=FakeRandom(COMMON, FIRST, 0),
     )
     assert (await client.get("/api/gifts")).status_code == 200
-    assert (await client.post("/api/gifts/draws", json={"all": True})).status_code == 200
+    # Once: the turn talked about did a daily task too, giving another chance.
+    assert (await client.post("/api/gifts/draws", json={"all": False})).status_code == 200
     last_contact(gifting.database_path, conversation, clock.now - timedelta(hours=20))
     await backend_of(client).reach_outs.run_due()
 

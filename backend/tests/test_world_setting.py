@@ -1,6 +1,6 @@
 """The world setting in every turn: what the chat model reads after the character sheet,
 taken from the data file beside the character configuration, and the backend refusing to
-start when a character is none of its idols."""
+start when a character is none of its idols and none of the office's staff."""
 
 import json
 import logging
@@ -432,7 +432,33 @@ def test_a_character_who_is_none_of_the_idols_stops_the_backend_from_starting(
         build_faked(settings, FakeLLM())
 
 
-def test_every_character_in_the_repository_is_one_of_the_idols_in_its_world_setting():
+async def test_the_offices_clerk_can_be_a_character(settings: Settings, characters: CharacterConfig):
+    """She is one of the staff, not of the idols: the backend starts all the same."""
+    characters.add("hazuki", "七草はづき", "sheet", speakers=["はづき"])
+    write_world(characters)
+
+    await build_faked(settings, FakeLLM()).aclose()
+
+
+def test_the_clerk_is_told_the_world_setting_without_songs_or_lives_of_her_own(
+    characters: CharacterConfig,
+):
+    """She does not sing or stand on stage, so her prompt has neither section; the songs and
+    lives are still work facts she can look up."""
+    write_world(characters)
+    world = load_world(world_path(characters.path))
+    assert world is not None
+
+    prompt = world.prompt("七草はづき", datetime(2026, 10, 1, tzinfo=UTC).date())
+
+    assert prompt.startswith("# 世界设定")
+    assert "事務員：七草はづき" in prompt
+    assert "# 你的歌" not in prompt and "# 你上过的演出" not in prompt
+    assert "想在舞台上唱给他听" not in prompt and "不引用歌词，也不编造歌词" in prompt
+    assert "# 你的歌" in world.prompt("櫻木真乃", datetime(2026, 10, 1, tzinfo=UTC).date())
+
+
+def test_every_character_in_the_repository_is_one_of_the_idols_or_staff_in_its_world_setting():
     path = world_path(REPO_CHARACTERS / "characters.toml")
     world = load_world(path)
 

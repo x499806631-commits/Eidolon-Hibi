@@ -18,7 +18,7 @@ from eidolon.engine import EmptyReply, WANTS_TO_GIVE, read_keepsake
 from eidolon.keepsakes import PER_DAY
 from eidolon.photo_prompt import keepsake_prompt
 from eidolon.promises import Promise
-from eidolon.schedules import Schedules, Slot
+from eidolon.schedules import Slot
 from tests.conftest import ClientFactory
 from tests.fakes import FakeClock, FakeImageService, FakeLLM, FakeRandom, context_of
 from tests.test_delete_account import user_id
@@ -174,7 +174,7 @@ async def test_the_pictures_missing_are_drawn_at_one_go_once_there_is_image_gene
     image = FakeImageService()
     drawn = make_client(
         FakeLLM(), settings=replace(settings, keepsakes=True, image=IMAGE),
-        image_transport=image.transport(),
+        image_transport=image.transport(), clock=FakeClock(at(13)),  # after she gave it
     )
     before = (await drawn.get("/api/keepsakes")).json()
 
@@ -197,7 +197,7 @@ async def test_her_scene_played_through_has_her_give_one_soon_after(
     keepsakes = backend_of(client).keepsakes
     me = user_id(settings.database_path, "producer")
 
-    keepsakes.scene_played(me, "mano", "close", clock.now)
+    await keepsakes.scene_played(me, "mano", "close", clock.now)
     await keepsakes.run_due()
     soon = len((await cabinet(client))["keepsakes"])
     clock.advance(minutes=11)
@@ -218,9 +218,9 @@ async def test_a_liked_gift_now_and_then_has_her_give_one_back_the_next_day(
     keepsakes = backend_of(client).keepsakes
     me = user_id(settings.database_path, "producer")
 
-    keepsakes.gift_given(me, "mano", "布丁", True, None, clock.now)  # one in three: this one
-    keepsakes.gift_given(me, "mano", "布丁", True, None, clock.now)  # not this
-    keepsakes.gift_given(me, "mano", "布丁", False, None, clock.now)  # not liked
+    await keepsakes.gift_given(me, "mano", "布丁", True, None, clock.now)  # one in three: this one
+    await keepsakes.gift_given(me, "mano", "布丁", True, None, clock.now)  # not this
+    await keepsakes.gift_given(me, "mano", "布丁", False, None, clock.now)  # not liked
     await keepsakes.run_due()
     today = len((await cabinet(client))["keepsakes"])
     clock.now = at(9, 31, TODAY + timedelta(days=1))
@@ -262,7 +262,7 @@ async def test_no_more_than_a_few_a_day_the_rest_the_next_day(
     me = user_id(settings.database_path, "producer")
 
     for n in range(PER_DAY + 1):
-        keepsakes.promise_settled(
+        await keepsakes.promise_settled(
             Promise(n + 1, me, "mano", f"约定{n}", TODAY), "kept", clock.now - timedelta(hours=3)
         )
     await keepsakes.run_due()
@@ -280,12 +280,10 @@ async def test_the_day_after_a_trip_she_brings_something_from_there(
     )
     last_contact(settings.database_path, conversation, at(9))
     me = user_id(settings.database_path, "producer")
-    schedules = Schedules(settings.database_path, lambda: clock.now)
-    schedules.keep(
+    await backend_of(client).schedules.keep(
         me, "mano", TODAY - timedelta(days=1), [Slot(time(10), time(12), "外景", "大阪", "work")],
         [], trip="大阪",
     )
-    schedules.close()
 
     await backend_of(client).keepsakes.run_due()
 
@@ -301,7 +299,7 @@ async def test_switched_off_or_not_turned_on_she_gives_none(
     me = user_id(settings.database_path, "producer")
     await client.put("/api/account/features/keepsakes", json={"on": False})
 
-    keepsakes.scene_played(me, "mano", "close", at(11))
+    await keepsakes.scene_played(me, "mano", "close", at(11))
     await keepsakes.run_due()
 
     assert (await cabinet(client))["keepsakes"] == []

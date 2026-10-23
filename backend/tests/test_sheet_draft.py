@@ -12,6 +12,7 @@ from eidolon.sheet_draft import MAX_BATCHES, SECTIONS, NoEpisodes, SheetReviewed
 from eidolon.story_import import import_csv_directory
 from tests.conftest import KOGANE_SHEET, Admin, CharacterConfig
 from tests.fakes import FakeEmbedder, FakeLLM
+from tests.stories import corpus_in
 
 SHEET = """\
 ## 身份
@@ -41,10 +42,9 @@ def characters(tmp_path: Path) -> CharacterConfig:
 
 @pytest.fixture
 async def corpus(tmp_path: Path, characters: CharacterConfig, story: Path):
-    corpus = StoryCorpus(tmp_path / "eidolon.db", FakeEmbedder())
-    await import_csv_directory(story, corpus, drafting(characters).values())
-    yield corpus
-    corpus.close()
+    async with corpus_in(tmp_path / "eidolon.db", FakeEmbedder()) as corpus:
+        await import_csv_directory(story, corpus, drafting(characters).values())
+        yield corpus
 
 
 def drafting(characters: CharacterConfig) -> dict[str, Character]:

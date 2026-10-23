@@ -4,6 +4,7 @@ import { InfoIcon } from "lucide-react";
 import { FormEvent, useEffect, useId, useState, type ReactNode } from "react";
 
 import { FailureNotice } from "@/components/app/FailureNotice";
+import { LLMProviderPicker, type LLMPick, type ModelLister } from "@/components/app/LLMProviderPicker";
 import { ModelChoiceField } from "@/components/app/ModelChoiceField";
 import { EffortField, ExtraBodyField, useEffortHint } from "@/components/app/ReasoningEffortFields";
 import { SettingsSection } from "@/components/app/SettingsSection";
@@ -23,6 +24,7 @@ import {
   checkOwnSpeechKey,
   getAccount,
   getLimitExemption,
+  listOwnLLMModels,
   type LimitExemption,
 } from "@/lib/api";
 import { exemptionNote, sayServices } from "@/lib/exemptingKeys";
@@ -639,6 +641,20 @@ function OwnLLMForm({
     setEditing(true);
   }
 
+  // 向服务商查模型，用要试调的那把 key：填了新的用新的，没填用存着的。
+  const listAt = baseUrl.trim();
+  const lister: ModelLister | null =
+    listAt && keyToTry
+      ? { key: `${protocol} ${listAt} ${keyToTry}`, ask: () => listOwnLLMModels(protocol, listAt, keyToTry) }
+      : null;
+
+  /** 选了服务商或模型：填进协议、地址和模型名。 */
+  function pick({ protocol, base_url, model }: LLMPick) {
+    if (protocol !== undefined) setProtocol(protocol);
+    if (base_url !== undefined) setBaseUrl(base_url);
+    if (model !== undefined) setModel(model);
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!toTry) return;
@@ -688,6 +704,27 @@ function OwnLLMForm({
     >
       <form onSubmit={submit}>
         <FieldGroup>
+          {/* 先选服务商、填 key，再选模型（能向服务商查）；下面三项是选了自动填的，也能手改 */}
+          <LLMProviderPicker
+            id={id}
+            baseUrl={baseUrl}
+            model={model}
+            onPick={pick}
+            lister={lister}
+            between={
+              <Field>
+                <FieldLabel htmlFor={`${id}-key`}>{t.apiKey}</FieldLabel>
+                <Input
+                  id={`${id}-key`}
+                  type="password"
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  autoComplete="off"
+                />
+                {current && <FieldDescription>{t.keepApiKey}</FieldDescription>}
+              </Field>
+            }
+          />
           <Field>
             <FieldLabel htmlFor={`${id}-protocol`}>{t.protocol}</FieldLabel>
             <Select
@@ -725,17 +762,6 @@ function OwnLLMForm({
               onChange={(event) => setModel(event.target.value)}
               autoComplete="off"
             />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor={`${id}-key`}>{t.apiKey}</FieldLabel>
-            <Input
-              id={`${id}-key`}
-              type="password"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              autoComplete="off"
-            />
-            {current && <FieldDescription>{t.keepApiKey}</FieldDescription>}
           </Field>
           <EffortField
             id={`${id}-effort`}

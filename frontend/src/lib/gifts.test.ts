@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AffinityChange } from "@/lib/affinity";
 import {
   chosenFirst,
+  drawDots,
   drawNote,
   emptyNote,
   giftsFor,
@@ -19,12 +20,27 @@ describe("抽奖台那句话", () => {
     expect(drawNote(3, 7, "明天 00:00")).toBe("明天 00:00 再发 1 次，最多攒 7 次");
   });
 
-  it("攒满了：抽掉之前不会再发", () => {
-    expect(drawNote(7, 7, "明天 00:00")).toBe("已攒满 7 次，抽掉之前不会再发");
+  it("攒满了：每天发的抽掉之前不会再发", () => {
+    expect(drawNote(7, 7, "明天 00:00")).toBe("每天发的已攒满，抽掉之前不会再发");
+  });
+
+  it("每日任务给的让次数超过 7 次：说法同攒满", () => {
+    expect(drawNote(9, 7, "明天 00:00")).toBe("每天发的已攒满，抽掉之前不会再发");
   });
 
   it("用完了：下次什么时候再发，不说「今天」（北京时间 0 点在别处可能是今天）", () => {
     expect(drawNote(0, 7, "今天 09:00")).toBe("已经抽完了，今天 09:00 再发 1 次");
+  });
+});
+
+describe("抽奖台的小点", () => {
+  it("攒了几次亮几个，不写「+n」", () => {
+    expect(drawDots(3, 7)).toEqual({ lit: 3, more: null, label: "抽奖还有 3 次，最多攒 7 次" });
+    expect(drawDots(7, 7)).toEqual({ lit: 7, more: null, label: "抽奖还有 7 次，最多攒 7 次" });
+  });
+
+  it("超过 7 次：7 个全亮，后面写超出几次", () => {
+    expect(drawDots(9, 7)).toEqual({ lit: 7, more: "+2", label: "抽奖还有 9 次" });
   });
 });
 
@@ -98,6 +114,7 @@ describe("送出后底部提示的那句话", () => {
     change,
     affinity: { tier: change?.tier ?? "cold", cooling: cooldown_until !== null, cooldown_until },
     left: 0,
+    rewarded: null,
   });
   const note = (g: Given) => givenNote(g, "凛世", now, "Asia/Tokyo");
 

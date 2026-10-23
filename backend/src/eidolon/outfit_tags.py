@@ -13,14 +13,12 @@ them from what she remembers of the card, told its name.
 import base64
 import logging
 import sqlite3
-import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 
 import httpx
 
-from eidolon.database import connect
+from eidolon.data_access import Database
 from eidolon.stand_outfits import thumbnail_path
 
 log = logging.getLogger(__name__)
@@ -57,7 +55,7 @@ class VisionSettings:
 class OutfitTags:
     def __init__(
         self,
-        path: Path,
+        db: Database,
         vision: VisionSettings | None,
         assets_url: str | None,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -65,11 +63,8 @@ class OutfitTags:
         self._vision = vision
         self._assets_url = assets_url
         self._transport = transport
-        self._db = connect(path)
-        self._db.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
+        self._db = db
+        db.prepare(_open)
 
     @property
     def can_read(self) -> bool:
@@ -79,12 +74,9 @@ class OutfitTags:
     async def of(self, outfit_id: str) -> str | None:
         """The outfit's tags, comma-separated: kept, or read now and kept; None if there is no
         model to read it with, or reading it failed."""
-        with self._lock:
-            row = self._db.execute(
-                "SELECT tags FROM outfit_tags WHERE outfit_id = ?", (outfit_id,)
-            ).fetchone()
-        if row is not None:
-            return row["tags"]
+        kept = await self._db.read(_kept, outfit_id)
+        if kept is not None:
+            return kept
         if not self.can_read or not _well_formed(outfit_id):
             return None
         try:
@@ -94,11 +86,7 @@ class OutfitTags:
             return None
         if not tags:
             return None
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT OR REPLACE INTO outfit_tags (outfit_id, tags, created_at) VALUES (?, ?, ?)",
-                (outfit_id, tags, datetime.now(UTC).isoformat()),
-            )
+        await self._db.write(_keep, outfit_id, tags, datetime.now(UTC).isoformat())
         return tags
 
     async def _read(self, outfit_id: str) -> str:
@@ -127,9 +115,22 @@ class OutfitTags:
             text = answer.json()["choices"][0]["message"]["content"] or ""
         return cleaned(text)
 
-    def close(self) -> None:
-        with self._lock:
-            self._db.close()
+
+
+def _open(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+
+
+def _kept(db: sqlite3.Connection, outfit_id: str) -> str | None:
+    row = db.execute("SELECT tags FROM outfit_tags WHERE outfit_id = ?", (outfit_id,)).fetchone()
+    return row[0] if row else None
+
+
+def _keep(db: sqlite3.Connection, outfit_id: str, tags: str, at: str) -> None:
+    db.execute(
+        "INSERT OR REPLACE INTO outfit_tags (outfit_id, tags, created_at) VALUES (?, ?, ?)",
+        (outfit_id, tags, at),
+    )
 
 
 def cleaned(text: str) -> str:

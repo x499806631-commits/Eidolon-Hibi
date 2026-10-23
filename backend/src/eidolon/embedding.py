@@ -75,7 +75,7 @@ class Reembeddable(Protocol):
         embedded."""
         ...
 
-    def forget_other_models(self) -> int:
+    async def forget_other_models(self) -> int:
         """Drop the vectors not from its embedder; returns how many there were."""
         ...
 
@@ -309,6 +309,31 @@ def nearest(
     scores = matrix @ query_vector / (
         np.linalg.norm(matrix, axis=1) * np.linalg.norm(query_vector) + 1e-12
     )
+    return [(int(i), float(scores[i])) for i in np.argsort(-scores)[:limit]]
+
+
+def unit_rows(vectors: Sequence[bytes]) -> np.ndarray:
+    """The stored `vectors` as the rows of a matrix, each scaled to length 1, so that
+    `nearest_rows` finds by cosine similarity what `nearest` does, without working out
+    their lengths again each time. Read-only."""
+    if not vectors:
+        return np.empty((0, 0), dtype=np.float32)
+    matrix = np.stack([np.frombuffer(v, dtype=np.float32) for v in vectors])
+    matrix /= np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-12
+    matrix.flags.writeable = False  # searched on many threads at once
+    return matrix
+
+
+def nearest_rows(
+    matrix: np.ndarray, query: Sequence[float], limit: int, rows: np.ndarray | None = None
+) -> list[tuple[int, float]]:
+    """Like `nearest`, among the rows of a `unit_rows` matrix, or only those of it at
+    `rows`: their indexes (among `rows`, if given) and scores, best first."""
+    among = matrix if rows is None else matrix[rows]
+    if not len(among):
+        return []
+    query_vector = np.asarray(query, dtype=np.float32)
+    scores = among @ (query_vector / (np.linalg.norm(query_vector) + 1e-12))
     return [(int(i), float(scores[i])) for i in np.argsort(-scores)[:limit]]
 
 

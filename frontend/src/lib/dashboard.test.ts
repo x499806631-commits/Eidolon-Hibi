@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  achievementTiles,
   affinityRows,
   countTicks,
+  dailyTaskTiles,
   durationRange,
   formatCount,
   formatCacheHitRate,
@@ -20,6 +22,7 @@ import {
   isDashboardRange,
   axisLabels,
   dashboardHref,
+  dashboardTabs,
   labelledStretches,
   rangeFromQuery,
   reachOutTiles,
@@ -303,5 +306,47 @@ describe("reachOutTiles", () => {
 describe("foldedCount", () => {
   it("shows the first five of a long list, and all of a list that would hide just one", () => {
     expect([6, 7].map(foldedCount)).toEqual([6, 5]);
+  });
+});
+
+describe("dailyTaskTiles", () => {
+  it("are none where the section is empty", () => {
+    expect(dailyTaskTiles(null)).toEqual([]);
+  });
+
+  it("count each task done, in the order of the gifts page", () => {
+    expect(dailyTaskTiles({ one_turn: 1200, one_gift: 3, ten_turns: 0 }).map((tile) => [tile.label, tile.value])).toEqual([
+      ["一个回合", "1,200"],
+      ["送一件礼", "3"],
+      ["十个回合", "0"],
+    ]);
+  });
+});
+
+describe("achievementTiles", () => {
+  it("are none where the section is empty", () => {
+    expect(achievementTiles(null)).toEqual([]);
+  });
+
+  it("count the stages unlocked, the draws they gave and the reset cards", () => {
+    expect(achievementTiles({ stages: 1200, draws: 3400, reset_cards: 0 }).map((tile) => [tile.label, tile.value])).toEqual([
+      ["解锁的阶段", "1,200"],
+      ["发出的抽奖次数", "3,400"],
+      ["重置卡", "0"],
+    ]);
+  });
+});
+
+describe("dashboardTabs", () => {
+  const affinity = { cooldowns: 0, cooled_users: 0, out_of_line: 0, manipulation: 0, levels: [0, 0, 0, 0, 0], characters: [] };
+  const tasks = { one_turn: 0, one_gift: 0, ten_turns: 0 };
+
+  it("have「好感度」where affinity is on, or daily tasks were done in the range", () => {
+    expect(dashboardTabs({ affinity, daily_tasks: tasks })).toEqual(["overview", "usage", "affinity", "cost"]);
+    expect(dashboardTabs({ affinity: null, daily_tasks: tasks })).toEqual(["overview", "usage", "affinity", "cost"]);
+  });
+
+  it("have none where both are empty", () => {
+    expect(dashboardTabs({ affinity: null, daily_tasks: null })).toEqual(["overview", "usage", "cost"]);
   });
 });

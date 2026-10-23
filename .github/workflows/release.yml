@@ -1,0 +1,148 @@
+# 手动发版本（见 docs/deploy.md「发版本」）：从上一个 v* 标签算出新版本号，让 LLM 写这一版的更新说明
+# （scripts/release_notes.py），在 main 的最新提交上打标签、发 Release，再把这个提交在 main 上测过的镜像
+# 重新打成 :1.2.3 和 :latest。
+#
+# 这里用 GITHUB_TOKEN 打的标签不会触发 ci.yml，所以镜像标签由这里重打，不重新构建；
+# 勾了「先存草稿」的，标签要等你在网页上发布时才打，那次推送标签由你触发，ci.yml 会照常发布 :1.2.3 和 :latest。
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 版本号升哪一位
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: 直接指定版本号（如 v1.2.3，填了就不看上面那项）
+        type: string
+        required: false
+      draft:
+        description: 先存草稿，在网页上看过、改过再发布
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+  actions: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: 只从 main 发
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::只能在 main 上发版本，这次选的是 $GITHUB_REF"
+          exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: 算版本号
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          prev=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+          if [ -n "$VERSION" ]; then
+            version="v${VERSION#v}"
+            if ! echo "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::版本号要写成 v1.2.3 这样：$VERSION"
+              exit 1
+            fi
+          elif [ -z "$prev" ]; then
+            version=v0.1.0
+          else
+            IFS=. read -r major minor patch <<< "${prev#v}"
+            case "$BUMP" in
+              major) version="v$((major + 1)).0.0" ;;
+              minor) version="v$major.$((minor + 1)).0" ;;
+              *) version="v$major.$minor.$((patch + 1))" ;;
+            esac
+          fi
+          if git rev-parse -q --verify "refs/tags/$version" > /dev/null; then
+            echo "::error::标签 $version 已经有了"
+            exit 1
+          fi
+          # 草稿还没有标签，下次再算会算出同一个版本号
+          if gh release view "$version" > /dev/null 2>&1; then
+            echo "::error::已经有 $version 的 Release（多半是还没发布的草稿），先发布或删掉它"
+            exit 1
+          fi
+          sha=$(git rev-parse HEAD)
+          echo "上一个版本：${prev:-（没有，这是首个版本）}；这次：$version（${sha::7}）"
+          {
+            echo "prev=$prev"
+            echo "version=$version"
+            echo "sha=$sha"
+          } >> "$GITHUB_OUTPUT"
+
+      # 镜像只在 main 的 CI 全部通过后才发布，没过就没有可重打的镜像
+      - name: 等 main 的 CI 通过
+        env:
+          SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          passed=$(gh run list --workflow ci.yml --commit "$SHA" --event push --status success --json databaseId --jq length)
+          if [ "$passed" = 0 ]; then
+            echo "::error::main 上 ${SHA::7} 的 CI 还没通过，等它跑完、镜像发布了再发版本"
+            exit 1
+          fi
+          for image in ghcr.io/sallyn0225/eidolon-sc-backend ghcr.io/sallyn0225/eidolon-sc-frontend; do
+            docker buildx imagetools inspect "$image:sha-${SHA::7}" > /dev/null
+          done
+
+      - name: 写更新说明
+        env:
+          RELEASE_LLM_BASE_URL: ${{ vars.RELEASE_LLM_BASE_URL }}
+          RELEASE_LLM_MODEL: ${{ vars.RELEASE_LLM_MODEL }}
+          RELEASE_LLM_API_KEY: ${{ secrets.RELEASE_LLM_API_KEY }}
+          PREV: ${{ steps.version.outputs.prev }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          if [ -z "$RELEASE_LLM_BASE_URL" ] || [ -z "$RELEASE_LLM_MODEL" ] || [ -z "$RELEASE_LLM_API_KEY" ]; then
+            echo "::error::先在仓库的 Settings → Secrets and variables → Actions 里配好变量 RELEASE_LLM_BASE_URL、RELEASE_LLM_MODEL 和密钥 RELEASE_LLM_API_KEY"
+            exit 1
+          fi
+          python3 scripts/release_notes.py --version "$VERSION" --prev "$PREV" --target "$SHA" --out "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 发 Release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.version.outputs.sha }}
+          DRAFT: ${{ inputs.draft }}
+        run: |
+          draft=()
+          if [ "$DRAFT" = true ]; then draft=(--draft); fi
+          gh release create "$VERSION" --target "$SHA" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" "${draft[@]}"
+
+      - uses: docker/login-action@v4
+        if: ${{ !inputs.draft }}
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 和 ci.yml 推 v* 标签时发布的一样：:1.2.3 和 :latest，指向 main 上测过的那份镜像
+      - name: 重打镜像标签
+        if: ${{ !inputs.draft }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          for image in ghcr.io/sallyn0225/eidolon-sc-backend ghcr.io/sallyn0225/eidolon-sc-frontend; do
+            docker buildx imagetools create -t "$image:${VERSION#v}" -t "$image:latest" "$image:sha-${SHA::7}"
+          done

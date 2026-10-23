@@ -3,6 +3,7 @@ the file the deployer decrypted, compressed or not, checked, put in place of the
 all at once, its old write-ahead log gone, and the backup runs it caught under way taken
 never to finish; a file that will not do leaves the database as it was."""
 
+import asyncio
 import gzip
 import re
 import sqlite3
@@ -11,12 +12,9 @@ from pathlib import Path
 import pyrage
 import pytest
 
-from eidolon.backup import Backups
-from eidolon.clock import utc_now
 from eidolon.config import Settings
-from eidolon.store import Store
-from tests.conftest import Admin
-from tests.test_backup import IDENTITY, Deployment
+from tests.conftest import Admin, aside, users_in
+from tests.test_backup import IDENTITY, Deployment, backups_in, begun_in, records_in
 
 
 def names(database: Path) -> list[str]:
@@ -28,10 +26,7 @@ def names(database: Path) -> list[str]:
 
 
 def a_database(path: Path, *users: str) -> Path:
-    store = Store(path)
-    for name in users:
-        store.create_user(name)
-    store.close()
+    aside(users_in(path, *users))
     return path
 
 
@@ -191,18 +186,17 @@ def test_backup_runs_the_file_caught_under_way_are_taken_never_to_finish(
     admin: Admin, current: Path, tmp_path: Path
 ):
     backup = a_database(tmp_path / "backup.db", "mano")
-    backups = Backups(backup, utc_now)
-    backups.start("cron")
-    backups.close()
+    asyncio.run(begun_in(backup, "cron"))
 
     out = admin.run("restore", str(backup))
 
-    backups = Backups(current, utc_now)
-    try:
-        assert [(r.source, r.abandoned) for r in backups.records()] == [("cron", True)]
-        assert backups.status().under_way is None
-    finally:
-        backups.close()
+    async def restored():
+        async with backups_in(current) as backups:
+            return await backups.records(), await backups.status()
+
+    records, status = asyncio.run(restored())
+    assert [(r.source, r.abandoned) for r in records] == [("cron", True)]
+    assert status.under_way is None
     assert "1 条" in out
 
 
@@ -222,8 +216,5 @@ async def test_a_backup_decrypted_with_the_deployers_key_restores(
     admin.run("restore", str(downloaded))
 
     assert names(current) == ["producer"]
-    backups = Backups(current, utc_now)
-    try:  # the run that made the backup was under way in it
-        assert [(r.source, r.abandoned) for r in backups.records()] == [("cron", True)]
-    finally:
-        backups.close()
+    # the run that made the backup was under way in it
+    assert [(r.source, r.abandoned) for r in await records_in(current)] == [("cron", True)]

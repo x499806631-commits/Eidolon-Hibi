@@ -10,6 +10,7 @@ import pytest
 
 from eidolon.characters import load_characters
 from eidolon.corpus import CatalogEntry, Line, StoryCorpus
+from eidolon.data_access import Database
 from eidolon.mirror import Mirror
 from eidolon.story_sync import PROBE_AHEAD, SyncReport, sync_stories
 from tests.conftest import Admin, CharacterConfig
@@ -57,10 +58,15 @@ def mirror_site() -> FakeShinyColorsDB:
 
 class Syncer:
     def __init__(
-        self, tmp_path: Path, characters: CharacterConfig, story: Path, site: FakeShinyColorsDB
+        self,
+        tmp_path: Path,
+        db: Database,
+        characters: CharacterConfig,
+        story: Path,
+        site: FakeShinyColorsDB,
     ) -> None:
         self.embedder = FakeEmbedder()
-        self.corpus = StoryCorpus(tmp_path / "eidolon.db", self.embedder)
+        self.corpus = StoryCorpus(db, self.embedder)
         self.story = story
         self.cache = tmp_path / "mirror"
         self._characters = characters
@@ -81,10 +87,12 @@ class Syncer:
 
 
 @pytest.fixture
-def syncer(tmp_path: Path, characters: CharacterConfig, story: Path, mirror_site: FakeShinyColorsDB):
-    syncer = Syncer(tmp_path, characters, story, mirror_site)
-    yield syncer
-    syncer.corpus.close()
+async def syncer(
+    tmp_path: Path, characters: CharacterConfig, story: Path, mirror_site: FakeShinyColorsDB
+):
+    db = Database(tmp_path / "eidolon.db")
+    yield Syncer(tmp_path, db, characters, story, mirror_site)
+    await db.close()
 
 
 async def test_card_episodes_the_translations_lack_come_in_under_the_cards_name_and_title(
@@ -92,7 +100,7 @@ async def test_card_episodes_the_translations_lack_come_in_under_the_cards_name_
 ):
     report = await syncer.run()
 
-    episode = syncer.corpus.get("produce_events/200100401")
+    episode = await syncer.corpus.get("produce_events/200100401")
     assert episode is not None
     assert (episode.category, episode.source, episode.title) == ("P卡剧情", MANO_CARD, "ほわほわアイドル")
     assert episode.imported_from == "json" and episode.cast == {"mano"}
@@ -102,7 +110,7 @@ async def test_card_episodes_the_translations_lack_come_in_under_the_cards_name_
         Line("真乃", "ほわ……\n鳩さんたちと公園で遊んでいました"),
     )
     assert all(line.zh is None for line in episode.lines)
-    support = syncer.corpus.get("produce_events/300100401")
+    support = await syncer.corpus.get("produce_events/300100401")
     assert support is not None
     assert (support.category, support.source, support.title) == (
         "S卡剧情", "【トリプルイルミネーション】櫻木真乃", "始まりのステップ"
@@ -110,7 +118,7 @@ async def test_card_episodes_the_translations_lack_come_in_under_the_cards_name_
     assert report.untranslated.added == 4  # Mano's three, Kogane's second
     assert report.mirror_error is None
     # The catalog shows them by card.
-    catalog = {source.source: source for source in syncer.corpus.catalog("mano")}
+    catalog = {source.source: source for source in await syncer.corpus.catalog("mano")}
     assert catalog[MANO_CARD].category == "P卡剧情"
     assert catalog[MANO_CARD].episodes == (
         CatalogEntry("produce_events/200100401", "ほわほわアイドル"),
@@ -123,7 +131,7 @@ async def test_a_translated_episode_is_neither_downloaded_nor_replaced(
 ):
     report = await syncer.run()
 
-    translated = syncer.corpus.get("produce_events/201100401")
+    translated = await syncer.corpus.get("produce_events/201100401")
     assert translated is not None
     assert translated.imported_from == "csv"
     assert translated.lines[0].zh == "长崎的什锦面超好吃的！"
@@ -143,12 +151,12 @@ async def test_a_translation_that_arrives_later_replaces_the_untranslated_episod
 
     report = await syncer.run()
 
-    episode = syncer.corpus.get("produce_events/200100401")
+    episode = await syncer.corpus.get("produce_events/200100401")
     assert episode is not None
     assert episode.imported_from == "csv"
     assert episode.lines[0].zh == "呼哇……\n我在公园和鸽子们玩"
-    assert len([e for e in syncer.corpus.list_episodes() if e.id == "produce_events/200100401"]) == 1
-    catalog = {source.source: source for source in syncer.corpus.catalog("mano")}
+    assert len([e for e in await syncer.corpus.list_episodes() if e.id == "produce_events/200100401"]) == 1
+    catalog = {source.source: source for source in await syncer.corpus.catalog("mano")}
     assert [entry.episode_id for entry in catalog[MANO_CARD].episodes] == [
         "produce_events/200100401",
         "produce_events/200100402",
@@ -171,7 +179,7 @@ async def test_syncing_again_downloads_and_embeds_nothing_and_asks_nothing_of_an
     assert syncer.embedder.documents == []
     assert (report.downloaded, report.embedded_passages, report.untranslated.imported) == (0, 0, 0)
     assert report.translations_kept == 0  # no card was asked about again
-    assert syncer.corpus.get("produce_events/200100401") is not None
+    assert await syncer.corpus.get("produce_events/200100401") is not None
     asked = {str(r.url) for r in mirror_site.requests}
     assert not any("201100402" in url or KOGANE_P_SSR in url for url in asked)
     assert not any("300100401" in url or MANO_S_SSR in url for url in asked)
@@ -189,7 +197,7 @@ async def test_a_changed_card_is_checked_but_only_changed_scripts_are_downloaded
     report = await syncer.run()
 
     assert mirror_site.sent == ["produce_events/200100402"]
-    episode = syncer.corpus.get("produce_events/200100402")
+    episode = await syncer.corpus.get("produce_events/200100402")
     assert episode is not None and episode.lines[-1].ja == "やってみます"
     assert (report.untranslated.imported, report.untranslated.added) == (1, 0)
 
@@ -206,7 +214,7 @@ async def test_a_script_deleted_from_the_cache_is_downloaded_again(
     assert mirror_site.sent == ["produce_events/300100401"]
     assert report.downloaded == 1
     assert (syncer.cache / "scripts/produce_events/300100401.json").exists()
-    assert syncer.corpus.get("produce_events/300100401") is not None
+    assert await syncer.corpus.get("produce_events/300100401") is not None
 
 
 async def test_a_script_the_mirror_lacks_is_no_error_and_comes_in_once_it_is_there(
@@ -216,12 +224,12 @@ async def test_a_script_the_mirror_lacks_is_no_error_and_comes_in_once_it_is_the
 
     assert report.mirror_error is None
     assert report.missing == 1
-    assert syncer.corpus.get("produce_events/200100403") is None
+    assert await syncer.corpus.get("produce_events/200100403") is None
 
     mirror_site.add_script("produce_events/200100403", MANO_CARD_SECOND_SCRIPT)
     await syncer.run()
 
-    episode = syncer.corpus.get("produce_events/200100403")
+    episode = await syncer.corpus.get("produce_events/200100403")
     assert episode is not None and (episode.source, episode.title) == (MANO_CARD, "成長の証")
 
 
@@ -233,9 +241,9 @@ async def test_when_the_mirror_is_unreachable_the_translations_still_come_in(
     report = await syncer.run()
 
     assert report.mirror_error is not None
-    park = syncer.corpus.get("produce_events/100100101")
+    park = await syncer.corpus.get("produce_events/100100101")
     assert park is not None and park.imported_from == "csv"
-    assert syncer.corpus.get("produce_events/200100401") is None
+    assert await syncer.corpus.get("produce_events/200100401") is None
 
 
 async def test_an_api_answer_shaped_unlike_before_is_a_mirror_error(
@@ -247,7 +255,7 @@ async def test_an_api_answer_shaped_unlike_before_is_a_mirror_error(
 
     assert report.mirror_error is not None and "idolInfo" in report.mirror_error
     # Mano's cards, listed before Kogane's, still come in.
-    assert syncer.corpus.get("produce_events/200100401") is not None
+    assert await syncer.corpus.get("produce_events/200100401") is not None
 
 
 async def test_a_sync_the_mirror_broke_off_picks_up_where_it_stopped(
@@ -261,7 +269,7 @@ async def test_a_sync_the_mirror_broke_off_picks_up_where_it_stopped(
     assert report.mirror_error is not None
     assert mirror_site.sent == ["produce_events/200100401", "produce_events/200100402"]
     # What was downloaded before it failed is imported.
-    assert syncer.corpus.get("produce_events/200100401") is not None
+    assert await syncer.corpus.get("produce_events/200100401") is not None
     mirror_site.down_after = None
     mirror_site.sent.clear()
     syncer.embedder.documents.clear()
@@ -271,7 +279,7 @@ async def test_a_sync_the_mirror_broke_off_picks_up_where_it_stopped(
     assert report.mirror_error is None
     assert "produce_events/200100401" not in mirror_site.sent
     assert "produce_events/200100402" not in mirror_site.sent
-    assert syncer.corpus.get("produce_events/300100401") is not None
+    assert await syncer.corpus.get("produce_events/300100401") is not None
     assert not any("ほわほわアイドル" in text for text in syncer.embedder.documents)
 
 
@@ -279,20 +287,20 @@ async def test_a_sync_the_embedding_service_broke_off_picks_up_without_downloadi
     syncer: Syncer, mirror_site: FakeShinyColorsDB
 ):
     await syncer.run()
-    syncer.corpus.remove("produce_events/200100401")  # as if embedding failed before it was saved
+    await syncer.corpus.remove("produce_events/200100401")  # as if embedding failed before it was saved
     mirror_site.sent.clear()
 
     await syncer.run()
 
     assert mirror_site.sent == []
-    assert syncer.corpus.get("produce_events/200100401") is not None
+    assert await syncer.corpus.get("produce_events/200100401") is not None
 
 
 async def test_only_the_idols_asked_for_are_synced(syncer: Syncer, mirror_site: FakeShinyColorsDB):
     await syncer.run(idols=[1])
 
-    assert syncer.corpus.get("produce_events/200100401") is not None
-    assert syncer.corpus.get("produce_events/201100402") is None
+    assert await syncer.corpus.get("produce_events/200100401") is not None
+    assert await syncer.corpus.get("produce_events/201100402") is None
     assert not any("idolList" in str(r.url) for r in mirror_site.requests)
     assert not any("game_event_communications" in str(r.url) for r in mirror_site.requests)
 
@@ -384,19 +392,19 @@ def events(mirror_site: FakeShinyColorsDB) -> FakeShinyColorsDB:
 async def test_events_the_translations_lack_are_filled_in(syncer: Syncer, events: FakeShinyColorsDB):
     await syncer.run()
 
-    gap = [syncer.corpus.get(event(2, episode)) for episode in (1, 2)]
+    gap = [await syncer.corpus.get(event(2, episode)) for episode in (1, 2)]
     assert all(e is not None and e.category == "活动剧情" and e.imported_from == "json" for e in gap)
     assert [e.lines[0].ja for e in gap if e is not None] == [
         "イベント2の第1話です\nほわっ", "イベント2の第2話です\nほわっ"
     ]
     # The episode SCTranslationData lacks of an event it has.
-    second = syncer.corpus.get(event(4, 2))
+    second = await syncer.corpus.get(event(4, 2))
     assert second is not None and second.imported_from == "json"
-    translated = syncer.corpus.get(event(4, 1))
+    translated = await syncer.corpus.get(event(4, 1))
     assert translated is not None and translated.imported_from == "csv"
     assert event(4, 1) not in events.sent
     # Numbers the mirror has nothing under are no error.
-    assert syncer.corpus.get(event(1, 1)) is None and syncer.corpus.get(event(3, 1)) is None
+    assert await syncer.corpus.get(event(1, 1)) is None and await syncer.corpus.get(event(3, 1)) is None
 
 
 async def test_events_after_the_latest_are_found_even_past_a_skipped_number(
@@ -405,9 +413,9 @@ async def test_events_after_the_latest_are_found_even_past_a_skipped_number(
     report = await syncer.run()
 
     for number, episodes in ((5, 2), (7, 1)):
-        found = [syncer.corpus.get(event(number, e)) for e in range(1, episodes + 1)]
+        found = [await syncer.corpus.get(event(number, e)) for e in range(1, episodes + 1)]
         assert all(e is not None for e in found)
-        assert syncer.corpus.get(event(number, episodes + 1)) is None
+        assert await syncer.corpus.get(event(number, episodes + 1)) is None
     assert report.mirror_error is None
 
 
@@ -438,7 +446,7 @@ async def test_an_event_script_deleted_from_the_cache_is_downloaded_again(
 
     assert events.sent == [event(2, 1)]
     assert (syncer.cache / f"scripts/{event(2, 1)}.json").exists()
-    assert syncer.corpus.get(event(2, 1)) is not None
+    assert await syncer.corpus.get(event(2, 1)) is not None
 
 
 async def test_a_new_event_on_the_mirror_comes_in_at_the_next_sync(
@@ -449,7 +457,7 @@ async def test_a_new_event_on_the_mirror_comes_in_at_the_next_sync(
 
     await syncer.run()
 
-    assert syncer.corpus.get(event(8, 1)) is not None
+    assert await syncer.corpus.get(event(8, 1)) is not None
 
 
 async def test_events_are_named_from_the_table_or_left_unnamed(
@@ -457,13 +465,13 @@ async def test_events_are_named_from_the_table_or_left_unnamed(
 ):
     report = await syncer.run(event_names={2: "はじめてのイベント", 4: LIGHT_UP})
 
-    named = syncer.corpus.get(event(2, 2))
+    named = await syncer.corpus.get(event(2, 2))
     assert named is not None and (named.source, named.title) == ("はじめてのイベント", "第2話")
-    unnamed = syncer.corpus.get(event(5, 1))
+    unnamed = await syncer.corpus.get(event(5, 1))
     assert unnamed is not None and (unnamed.source, unnamed.title) == ("活动剧情 005", "第1話")
     assert report.unnamed_events == [5, 7]
     # Grouped with the episode SCTranslationData has, which is filed under the same name.
-    translated, second = syncer.corpus.get(event(4, 1)), syncer.corpus.get(event(4, 2))
+    translated, second = await syncer.corpus.get(event(4, 1)), await syncer.corpus.get(event(4, 2))
     assert translated is not None and second is not None
     assert second.source == translated.source == LIGHT_UP
 
@@ -473,7 +481,7 @@ async def test_an_event_the_table_lacks_takes_the_name_its_translated_episodes_h
 ):
     report = await syncer.run()
 
-    second = syncer.corpus.get(event(4, 2))
+    second = await syncer.corpus.get(event(4, 2))
     assert second is not None and second.source == LIGHT_UP
     assert 4 not in report.unnamed_events
 
@@ -483,7 +491,7 @@ async def test_the_catalog_shows_events_by_name_with_episodes_in_order(
 ):
     await syncer.run(event_names={2: "はじめてのイベント"})
 
-    catalog = {source.source: source for source in syncer.corpus.catalog("mano")}
+    catalog = {source.source: source for source in await syncer.corpus.catalog("mano")}
     assert catalog["はじめてのイベント"].category == "活动剧情"
     assert catalog["はじめてのイベント"].episodes == (
         CatalogEntry(event(2, 1), "第1話"),
@@ -501,10 +509,10 @@ async def test_a_name_filled_in_later_renames_the_event_at_the_next_sync(
     report = await syncer.run(event_names={5: "新しいイベント"})
 
     assert events.sent == []
-    catalog = {source.source: source for source in syncer.corpus.catalog("mano")}
+    catalog = {source.source: source for source in await syncer.corpus.catalog("mano")}
     assert "活动剧情 005" not in catalog
     assert [e.episode_id for e in catalog["新しいイベント"].episodes] == [event(5, 1), event(5, 2)]
-    assert syncer.corpus.episode_ids("game_event_communications/4001005") == [event(5, 1), event(5, 2)]
+    assert await syncer.corpus.episode_ids("game_event_communications/4001005") == [event(5, 1), event(5, 2)]
     assert report.unnamed_events == [2, 7]
 
 
@@ -519,10 +527,10 @@ async def test_a_translation_that_arrives_later_replaces_the_untranslated_event_
 
     report = await syncer.run(event_names=names)
 
-    episode = syncer.corpus.get(event(2, 1))
+    episode = await syncer.corpus.get(event(2, 1))
     assert episode is not None and episode.imported_from == "csv"
     assert episode.lines[0].zh == "这是活动2的第1话\n呼哇"
-    catalog = {source.source: source for source in syncer.corpus.catalog("mano")}
+    catalog = {source.source: source for source in await syncer.corpus.catalog("mano")}
     assert [e.episode_id for e in catalog["はじめてのイベント"].episodes] == [event(2, 1), event(2, 2)]
     assert report.translated.untranslated_replaced == 1
 
@@ -535,7 +543,7 @@ async def test_when_the_api_is_down_events_still_come_from_the_viewer(
     report = await syncer.run()
 
     assert report.mirror_error is not None
-    assert syncer.corpus.get(event(2, 1)) is not None
+    assert await syncer.corpus.get(event(2, 1)) is not None
 
 
 def test_the_sync_command_names_events_from_the_table(
@@ -672,23 +680,23 @@ async def test_produce_episodes_the_translations_lack_come_in_from_the_albums(
 ):
     report = await syncer.run()
 
-    def where(script: str) -> tuple[str, str, str] | None:
-        episode = syncer.corpus.get(script)
+    async def where(script: str) -> tuple[str, str, str] | None:
+        episode = await syncer.corpus.get(script)
         return (episode.category, episode.source, episode.title) if episode else None
 
-    assert where("produce_events/100100102") == ("培育剧情", "W.I.N.G.編", "自信のありか")
-    assert where("produce_communication_televisions/600100100011") == ("培育剧情", "W.I.N.G.編", "TV出演後コミュ①")
-    assert where("produce_events/500100201") == (
+    assert await where("produce_events/100100102") == ("培育剧情", "W.I.N.G.編", "自信のありか")
+    assert await where("produce_communication_televisions/600100100011") == ("培育剧情", "W.I.N.G.編", "TV出演後コミュ①")
+    assert await where("produce_events/500100201") == (
         "培育剧情", "283プロダクション ファン感謝祭編", "始まり、もう一度"
     )
-    assert where("special_communications/490200101") == (
+    assert await where("special_communications/490200101") == (
         "特别剧情", "誕生日", "【櫻木 真乃】 誕生日ミニコミュ①"
     )
-    episode = syncer.corpus.get("produce_events/100100102")
+    episode = await syncer.corpus.get("produce_events/100100102")
     assert episode is not None and episode.imported_from == "json" and episode.cast == {"mano"}
     assert episode.lines[0] == Line("真乃", "自信のありかです\nほわっ")
     # What SCTranslationData has translated is neither downloaded nor replaced.
-    assert syncer.corpus.imported_from("produce_events/100100101") == "csv"
+    assert await syncer.corpus.imported_from("produce_events/100100101") == "csv"
     assert "produce_events/100100101" not in albums.sent
     assert report.mirror_error is None
 
@@ -698,15 +706,15 @@ async def test_an_album_episode_is_filed_where_the_translations_file_that_part_o
 ):
     await syncer.run()
 
-    episode = syncer.corpus.get("produce_communications/100100100021")
+    episode = await syncer.corpus.get("produce_communications/100100100021")
     assert episode is not None and (episode.source, episode.title) == ("Morning", "Morning②")
     # And a translation that arrives later replaces it in the same place.
     write_story(syncer.story, "櫻木真乃/Morning/Morning②.csv", MORNING_TRANSLATED, "produce_communications/100100100021")
 
     await syncer.run()
 
-    assert syncer.corpus.imported_from("produce_communications/100100100021") == "csv"
-    catalog = {source.source: source for source in syncer.corpus.catalog("mano")}
+    assert await syncer.corpus.imported_from("produce_communications/100100100021") == "csv"
+    catalog = {source.source: source for source in await syncer.corpus.catalog("mano")}
     assert [entry.episode_id for entry in catalog["Morning"].episodes] == [
         "produce_communications/100100100011",
         "produce_communications/100100100021",
@@ -725,7 +733,7 @@ async def test_failure_endings_in_the_albums_are_neither_downloaded_nor_imported
         "produce_events/700100102",
         "produce_communication_auditions/500100100012",
     ):
-        assert syncer.corpus.get(script) is None
+        assert await syncer.corpus.get(script) is None
         assert script not in albums.sent
 
 
@@ -735,7 +743,7 @@ async def test_produce_episodes_titled_like_a_failure_the_rules_do_not_know_are_
     report = await syncer.run()
 
     assert report.looks_like_failures == [CatalogEntry("produce_events/600100108", "負けても、敗れても")]
-    assert syncer.corpus.get("produce_events/600100108") is not None  # imported all the same
+    assert await syncer.corpus.get("produce_events/600100108") is not None  # imported all the same
 
     report = await syncer.run()
 
@@ -745,7 +753,7 @@ async def test_produce_episodes_titled_like_a_failure_the_rules_do_not_know_are_
 
     report = await syncer.run()
 
-    assert syncer.corpus.imported_from("produce_events/600100108") == "csv"
+    assert await syncer.corpus.imported_from("produce_events/600100108") == "csv"
     assert report.looks_like_failures == []
 
 
@@ -783,7 +791,7 @@ async def test_an_album_script_deleted_from_the_cache_is_downloaded_again(
     assert albums.sent == ["produce_events/100100102"]  # the album itself is unchanged
     assert (report.downloaded, report.album_missing) == (1, 0)
     assert (syncer.cache / "scripts/produce_events/100100102.json").exists()
-    assert syncer.corpus.get("produce_events/100100102") is not None
+    assert await syncer.corpus.get("produce_events/100100102") is not None
     # The script the mirror did not have is still not asked for.
     assert not any("100100103" in str(r.url) for r in albums.requests)
 
@@ -800,7 +808,7 @@ async def test_a_changed_album_has_its_new_episodes_fetched(
     await syncer.run()
 
     assert sorted(albums.sent) == ["album/01", "produce_events/100100103", "produce_events/100100104"]
-    episode = syncer.corpus.get("produce_events/100100104")
+    episode = await syncer.corpus.get("produce_events/100100104")
     assert episode is not None and (episode.source, episode.title) == ("W.I.N.G.編", "頑張りすぎ")
 
 
@@ -822,7 +830,7 @@ async def test_a_sync_the_mirror_broke_off_in_an_album_picks_up_where_it_stopped
     report = await syncer.run(idols=[1])
 
     assert report.mirror_error is not None
-    assert syncer.corpus.get("produce_events/100100102") is not None  # downloaded, so imported
+    assert await syncer.corpus.get("produce_events/100100102") is not None  # downloaded, so imported
     albums.down_after = None
     albums.sent.clear()
 
@@ -830,7 +838,7 @@ async def test_a_sync_the_mirror_broke_off_in_an_album_picks_up_where_it_stopped
 
     assert report.mirror_error is None
     assert "produce_events/100100102" not in albums.sent
-    assert syncer.corpus.get("special_communications/490200101") is not None
+    assert await syncer.corpus.get("special_communications/490200101") is not None
 
 
 async def test_only_the_albums_of_the_idols_asked_for_are_synced(
@@ -839,8 +847,8 @@ async def test_only_the_albums_of_the_idols_asked_for_are_synced(
     await syncer.run(idols=[2])
 
     assert [url.rsplit("/", 1)[1] for url in album_requests(albums)] == ["02.json"]
-    assert syncer.corpus.get("produce_events/500100201") is not None
-    assert syncer.corpus.get("produce_events/100100102") is None
+    assert await syncer.corpus.get("produce_events/500100201") is not None
+    assert await syncer.corpus.get("produce_events/100100102") is None
 
 
 def test_the_sync_command_lists_produce_episodes_titled_like_a_failure(

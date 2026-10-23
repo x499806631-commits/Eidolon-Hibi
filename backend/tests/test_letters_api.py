@@ -1,15 +1,13 @@
 """Letters over HTTP (GLOSSARY.md「来信」): the user's letters, newest first and without
 delivery cues, how many are unread, and reading one; nobody else's."""
 
-from contextlib import closing
 from dataclasses import replace
 
 import httpx
 
 from eidolon.config import Settings
 from eidolon.reply_format import Segment
-from eidolon.store import Store
-from tests.conftest import ClientFactory
+from tests.conftest import ClientFactory, store_in
 from tests.fakes import FakeLLM
 from tests.test_text_turn import start_conversation
 
@@ -22,8 +20,8 @@ LETTER = [
 async def producer_id(client: httpx.AsyncClient, settings: Settings) -> str:
     """The signed-in user's id, through a conversation they start."""
     conversation_id = await start_conversation(client, "mano")
-    with closing(Store(settings.database_path)) as store:
-        conversation = store.get_conversation(conversation_id)
+    async with store_in(settings.database_path) as store:
+        conversation = await store.get_conversation(conversation_id)
     assert conversation is not None
     return conversation.user_id
 
@@ -33,9 +31,9 @@ async def test_letters_come_newest_first_without_delivery_cues_and_are_read_once
 ):
     client = make_client(FakeLLM())
     user_id = await producer_id(client, settings)
-    with closing(Store(settings.database_path)) as store:
-        first = store.add_letter(user_id, "mano", "ordinary", LETTER)
-        second = store.add_letter(user_id, "kogane", "holiday", [Segment("メリクリ！", "圣诞快乐！")])
+    async with store_in(settings.database_path) as store:
+        first = await store.add_letter(user_id, "mano", "ordinary", LETTER)
+        second = await store.add_letter(user_id, "kogane", "holiday", [Segment("メリクリ！", "圣诞快乐！")])
 
     assert (await client.get("/api/letters/unread")).json() == {"unread": 2}
     letters = (await client.get("/api/letters")).json()
@@ -59,8 +57,8 @@ async def test_letters_come_newest_first_without_delivery_cues_and_are_read_once
 async def test_nobody_reads_another_users_letters(make_client: ClientFactory, settings: Settings):
     producer = make_client(FakeLLM())
     user_id = await producer_id(producer, settings)
-    with closing(Store(settings.database_path)) as store:
-        letter = store.add_letter(user_id, "mano", "ordinary", LETTER)
+    async with store_in(settings.database_path) as store:
+        letter = await store.add_letter(user_id, "mano", "ordinary", LETTER)
     other = make_client(FakeLLM(), "someone else")
 
     assert (await other.get("/api/letters")).json() == []
@@ -72,10 +70,10 @@ async def test_nobody_reads_another_users_letters(make_client: ClientFactory, se
 async def test_letters_go_with_the_user(make_client: ClientFactory, settings: Settings):
     client = make_client(FakeLLM())
     user_id = await producer_id(client, settings)
-    with closing(Store(settings.database_path)) as store:
-        store.add_letter(user_id, "mano", "ordinary", LETTER)
-        store.delete_user(user_id)
-        assert store.letters(user_id) == []
+    async with store_in(settings.database_path) as store:
+        await store.add_letter(user_id, "mano", "ordinary", LETTER)
+        await store.delete_user(user_id)
+        assert await store.letters(user_id) == []
 
 
 async def test_under_the_development_sign_in_she_writes_one_at_once(

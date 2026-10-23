@@ -1,0 +1,74 @@
+name: 玩法仓库登记
+description: 想要新玩法？在自己的 fork 上做出来，再到这里登记，会收进社区玩法仓库列表
+title: "[玩法仓库] "
+labels: [fork-showcase]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        主仓库不接 PR，玩法上主要做维护者自己想做的。想加别的玩法，请 fork 一份、改个名字，在自己的仓库里做，做好了用这个模板登记。
+        登记的仓库会收进 [社区玩法仓库](https://github.com/Sallyn0225/eidolon-sc/blob/main/docs/community-forks.md)。收录只是方便大家找到，不代表维护者审过或担保其中的代码。
+        地址变了、想更新简介或不想再被列出，在这个 issue 下留言就行，关闭后也能留言。
+
+  - type: input
+    id: repo-url
+    attributes:
+      label: 仓库地址
+      placeholder: https://github.com/你的用户名/你的仓库名
+    validations:
+      required: true
+
+  - type: input
+    id: project-name
+    attributes:
+      label: 项目名
+      description: 列表里显示的名字，要和 eidolon-sc 区分开
+    validations:
+      required: true
+
+  - type: input
+    id: author
+    attributes:
+      label: 署名
+      description: 列表里写的作者名，昵称也行
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 玩法简介
+      description: 加了什么、改了什么，一两句话，会写进列表
+    validations:
+      required: true
+
+  - type: dropdown
+    id: rating
+    attributes:
+      label: 内容分级
+      description: 含成人内容的仓库也收，但会单独标出
+      options:
+        - 全年龄
+        - 含成人内容（NSFW）
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 截图
+      description: 可选，拖进来就行
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 确认
+      options:
+        - label: 仓库已经改名，不叫 eidolon-sc（在仓库的 Settings → General 里改，旧地址会自动跳转）
+          required: true
+        - label: 仓库是公开的，按 AGPL-3.0-or-later 提供了修改后的源码
+          required: true
+        - label: 仓库里没有剧情数据、角色音色和立绘素材（[ADR-0003](https://github.com/Sallyn0225/eidolon-sc/blob/main/docs/adr/0003-corpus-and-voices-stay-private.md)）
+          required: true
+        - label: 我看过 [CONTRIBUTING.md](https://github.com/Sallyn0225/eidolon-sc/blob/main/CONTRIBUTING.md) 里 fork 前要注意的事，包括 Spine Runtimes 的许可证
+          required: true

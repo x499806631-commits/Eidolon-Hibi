@@ -7,15 +7,16 @@ checking the data: it never reaches a prompt, ADR-0008), the eight units, the
 releases and their songs, and the lives with who stood on each day and what was performed
 on it (its setlist, covers of other brands' songs included, which are none of the
 songs), each entry with the URLs it came from. Every character is one
-of its idols, matched by display name; without the file, characters go without the
-world setting.
+of its idols or of the office's staff, matched by display name; without the file,
+characters go without the world setting.
 
 Every turn carries the world setting in full, after the character sheet
 (`World.prompt`), with the rules for facts of the original that the data does not have,
-and then her songs: those she sings alone and those her whole unit sings, no one else
-joining in, each with the releases it is on and when they came or come out, which goes
-by the day of the turn, not by the day the data runs to; and her lives: the days of each
-live she stood on or is to stand on, those her CV was absent from left out.
+and then, for an idol, her songs: those she sings alone and those her whole unit sings,
+no one else joining in, each with the releases it is on and when they came or come out,
+which goes by the day of the turn, not by the day the data runs to; and her lives: the
+days of each live she stood on or is to stand on, those her CV was absent from left out.
+One of the staff (the clerk, 七草はづき) has neither: she does not sing or stand on stage.
 
 Every song, release and live day is also one of the work facts all characters share
 (`World.entries`, `work_facts`), which retrieval searches along with the story and the
@@ -37,7 +38,8 @@ WORLD_FILE = "world.json"
 
 
 class WorldError(RuntimeError):
-    """The data file cannot be read, or a character is not one of its idols."""
+    """The data file cannot be read, or a character is neither one of its idols nor one of
+    the office's staff."""
 
 
 class WorldSyncError(RuntimeError):
@@ -174,6 +176,10 @@ class World:
     def idol(self, name: str) -> Idol | None:
         return next((idol for idol in self.idols if idol.name == name), None)
 
+    def is_staff(self, name: str) -> bool:
+        """Whether `name` is one of the office's staff rather than an idol."""
+        return self.idol(name) is None and any(staff.name == name for staff in self.staff)
+
     def unit_of(self, name: str) -> tuple[str, int] | None:
         """The name of her unit and where it is among the office's units (the official
         order, as the data file lists them); None if the sources could not agree on it."""
@@ -283,18 +289,21 @@ class World:
         return "、".join(names + rest)
 
     def check_characters(self, characters: dict[str, Character], path: Path) -> None:
-        """Raises WorldError naming the first character who is none of the idols."""
+        """Raises WorldError naming the first character who is none of the idols and none
+        of the staff."""
         for character in characters.values():
-            if self.idol(character.name) is None:
+            if self.idol(character.name) is None and not self.is_staff(character.name):
                 raise WorldError(
-                    f"角色 {character.id} 的显示名「{character.name}」在世界设定资料 {path} 的偶像名单里找不到"
+                    f"角色 {character.id} 的显示名「{character.name}」在世界设定资料 {path} 的偶像和事务所职员名单里都找不到"
                     "（显示名要和资料里的日文全名一致，例如「櫻木真乃」）"
                 )
 
     def prompt(self, name: str, today: date) -> str:
-        """The world setting as a turn on `today` with the idol called `name` carries it,
-        her songs and her lives included, those on releases and days after `today` told
-        as still to come. No CV is in it."""
+        """The world setting as a turn on `today` with the character called `name` carries
+        it: for an idol, her songs and her lives included, those on releases and days after
+        `today` told as still to come; for one of the staff, neither. No CV is in it."""
+        if self.is_staff(name):
+            return self._setting_prompt(staff=True)
         return "\n\n".join(
             [self._setting_prompt(), self._songs_prompt(name, today), self._lives_prompt(name, today)]
         )
@@ -342,16 +351,16 @@ class World:
             lines.append(f"- {song.title}：{'、'.join(on)}" if on else f"- {song.title}")
         return "\n".join(lines)
 
-    def _setting_prompt(self) -> str:
+    def _setting_prompt(self, *, staff: bool = False) -> str:
         as_of = _day(self.as_of)
         lines = [
             "# 世界设定",
             f"以下是你所在的{self.office}的基本情况，资料截止到 {as_of}。",
             "",
         ]
-        for staff in self.staff:
-            reading = f"（{staff.reading}）" if staff.reading else ""
-            lines.append(f"{staff.position}：{staff.name}{reading}")
+        for person in self.staff:
+            reading = f"（{person.reading}）" if person.reading else ""
+            lines.append(f"{person.position}：{person.name}{reading}")
         lines += ["", "事务所的组合和成员（每位偶像只属于一个组合）："]
         for unit in self.units:
             reading = f"（{unit.reading}）" if unit.reading else ""
@@ -361,7 +370,8 @@ class World:
             "关于作品里的事实：",
             "- 歌曲、唱片、演出，上面的资料里查不到的，就老实说一时想不起来；"
             "既不说「没有这回事」，也不顺着对方的说法附和、编下去。",
-            "- 不引用歌词，也不编造歌词。被要求唱或念歌词时，用你自己的方式岔开，比如说想在舞台上唱给他听。",
+            "- 不引用歌词，也不编造歌词。被要求唱或念歌词时，用你自己的方式岔开，"
+            + ("比如说那是偶像们的歌，想听就去听她们唱。" if staff else "比如说想在舞台上唱给他听。"),
             "- 关于演出，你只知道名称、日期、会场、出演者和曲目这类事实，不编造台上发生了什么（MC、现场的情节等）。",
             "- 不谈论声优，也不知道「中の人」这回事；被问到时按你自己的性格应对，不说出任何人的名字。",
             "- 不谈论具体的周边商品（立牌、徽章之类），被问到时按你自己的性格应对，不编造商品。",

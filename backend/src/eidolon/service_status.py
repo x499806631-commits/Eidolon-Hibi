@@ -25,7 +25,6 @@ were made: a service is judged on them only then, and may be tried meanwhile.
 
 import asyncio
 import logging
-import threading
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -93,7 +92,6 @@ class ServiceStatus:
         self._probes = probes
         self._clock = clock
         self._probed: dict[ServiceName, _Probed] = {}
-        self._lock = threading.Lock()  # users ask from the API's thread pool
         self._cached: tuple[datetime, dict] | None = None
         self._generation = 0
         """Counts what made what is cached stale, so that a status summed up meanwhile is
@@ -106,16 +104,15 @@ class ServiceStatus:
         shown = self._config.service_status.services
         return [s for s in SERVICE_NAMES if s in shown and self._config.has_service(s)]
 
-    def now(self) -> dict:
+    async def now(self) -> dict:
         """What users are shown: the window, and each service shown with its status."""
         now = self._clock()
-        with self._lock:
-            if self._cached is not None and now - self._cached[0] < CACHED_FOR:
-                return self._cached[1]
-            generation = self._generation
+        if self._cached is not None and now - self._cached[0] < CACHED_FOR:
+            return self._cached[1]
+        generation = self._generation
         minutes = self._config.service_status.window_minutes
         since = now - timedelta(minutes=minutes)
-        calls = self._activity.deployer_calls_since(since)
+        calls = await self._activity.deployer_calls_since(since)
         status = {
             "window_minutes": minutes,
             "services": [
@@ -123,9 +120,8 @@ class ServiceStatus:
                 for s in self.shown()
             ],
         }
-        with self._lock:
-            if generation == self._generation:
-                self._cached = (now, status)
+        if generation == self._generation:
+            self._cached = (now, status)
         return status
 
     def _status(self, service: ServiceName, calls: tuple[int, int] | None, since: datetime) -> Status:
@@ -152,7 +148,7 @@ class ServiceStatus:
         """One tick of `keep_probing`."""
         now = self._clock()
         since = now - timedelta(minutes=self._config.service_status.window_minutes)
-        calls = await asyncio.to_thread(self._activity.deployer_calls_since, since)
+        calls = await self._activity.deployer_calls_since(since)
         idle: list[ServiceName] = [
             s for s in self.shown()
             if s in self._probes and s not in calls
@@ -177,11 +173,10 @@ class ServiceStatus:
         return False
 
     def _forget(self) -> None:
-        with self._lock:
-            self._cached = None
-            self._generation += 1
+        self._cached = None
+        self._generation += 1
 
-    def _changed(self) -> None:
+    async def _changed(self) -> None:
         """The configuration changed, maybe a service's key: what was found of it by trying
         it no longer holds, and it is tried again at the next tick."""
         self._probed.clear()
@@ -260,6 +255,6 @@ async def _rerank(reranker: Reranker) -> None:
 
 def add_service_status_routes(app: FastAPI, status: ServiceStatus) -> None:
     @app.get("/api/service-status")
-    def service_status(_: UserId) -> dict:
+    async def service_status(_: UserId) -> dict:
         """Whether each service shown works now (see the module)."""
-        return status.now()
+        return await status.now()

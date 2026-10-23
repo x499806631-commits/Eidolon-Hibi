@@ -62,12 +62,12 @@ async def talked(
     return client, llm, conversation
 
 
-def holding(client: httpx.AsyncClient, settings: Settings, *gift_ids: str) -> None:
+async def holding(client: httpx.AsyncClient, settings: Settings, *gift_ids: str) -> None:
     """Give the user a favor ticket and the gifts."""
     backend = backend_of(client)
     user = user_id(settings.database_path, "producer")
-    backend.gifts.put_back_ticket(user, "favor")
-    backend.gifts.put_back_gifts(user, gift_ids)
+    await backend.gifts.put_back_ticket(user, "favor")
+    await backend.gifts.put_back_gifts(user, gift_ids)
 
 
 def tier(settings: Settings, character_id: str, value: float, cooling: bool = False) -> None:
@@ -101,7 +101,7 @@ async def test_asked_to_call_the_producer_otherwise_she_answers_and_does_from_th
     make_client: ClientFactory, settings: Settings
 ):
     client, llm, conversation = await talked(make_client, OK, ["<ja>ねえ</ja><zh>呐</zh>"])
-    holding(client, settings, "black-tea")
+    await holding(client, settings, "black-tea")
 
     asked = await client.post("/api/favors/address", json={
         "character_id": "mano", "address": "小茶", "gift_ids": ["black-tea"],
@@ -121,7 +121,7 @@ async def test_a_name_she_will_not_take_up_she_calls_them_once_and_the_ticket_is
 ):
     no = ["<answer>no</answer>\n<ja>今回だけですよ、ご主人様</ja><zh>就这一次哦，主人</zh>"]
     client, llm, conversation = await talked(make_client, no, ["<ja>はい</ja><zh>好的</zh>"])
-    holding(client, settings, "cake")
+    await holding(client, settings, "cake")
 
     asked = await client.post("/api/favors/address", json={
         "character_id": "mano", "address": "主人", "gift_ids": ["cake"],
@@ -142,7 +142,7 @@ async def test_a_favor_asked_with_the_wrong_gifts_keeps_the_ticket_and_the_gifts
     make_client: ClientFactory, settings: Settings
 ):
     client, _, _ = await talked(make_client)
-    holding(client, settings, "cake")
+    await holding(client, settings, "cake")
 
     asked = await client.post("/api/favors/wake", json={
         "character_id": "mano", "at": "07:00", "days": 1, "gift_ids": ["cake"],
@@ -160,7 +160,7 @@ async def test_asked_to_wake_the_producer_she_does_each_morning(
     clock = FakeClock(NOON)
     morning = ["<ja>起きて！</ja><zh>起床啦！</zh>"]
     client, llm, conversation = await talked(make_client, OK, morning, morning, clock=clock)
-    holding(client, settings, "coffee")
+    await holding(client, settings, "coffee")
 
     asked = await client.post("/api/favors/wake", json={
         "character_id": "mano", "at": "07:30", "days": 2, "gift_ids": ["coffee"],
@@ -189,7 +189,7 @@ async def test_sworn_sisters_she_knows_it_from_then_on_and_gives_a_keepsake(
     make_client: ClientFactory, settings: Settings
 ):
     client, llm, conversation = await talked(make_client, OK, ["<ja>お姉ちゃん</ja><zh>姐姐</zh>"])
-    holding(client, settings, "plush")
+    await holding(client, settings, "plush")
     tier(settings, "mano", 70)
 
     asked = await client.post("/api/favors/bond", json={
@@ -208,7 +208,7 @@ async def test_sworn_sisters_she_knows_it_from_then_on_and_gives_a_keepsake(
 
 async def test_sworn_sisters_only_once_close(make_client: ClientFactory, settings: Settings):
     client, _, _ = await talked(make_client)
-    holding(client, settings, "plush")
+    await holding(client, settings, "plush")
 
     asked = await client.post("/api/favors/bond", json={
         "character_id": "mano", "elder": "her", "gift_ids": ["plush"],
@@ -228,7 +228,7 @@ async def test_one_makes_peace_with_another_who_forgives_the_producer_and_says_s
         numbers=(3,), clock=clock,
     )
     kogane = await start_conversation(client, "kogane")
-    holding(client, settings, "cake")
+    await holding(client, settings, "cake")
     tier(settings, "kogane", 10, cooling=True)
 
     asked = await client.post("/api/favors/make_up", json={
@@ -257,7 +257,7 @@ async def test_no_peace_to_make_with_one_not_fallen_out(
 ):
     client, _, _ = await talked(make_client)
     await start_conversation(client, "kogane")
-    holding(client, settings, "cake")
+    await holding(client, settings, "cake")
 
     asked = await client.post("/api/favors/make_up", json={
         "mediator_id": "mano", "target_id": "kogane", "gift_ids": ["cake"],
@@ -276,7 +276,7 @@ async def test_a_birthday_party_is_got_ready_held_told_of_and_thanked_for(
         make_client, OK, after, thanks, numbers=(0, 0), clock=clock,
     )
     kogane = await start_conversation(client, "kogane")
-    holding(client, settings, "cake", "pudding", "coffee", "bouquet")
+    await holding(client, settings, "cake", "pudding", "coffee", "bouquet")
     the_day = date(2026, 10, 24)
 
     asked = await client.post("/api/favors/party", json={
@@ -290,10 +290,10 @@ async def test_a_birthday_party_is_got_ready_held_told_of_and_thanked_for(
 
     assert asked.status_code == 200, asked.text
     assert "是给月岡恋鐘过生日的" in str(llm.prompts[1])
-    assert favors.twists_on(user, "mano", date(2026, 10, 23)) == ["这几天在帮制作人悄悄准备明天傍晚的生日会"]
-    assert favors.twists_on(user, "mano", the_day) == [HELPER_TWIST.format(others="月岡恋鐘", what="生日会")]
-    assert favors.twists_on(user, "kogane", the_day) == [SURPRISE_TWIST]
-    assert favors.twists_on(user, "kogane", date(2026, 10, 23)) == []
+    assert await favors.twists_on(user, "mano", date(2026, 10, 23)) == ["这几天在帮制作人悄悄准备明天傍晚的生日会"]
+    assert await favors.twists_on(user, "mano", the_day) == [HELPER_TWIST.format(others="月岡恋鐘", what="生日会")]
+    assert await favors.twists_on(user, "kogane", the_day) == [SURPRISE_TWIST]
+    assert await favors.twists_on(user, "kogane", date(2026, 10, 23)) == []
     [told] = reach_outs(await record(client, conversation))[1:]
     assert told["photo"]["status"] == "ready"
     assert llm.prompts[3][-1].content.endswith(WANTS_TO_THANK)

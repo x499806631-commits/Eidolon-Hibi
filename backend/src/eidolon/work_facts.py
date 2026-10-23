@@ -11,10 +11,10 @@ went searches them itself (`search_entries`), for the lives and releases only.
 """
 
 from collections.abc import Callable, Collection, Sequence
-from pathlib import Path
 
 from eidolon.characters import Character
 from eidolon.corpus import REEMBED_BATCH
+from eidolon.data_access import Database
 from eidolon.embedded_texts import WORK_SCOPE, EmbeddedTexts
 from eidolon.embedding import Document, Embedder
 from eidolon.references import Reference, ReferenceKind
@@ -34,10 +34,10 @@ class WorkFacts:
     label = "作品资料"
     unit = "条"
 
-    def __init__(self, path: Path, embedder: Embedder, world: World | None) -> None:
+    def __init__(self, db: Database, embedder: Embedder, world: World | None) -> None:
         """Without `world` (no data file), there are no work facts: any vectors stored
         for the embedder's model are forgotten the first time they are searched."""
-        self._texts = EmbeddedTexts(path, embedder)
+        self._texts = EmbeddedTexts(db, embedder)
         self._entries = list({e.text: e for e in (world.entries() if world else [])}.values())
         self._documents = [Document(e.text, e.title) for e in self._entries]
 
@@ -80,9 +80,6 @@ class WorkFacts:
             progress(embedded)
         return embedded
 
-    def forget_other_models(self) -> int:
+    async def forget_other_models(self) -> int:
         """Drop every vector not from this source's embedder; returns how many there were."""
-        return self._texts.forget_other_models(WORK_SCOPE)
-
-    def close(self) -> None:
-        self._texts.close()
+        return await self._texts.forget_other_models(WORK_SCOPE)

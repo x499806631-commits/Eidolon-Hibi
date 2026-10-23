@@ -125,6 +125,10 @@ date = "10-02"
 character = "haruki"
 date = "04-05"
 
+[[birthdays]]
+character = "hazuki"  # 事务员，不是偶像；生日取自 facts/hazuki.md
+date = "02-03"
+
 [[holidays]]
 name = "元旦"
 icon = "🎍"

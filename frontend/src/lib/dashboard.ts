@@ -24,6 +24,12 @@ export const DASHBOARD_TABS = ["overview", "usage", "affinity", "cost"] as const
 
 export type DashboardTab = (typeof DASHBOARD_TABS)[number];
 
+/** The tabs a dashboard has:「好感度」only where affinity is on, or daily tasks were done in the
+ * range while it was. */
+export function dashboardTabs(board: Pick<Dashboard, "affinity" | "daily_tasks">): DashboardTab[] {
+  return DASHBOARD_TABS.filter((name) => name !== "affinity" || board.affinity !== null || board.daily_tasks !== null);
+}
+
 export function isDashboardTab(value: string): value is DashboardTab {
   return (DASHBOARD_TABS as readonly string[]).includes(value);
 }
@@ -236,6 +242,11 @@ export type Dashboard = {
   affinity: AffinitySection | null;
   /** Her reach-outs (GLOSSARY「搭话」); null where they are off and none were made in the range. */
   reach_outs: ReachOutsSection | null;
+  /** How many times each daily task was done (GLOSSARY「每日任务」); null where affinity is off and
+   * none were done in the range. */
+  daily_tasks: DailyTasksSection | null;
+  /** The achievements' stages unlocked and what they gave (GLOSSARY「成就」); null where `daily_tasks` is. */
+  achievements: AchievementsSection | null;
   /** What the deployer's keys cost, estimated at the prices (`lib/adminPrices`). */
   cost: Cost;
 };
@@ -257,6 +268,31 @@ export function reachOutTiles(section: ReachOutsSection | null): { id: string; l
       value: section.answered_share === null ? NONE : formatPercent(section.answered_share),
     },
   ];
+}
+
+/** The dashboard's「每日任务」section: how many times each daily task was done, by its id. */
+export type DailyTasksSection = { one_turn: number; one_gift: number; ten_turns: number };
+
+const DAILY_TASK_IDS = ["one_turn", "one_gift", "ten_turns"] as const;
+
+/** The section's tiles, as the page shows them, in the order of the gifts page; none where it is empty. */
+export function dailyTaskTiles(section: DailyTasksSection | null): { id: string; label: string; value: string }[] {
+  if (section === null) return [];
+  const words = copy.admin.dashboard.tasksAndAchievements.tiles;
+  return DAILY_TASK_IDS.map((id) => ({ id, label: words[id], value: formatCount(section[id]) }));
+}
+
+/** The dashboard's achievements, beside the daily tasks: how many stages were unlocked, the draw
+ * chances they gave, and the reset cards characters complete gave. */
+export type AchievementsSection = { stages: number; draws: number; reset_cards: number };
+
+const ACHIEVEMENT_TILE_IDS = ["stages", "draws", "reset_cards"] as const;
+
+/** The achievements' tiles, as the page shows them after the daily tasks'; none where they are empty. */
+export function achievementTiles(section: AchievementsSection | null): { id: string; label: string; value: string }[] {
+  if (section === null) return [];
+  const words = copy.admin.dashboard.tasksAndAchievements.tiles;
+  return ACHIEVEMENT_TILE_IDS.map((id) => ({ id, label: words[id], value: formatCount(section[id]) }));
 }
 
 /** The levels the judge model judges a turn at, from hurting her (0) to making her very happy (4). */

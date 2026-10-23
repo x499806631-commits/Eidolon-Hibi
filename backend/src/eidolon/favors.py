@@ -36,12 +36,10 @@ import json
 import re
 import logging
 import sqlite3
-import threading
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from itertools import permutations
-from pathlib import Path
 from typing import Literal, get_args
 from zoneinfo import ZoneInfo
 
@@ -49,7 +47,8 @@ from eidolon.activity import ActivityLog
 from eidolon.affinity import BELOW_TRUST, Affinities
 from eidolon.characters import Character
 from eidolon.clock import Clock
-from eidolon.database import connect
+from eidolon.data_access import Database
+from eidolon.database import by_name
 from eidolon.engine import TRIP_PHOTO_OTHERS, WITH_YOU, ConversationEngine, photo_rules
 from eidolon.features import AllOn, Switches
 from eidolon.gift_catalog import Category, Gift, Rarity
@@ -302,7 +301,7 @@ def match(slots: Sequence[Slot], gifts: Sequence[Gift]) -> bool:
 class Favors:
     def __init__(
         self,
-        path: Path,
+        db: Database,
         store: Store,
         engine: ConversationEngine,
         characters: Mapping[str, Character],
@@ -316,7 +315,7 @@ class Favors:
         keepsakes: Keepsakes,
         trip_photos: TripPhotos,
         special_days: SpecialDays | None = None,
-        moment: Callable[[str, str, str, datetime], None] = lambda *_: None,
+        moment: Callable[[str, str, str, datetime], Awaitable[None]] | None = None,
         in_call: Callable[[str], bool] = lambda _: False,
         features: Switches = AllOn(),
     ) -> None:
@@ -337,25 +336,14 @@ class Favors:
         self._moment = moment
         self._in_call = in_call
         self._features = features
-        self._db = connect(path)
-        self._db.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
-            have = {r[1] for r in self._db.execute("PRAGMA table_info(favor_ties)")}
-            for column in ("declined", "declined_at"):
-                if column not in have:
-                    self._db.execute(f"ALTER TABLE favor_ties ADD COLUMN {column} TEXT")
+        self._db = db
+        db.prepare(_open)
 
     # What the rest read.
 
-    def ties(self, user_id: str, character_id: str) -> Ties | None:
+    async def ties(self, user_id: str, character_id: str) -> Ties | None:
         """What the producer asked of her alone, for her prompt; None if nothing."""
-        with self._lock:
-            row = self._db.execute(
-                "SELECT * FROM favor_ties WHERE user_id = ? AND character_id = ?",
-                (user_id, character_id),
-            ).fetchone()
+        row = await self._db.read(_tie_row, user_id, character_id)
         if row is None:
             return None
         made_up_by = None
@@ -368,12 +356,12 @@ class Favors:
         ties = Ties(row["address"], row["bond"], made_up_by, declined)
         return ties if ties != Ties() else None
 
-    def twists_on(self, user_id: str, character_id: str, day: date) -> list[str]:
+    async def twists_on(self, user_id: str, character_id: str, day: date) -> list[str]:
         """What the parties have her do on `day` (GLOSSARY.md「行程」): getting one ready, the
         days before, as the one helping; being at it, that evening."""
         names = {c.id: c.name for c in self._characters.values()}
         twists = []
-        for row in self._parties_of(user_id):
+        for row in await self._db.read(_parties_of, user_id):
             on = date.fromisoformat(row["day"])
             guests: list[str] = json.loads(row["guests"])
             at_it = [row["helper_id"], *guests]
@@ -393,23 +381,13 @@ class Favors:
                 twists.append(PREPARING_TWIST.format(when=_when(day, on), what=row["what"]))
         return twists
 
-    def overview(self, user_id: str) -> dict:
+    async def overview(self, user_id: str) -> dict:
         """What the favors page shows: what each favor takes, how each is called and who is
         sworn, the mornings and parties to come, the birthdays within a week."""
-        zone = self._zone(user_id)
+        zone = await self._zone(user_id)
         now = self._clock()
         today = now.astimezone(zone).date()
-        with self._lock:
-            ties = self._db.execute(
-                "SELECT character_id, address, bond FROM favor_ties WHERE user_id = ?"
-                " AND (address IS NOT NULL OR bond IS NOT NULL)",
-                (user_id,),
-            ).fetchall()
-            wakes = self._db.execute(
-                "SELECT character_id, MIN(due_at) AS next, COUNT(*) AS left FROM favor_wakes"
-                " WHERE user_id = ? AND done = 0 GROUP BY character_id",
-                (user_id,),
-            ).fetchall()
+        ties, wakes, parties = await self._db.read(_overview, user_id)
         birthdays = []
         if self._special_days is not None:
             for ahead in range(1, MAX_DAYS_AHEAD + 1):
@@ -430,7 +408,7 @@ class Favors:
             ],
             "parties": [
                 {"day": r["day"], "helper_id": r["helper_id"], "what": r["what"]}
-                for r in self._parties_of(user_id)
+                for r in parties
                 if not r["done"] and date.fromisoformat(r["day"]) >= today
             ],
             "birthdays": birthdays,
@@ -446,14 +424,14 @@ class Favors:
         she answers in, and whether she took it up. She may not, as her character and the
         name have it: then she calls them so this once and goes on as before, the ticket
         and the gifts used up all the same."""
-        conversation = self._open(user_id, character_id)
-        self._willing(user_id, character_id)
+        conversation = await self._open(user_id, character_id)
+        await self._willing(user_id, character_id)
         address = (address or "").strip() or None
         if address is not None and len(address) > ADDRESS_MAX:
             raise CannotAsk("称呼太长了")
         gifts = self._fitting("address", gift_ids)
         if address is None:
-            before = self.ties(user_id, character_id)
+            before = await self.ties(user_id, character_id)
             rules = ADDRESS_BACK_RULES.format(
                 address=(before and before.address) or "之前说好的叫法", gifts=gifts
             )
@@ -465,9 +443,11 @@ class Favors:
             nonlocal accepted
             if address is not None and answered_no(raw):
                 accepted = False
-                await asyncio.to_thread(self._declined, user_id, character_id, address)
+                await self._db.write(
+                    _declined, user_id, character_id, address, self._clock()
+                )
             else:
-                await asyncio.to_thread(self._set_tie, user_id, character_id, "address", address)
+                await self._db.write(_set_tie, user_id, character_id, "address", address)
 
         await self._ask(user_id, conversation, gift_ids, rules, "（制作人刚刚拜托你换个称呼。）", done)
         return conversation.id, accepted
@@ -476,14 +456,14 @@ class Favors:
         self, user_id: str, character_id: str, at: time, days: int, gift_ids: Sequence[str]
     ) -> str:
         """Ask her to wake the producer at `at`, `days` mornings on end from the next."""
-        conversation = self._open(user_id, character_id)
-        self._willing(user_id, character_id)
+        conversation = await self._open(user_id, character_id)
+        await self._willing(user_id, character_id)
         if not WAKE_FROM <= at < WAKE_UNTIL:
             raise CannotAsk("只能约早上四点到中午十二点之间")
         if not 1 <= days <= MAX_DAYS_AHEAD:
             raise CannotAsk("最多连续七天")
         gifts = self._fitting("wake", gift_ids)
-        zone = self._zone(user_id)
+        zone = await self._zone(user_id)
         now = self._clock().astimezone(zone)
         first = now.date() if now.time() < at else now.date() + timedelta(days=1)
         mornings = [datetime.combine(first + timedelta(days=d), at, zone) for d in range(days)]
@@ -493,7 +473,7 @@ class Favors:
         )
 
         async def done(_: str) -> None:
-            await asyncio.to_thread(self._plan_wakes, user_id, character_id, mornings)
+            await self._db.write(_plan_wakes, user_id, character_id, mornings)
 
         await self._ask(user_id, conversation, gift_ids, rules, "（制作人刚刚拜托你叫他起床。）", done)
         return conversation.id
@@ -502,24 +482,24 @@ class Favors:
         self, user_id: str, character_id: str, elder: Elder, gift_ids: Sequence[str]
     ) -> str:
         """Ask her to be sworn sisters with the producer, `elder` the elder."""
-        conversation = self._open(user_id, character_id)
-        status = self._affinities.status(user_id, character_id)
+        conversation = await self._open(user_id, character_id)
+        status = await self._affinities.status(user_id, character_id)
         if status is not None and (status.tier not in BOND_TIERS or status.cooling):
             raise CannotAsk("要和她亲近以上才能结拜")
         gifts = self._fitting("bond", gift_ids)
-        gender = self._store.get_profile(user_id).gender
+        gender = (await self._store.get_profile(user_id)).gender
         pair, producer_is = bond_words(elder, gender)
         you_are = "妹妹" if elder == "producer" else "姐姐"
         rules = BOND_RULES.format(pair=pair, you_are=you_are, producer_is=producer_is, gifts=gifts)
 
         async def done(_: str) -> None:
             now = self._clock()
-            await asyncio.to_thread(self._set_tie, user_id, character_id, "bond", elder, now)
-            self._keepsakes.favor_done(
+            await self._db.write(_set_tie, user_id, character_id, "bond", elder, now)
+            await self._keepsakes.favor_done(
                 user_id, character_id, f"bond:{now.date()}", "bond", f"结拜成了{pair}",
                 now + timedelta(minutes=10),
             )
-            self._noted(user_id, character_id, f"和制作人结拜成了{pair}", now)
+            await self._noted(user_id, character_id, f"和制作人结拜成了{pair}", now)
 
         await self._ask(user_id, conversation, gift_ids, rules, "（制作人刚刚郑重地拜托了你一件事。）", done)
         return conversation.id
@@ -532,17 +512,12 @@ class Favors:
             raise CannotAsk("要请另一位偶像帮忙")
         if target_id not in self._characters:
             raise CannotAsk("没有这位偶像")
-        conversation = self._open(user_id, mediator_id)
-        self._willing(user_id, mediator_id)
-        status = self._affinities.status(user_id, target_id)
+        conversation = await self._open(user_id, mediator_id)
+        await self._willing(user_id, mediator_id)
+        status = await self._affinities.status(user_id, target_id)
         if status is None or not (status.tier in NOT_NOW or status.cooling):
             raise CannotAsk("你们之间没有闹别扭")
-        with self._lock:
-            pending = self._db.execute(
-                "SELECT 1 FROM favor_make_ups WHERE user_id = ? AND target_id = ? AND made = 0",
-                (user_id, target_id),
-            ).fetchone()
-        if pending:
+        if await self._db.read(_making_up, user_id, target_id):
             raise CannotAsk("已经有人在帮你说情了")
         gifts = self._fitting("make_up", gift_ids)
         target = self._characters[target_id]
@@ -555,13 +530,9 @@ class Favors:
         )
 
         async def done(_: str) -> None:
-            with self._lock, self._db:
-                self._db.execute(
-                    "INSERT INTO favor_make_ups (user_id, mediator_id, target_id, gift, due_at,"
-                    " reaches) VALUES (?, ?, ?, ?, ?, ?)",
-                    (user_id, mediator_id, target_id, gifts, due.astimezone(UTC).isoformat(),
-                     int(reaches)),
-                )
+            await self._db.write(
+                _plan_make_up, user_id, mediator_id, target_id, gifts, due, reaches
+            )
 
         await self._ask(user_id, conversation, gift_ids, rules, "（制作人刚刚拜托你帮忙说情。）", done)
         return conversation.id
@@ -572,8 +543,8 @@ class Favors:
     ) -> str:
         """Ask one to help give a party on `day`, `what` it is, for the guests, one of them
         whose birthday it is if `honoree_id`."""
-        conversation = self._open(user_id, helper_id)
-        self._willing(user_id, helper_id)
+        conversation = await self._open(user_id, helper_id)
+        await self._willing(user_id, helper_id)
         what = what.strip()
         if not what or len(what) > WHAT_MAX:
             raise CannotAsk("写一下是什么聚会")
@@ -587,7 +558,7 @@ class Favors:
             raise CannotAsk("至少请一位偶像来")
         if len(guests) > MAX_GUESTS or any(g not in self._characters for g in guests):
             raise CannotAsk(f"最多请 {MAX_GUESTS} 位")
-        zone = self._zone(user_id)
+        zone = await self._zone(user_id)
         today = self._clock().astimezone(zone).date()
         if not 1 <= (day - today).days <= MAX_DAYS_AHEAD:
             raise CannotAsk("只能约明天到一周以内")
@@ -605,22 +576,12 @@ class Favors:
         )
 
         async def done(_: str) -> None:
-            with self._lock, self._db:
-                cursor = self._db.execute(
-                    "INSERT OR IGNORE INTO favor_parties (user_id, day, helper_id, guests, what,"
-                    " honoree_id, due_at, created_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (user_id, day.isoformat(), helper_id, json.dumps(guests), what, honoree_id,
-                     due.astimezone(UTC).isoformat(), today.isoformat()),
-                )
-            if cursor.rowcount == 0:
+            if not await self._db.write(
+                _plan_party, user_id, day, helper_id, guests, what, honoree_id, due, today
+            ):
                 raise CannotAsk("那天已经有一场聚会了")
 
-        with self._lock:
-            taken = self._db.execute(
-                "SELECT 1 FROM favor_parties WHERE user_id = ? AND day = ?",
-                (user_id, day.isoformat()),
-            ).fetchone()
-        if taken:
+        if await self._db.read(_party_on, user_id, day):
             raise CannotAsk("那天已经有一场聚会了")
         await self._ask(user_id, conversation, gift_ids, rules, "（制作人刚刚拜托你帮忙准备聚会。）", done)
         return conversation.id
@@ -633,15 +594,15 @@ class Favors:
         given all the model wrote). Once she has answered they are used up, whatever she
         answered; given back only should she not get to (the model failing), or what was
         asked not be kept."""
-        self._gifts.take_gifts(user_id, gift_ids)
+        await self._gifts.take_gifts(user_id, gift_ids)
         try:
             said, _, raw = await self._say(conversation, rules, wants)
             # Keeping it fails only should the same day be taken meanwhile: nothing is kept.
             await done(raw)
         except BaseException:
-            self._gifts.put_back_gifts(user_id, gift_ids)
+            await self._gifts.put_back_gifts(user_id, gift_ids)
             raise
-        self._store.add_photo_reach_out(conversation.id, said, None)
+        await self._store.add_photo_reach_out(conversation.id, said, None)
 
     async def _say(
         self, conversation: Conversation, rules: str, wants: str, with_photo: bool = False
@@ -657,23 +618,23 @@ class Favors:
                     conversation, lease.keys.chat_llm, rules, wants, with_photo
                 )
         except Exception:
-            recording.finish("failed")
+            await recording.finish("failed")
             raise
         finally:
             lease.release()
-        recording.finish("success")
+        await recording.finish("success")
         return said, tag, raw
 
-    def _open(self, user_id: str, character_id: str) -> Conversation:
+    async def _open(self, user_id: str, character_id: str) -> Conversation:
         if character_id not in self._characters:
             raise CannotAsk("没有这位偶像")
-        conversation = self._current(user_id, character_id)
-        if conversation is None or self._store.ended(conversation.id) is not None:
+        conversation = await self._current(user_id, character_id)
+        if conversation is None or await self._store.ended(conversation.id) is not None:
             raise NoConversation()
         return conversation
 
-    def _willing(self, user_id: str, character_id: str) -> None:
-        status = self._affinities.status(user_id, character_id)
+    async def _willing(self, user_id: str, character_id: str) -> None:
+        status = await self._affinities.status(user_id, character_id)
         if status is not None and (status.tier in NOT_NOW or status.cooling):
             raise CannotAsk("她现在不想听你的拜托")
 
@@ -699,17 +660,17 @@ class Favors:
         """Wake those due, make the peace due, tell of the parties over; one going wrong keeps
         none of the others from it."""
         now = self._clock()
-        for row in self._due("favor_wakes", now):
+        for row in await self._db.read(_due, "favor_wakes", now):
             try:
                 await self._wake(row, now)
             except Exception:
                 log.exception("waking the producer failed")
-        for row in self._due("favor_make_ups", now):
+        for row in await self._db.read(_due, "favor_make_ups", now):
             try:
                 await self._make_up(row, now)
             except Exception:
                 log.exception("making peace failed")
-        for row in self._due("favor_parties", now):
+        for row in await self._db.read(_due, "favor_parties", now):
             try:
                 await self._tell_party(row, now)
             except Exception:
@@ -718,13 +679,16 @@ class Favors:
     async def _wake(self, row: sqlite3.Row, now: datetime) -> None:
         key = (row["user_id"], row["character_id"], row["due_at"])
         due = datetime.fromisoformat(row["due_at"])
-        conversation = self._current(row["user_id"], row["character_id"])
-        if now - due > WAKE_LATE or conversation is None or self._store.ended(conversation.id):
-            self._mark("favor_wakes", "done = 1", key)
+        conversation = await self._current(row["user_id"], row["character_id"])
+        if (
+            now - due > WAKE_LATE or conversation is None
+            or await self._store.ended(conversation.id) is not None
+        ):
+            await self._db.write(_mark, "favor_wakes", "done = 1", key)
             return
         if self._busy(conversation):
             return
-        zone = self._zone(row["user_id"])
+        zone = await self._zone(row["user_id"])
         which = (
             "今天就这一次" if row["of_days"] == 1
             else f"第 {row['nth']} 天，一共 {row['of_days']} 天"
@@ -734,10 +698,10 @@ class Favors:
             said, _, _ = await self._say(conversation, rules, WANTS_TO_WAKE)
         except Exception as e:
             log.warning("waking the producer failed: %s", type(e).__name__)
-            self._tried("favor_wakes", key, now)
+            await self._db.write(_tried, "favor_wakes", key, now)
             return
-        self._mark("favor_wakes", "done = 1", key)
-        self._store.add_photo_reach_out(conversation.id, said, None)
+        await self._db.write(_mark, "favor_wakes", "done = 1", key)
+        await self._store.add_photo_reach_out(conversation.id, said, None)
 
     async def _make_up(self, row: sqlite3.Row, now: datetime) -> None:
         user_id, target_id, mediator_id = row["user_id"], row["target_id"], row["mediator_id"]
@@ -745,23 +709,15 @@ class Favors:
         mediator = self._characters.get(mediator_id)
         target = self._characters.get(target_id)
         if mediator is None or target is None:
-            self._mark("favor_make_ups", "made = 1, done = 1", key)
+            await self._db.write(_mark, "favor_make_ups", "made = 1, done = 1", key)
             return
         if not row["made"]:
-            self._affinities.reset(user_id, [target_id])
-            with self._lock, self._db:
-                self._db.execute(
-                    "INSERT INTO favor_ties (user_id, character_id, made_up_by, made_up_at)"
-                    " VALUES (?, ?, ?, ?) ON CONFLICT (user_id, character_id) DO UPDATE SET"
-                    " made_up_by = excluded.made_up_by, made_up_at = excluded.made_up_at",
-                    (user_id, target_id, mediator_id, now.astimezone(UTC).isoformat()),
-                )
-            self._mark("favor_make_ups", "made = 1", key)
-            self._noted(user_id, target_id, f"{mediator.name}替制作人来说情，和制作人和好了", now)
+            await self._db.write(self._made_up, user_id, target_id, mediator_id, now, key)
+            await self._noted(user_id, target_id, f"{mediator.name}替制作人来说情，和制作人和好了", now)
         if row["reaches"] and not row["target_told"]:
-            conversation = self._current(user_id, target_id)
-            if conversation is None or self._store.ended(conversation.id) is not None:
-                conversation = self._store.create_conversation(user_id, target_id)
+            conversation = await self._current(user_id, target_id)
+            if conversation is None or await self._store.ended(conversation.id) is not None:
+                conversation = await self._store.create_conversation(user_id, target_id)
             if self._busy(conversation):
                 return
             try:
@@ -771,13 +727,13 @@ class Favors:
                 )
             except Exception as e:
                 log.warning("making peace failed: %s", type(e).__name__)
-                self._tried("favor_make_ups", key, now)
+                await self._db.write(_tried, "favor_make_ups", key, now)
                 return
-            self._store.add_photo_reach_out(conversation.id, said, None)
-            self._mark("favor_make_ups", "target_told = 1", key)
-        conversation = self._current(user_id, mediator_id)
-        if conversation is None or self._store.ended(conversation.id) is not None:
-            self._mark("favor_make_ups", "done = 1", key)
+            await self._store.add_photo_reach_out(conversation.id, said, None)
+            await self._db.write(_mark, "favor_make_ups", "target_told = 1", key)
+        conversation = await self._current(user_id, mediator_id)
+        if conversation is None or await self._store.ended(conversation.id) is not None:
+            await self._db.write(_mark, "favor_make_ups", "done = 1", key)
             return
         if self._busy(conversation):
             return
@@ -787,10 +743,10 @@ class Favors:
             )
         except Exception as e:
             log.warning("telling of the peace made failed: %s", type(e).__name__)
-            self._tried("favor_make_ups", key, now)
+            await self._db.write(_tried, "favor_make_ups", key, now)
             return
-        self._store.add_photo_reach_out(conversation.id, said, None)
-        self._mark("favor_make_ups", "done = 1", key)
+        await self._store.add_photo_reach_out(conversation.id, said, None)
+        await self._db.write(_mark, "favor_make_ups", "done = 1", key)
 
     async def _tell_party(self, row: sqlite3.Row, now: datetime) -> None:
         user_id, helper_id = row["user_id"], row["helper_id"]
@@ -799,22 +755,22 @@ class Favors:
         helper = self._characters.get(helper_id)
         names = "、".join(self._characters[g].name for g in guests)
         if helper is None:
-            self._mark("favor_parties", "helper_told = 1, done = 1", key)
+            await self._db.write(_mark, "favor_parties", "helper_told = 1, done = 1", key)
             return
         if not row["helper_told"]:
-            conversation = self._current(user_id, helper_id)
-            if conversation is not None and self._store.ended(conversation.id) is None:
+            conversation = await self._current(user_id, helper_id)
+            if conversation is not None and await self._store.ended(conversation.id) is None:
                 if self._busy(conversation):
                     return
                 if not await self._party_photo(conversation, row, guests, names, now):
                     return
-            self._mark("favor_parties", "helper_told = 1", key)
+            await self._db.write(_mark, "favor_parties", "helper_told = 1", key)
             for character_id in [helper_id, *guests]:
-                self._noted(user_id, character_id, f"和大家一起{row['what']}", now)
+                await self._noted(user_id, character_id, f"和大家一起{row['what']}", now)
         honoree_id = row["honoree_id"]
         if honoree_id in self._characters:
-            conversation = self._current(user_id, honoree_id)
-            if conversation is not None and self._store.ended(conversation.id) is None:
+            conversation = await self._current(user_id, honoree_id)
+            if conversation is not None and await self._store.ended(conversation.id) is None:
                 if self._busy(conversation):
                     return
                 others = "、".join(
@@ -828,17 +784,17 @@ class Favors:
                     )
                 except Exception as e:
                     log.warning("thanking for a party failed: %s", type(e).__name__)
-                    self._tried("favor_parties", key, now)
+                    await self._db.write(_tried, "favor_parties", key, now)
                     return
-                self._store.add_photo_reach_out(conversation.id, said, None)
-                zone = self._zone(user_id)
+                await self._store.add_photo_reach_out(conversation.id, said, None)
+                zone = await self._zone(user_id)
                 tomorrow = date.fromisoformat(row["day"]) + timedelta(days=1)
-                self._keepsakes.favor_done(
+                await self._keepsakes.favor_done(
                     user_id, honoree_id, f"party:{row['day']}", "party", row["what"],
                     datetime.combine(tomorrow, THANKS_NEXT_DAY, zone)
                     + timedelta(minutes=self._random(120)),
                 )
-        self._mark("favor_parties", "done = 1", key)
+        await self._db.write(_mark, "favor_parties", "done = 1", key)
 
     async def _party_photo(
         self, conversation: Conversation, row: sqlite3.Row, guests: list[str], names: str,
@@ -856,7 +812,8 @@ class Favors:
             and self._characters[g].photo_appearance is not None
         ][:IN_PHOTO]
         with_photo = (
-            self._config.image_generator() is not None and self._features.on(user_id, "photos")
+            self._config.image_generator() is not None
+            and await self._features.on(user_id, "photos")
             and helper.photo_tag is not None and helper.photo_appearance is not None
         )
         if with_photo:
@@ -878,10 +835,10 @@ class Favors:
             said, tag, _ = await self._say(conversation, rules, wants, with_photo)
         except Exception as e:
             log.warning("telling of a party failed: %s", type(e).__name__)
-            self._tried("favor_parties", (user_id, row["day"]), now)
+            await self._db.write(_tried, "favor_parties", (user_id, row["day"]), now)
             return False
         if tag is None:
-            self._store.add_photo_reach_out(conversation.id, said, None)
+            await self._store.add_photo_reach_out(conversation.id, said, None)
         else:
             await self._trip_photos.send_with_photo(
                 conversation, said, tag, in_photo, producer_there=True
@@ -890,107 +847,197 @@ class Favors:
 
     # Kept.
 
-    def _set_tie(
-        self, user_id: str, character_id: str, field: Literal["address", "bond"],
-        value: str | None, at: datetime | None = None,
+    def _made_up(
+        self, db: sqlite3.Connection, user_id: str, target_id: str, mediator_id: str,
+        now: datetime, key: tuple,
     ) -> None:
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT INTO favor_ties (user_id, character_id) VALUES (?, ?)"
-                " ON CONFLICT (user_id, character_id) DO NOTHING",
-                (user_id, character_id),
-            )
-            self._db.execute(
-                f"UPDATE favor_ties SET {field} = ? WHERE user_id = ? AND character_id = ?",
-                (value, user_id, character_id),
-            )
-            if field == "address":
-                self._db.execute(
-                    "UPDATE favor_ties SET declined = NULL, declined_at = NULL"
-                    " WHERE user_id = ? AND character_id = ?",
-                    (user_id, character_id),
-                )
-            if at is not None and field == "bond":
-                self._db.execute(
-                    "UPDATE favor_ties SET bonded_at = ? WHERE user_id = ? AND character_id = ?",
-                    (at.astimezone(UTC).isoformat(), user_id, character_id),
-                )
+        """She made peace for the producer with `target_id`: her affinity brought back, who
+        did it kept for her prompt, the favor marked made; all in one."""
+        self._affinities.reset(db, user_id, [target_id])
+        db.execute(
+            "INSERT INTO favor_ties (user_id, character_id, made_up_by, made_up_at)"
+            " VALUES (?, ?, ?, ?) ON CONFLICT (user_id, character_id) DO UPDATE SET"
+            " made_up_by = excluded.made_up_by, made_up_at = excluded.made_up_at",
+            (user_id, target_id, mediator_id, now.astimezone(UTC).isoformat()),
+        )
+        _mark(db, "favor_make_ups", "made = 1", key)
 
-    def _declined(self, user_id: str, character_id: str, address: str) -> None:
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT INTO favor_ties (user_id, character_id, declined, declined_at)"
-                " VALUES (?, ?, ?, ?) ON CONFLICT (user_id, character_id) DO UPDATE SET"
-                " declined = excluded.declined, declined_at = excluded.declined_at",
-                (user_id, character_id, address, self._clock().astimezone(UTC).isoformat()),
-            )
-
-    def _plan_wakes(self, user_id: str, character_id: str, mornings: Sequence[datetime]) -> None:
-        with self._lock, self._db:
-            # Asked again, the mornings asked before are let go.
-            self._db.execute(
-                "DELETE FROM favor_wakes WHERE user_id = ? AND character_id = ? AND done = 0",
-                (user_id, character_id),
-            )
-            for nth, at in enumerate(mornings, 1):
-                self._db.execute(
-                    "INSERT OR IGNORE INTO favor_wakes (user_id, character_id, due_at, nth,"
-                    " of_days) VALUES (?, ?, ?, ?, ?)",
-                    (user_id, character_id, at.astimezone(UTC).isoformat(), nth, len(mornings)),
-                )
-
-    def _parties_of(self, user_id: str) -> list[sqlite3.Row]:
-        with self._lock:
-            return self._db.execute(
-                "SELECT * FROM favor_parties WHERE user_id = ? ORDER BY day", (user_id,)
-            ).fetchall()
-
-    _KEYS = {
-        "favor_wakes": "user_id = ? AND character_id = ? AND due_at = ?",
-        "favor_make_ups": "id = ?",
-        "favor_parties": "user_id = ? AND day = ?",
-    }
-
-    def _due(self, table: str, now: datetime) -> list[sqlite3.Row]:
-        with self._lock:
-            rows = self._db.execute(
-                f"SELECT * FROM {table} WHERE done = 0 AND tries < ? AND due_at <= ?",
-                (TRIES, now.astimezone(UTC).isoformat()),
-            ).fetchall()
-        return [
-            r for r in rows
-            if r["last_at"] is None or now - datetime.fromisoformat(r["last_at"]) >= RETRY_AFTER
-        ]
-
-    def _mark(self, table: str, change: str, key: tuple) -> None:
-        with self._lock, self._db:
-            self._db.execute(f"UPDATE {table} SET {change} WHERE {self._KEYS[table]}", key)
-
-    def _tried(self, table: str, key: tuple, now: datetime) -> None:
-        with self._lock, self._db:
-            self._db.execute(
-                f"UPDATE {table} SET tries = tries + 1, last_at = ? WHERE {self._KEYS[table]}",
-                (now.astimezone(UTC).isoformat(), *key),
-            )
-
-    def _noted(self, user_id: str, character_id: str, what: str, at: datetime) -> None:
+    async def _noted(self, user_id: str, character_id: str, what: str, at: datetime) -> None:
+        if self._moment is None:
+            return
         try:
-            self._moment(user_id, character_id, what, at)
+            await self._moment(user_id, character_id, what, at)
         except Exception:
             log.exception("noting a favor for the diary failed")
 
     def _busy(self, conversation: Conversation) -> bool:
         return self._store.is_taking_turn(conversation.id) or self._in_call(conversation.id)
 
-    def _current(self, user_id: str, character_id: str) -> Conversation | None:
+    async def _current(self, user_id: str, character_id: str) -> Conversation | None:
         return next(
-            (c for c, _, _ in self._store.latest_conversations(user_id) if c.character_id == character_id),
+            (
+                c for c, _, _ in await self._store.latest_conversations(user_id)
+                if c.character_id == character_id
+            ),
             None,
         )
 
-    def _zone(self, user_id: str) -> ZoneInfo:
-        return ZoneInfo(effective_timezone(self._store.get_profile(user_id), None))
+    async def _zone(self, user_id: str) -> ZoneInfo:
+        return ZoneInfo(effective_timezone(await self._store.get_profile(user_id), None))
 
-    def close(self) -> None:
-        with self._lock:
-            self._db.close()
+
+def _open(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+    have = {r[1] for r in db.execute("PRAGMA table_info(favor_ties)")}
+    for column in ("declined", "declined_at"):
+        if column not in have:
+            db.execute(f"ALTER TABLE favor_ties ADD COLUMN {column} TEXT")
+
+
+def _tie_row(db: sqlite3.Connection, user_id: str, character_id: str) -> sqlite3.Row | None:
+    return by_name(db).execute(
+        "SELECT * FROM favor_ties WHERE user_id = ? AND character_id = ?",
+        (user_id, character_id),
+    ).fetchone()
+
+
+def _overview(
+    db: sqlite3.Connection, user_id: str
+) -> tuple[list[sqlite3.Row], list[sqlite3.Row], list[sqlite3.Row]]:
+    named = by_name(db)
+    ties = named.execute(
+        "SELECT character_id, address, bond FROM favor_ties WHERE user_id = ?"
+        " AND (address IS NOT NULL OR bond IS NOT NULL)",
+        (user_id,),
+    ).fetchall()
+    wakes = named.execute(
+        "SELECT character_id, MIN(due_at) AS next, COUNT(*) AS left FROM favor_wakes"
+        " WHERE user_id = ? AND done = 0 GROUP BY character_id",
+        (user_id,),
+    ).fetchall()
+    return ties, wakes, _parties_of(db, user_id)
+
+
+def _making_up(db: sqlite3.Connection, user_id: str, target_id: str) -> bool:
+    return db.execute(
+        "SELECT 1 FROM favor_make_ups WHERE user_id = ? AND target_id = ? AND made = 0",
+        (user_id, target_id),
+    ).fetchone() is not None
+
+
+def _plan_make_up(
+    db: sqlite3.Connection, user_id: str, mediator_id: str, target_id: str, gifts: str,
+    due: datetime, reaches: bool,
+) -> None:
+    db.execute(
+        "INSERT INTO favor_make_ups (user_id, mediator_id, target_id, gift, due_at, reaches)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, mediator_id, target_id, gifts, due.astimezone(UTC).isoformat(), int(reaches)),
+    )
+
+
+def _party_on(db: sqlite3.Connection, user_id: str, day: date) -> bool:
+    return db.execute(
+        "SELECT 1 FROM favor_parties WHERE user_id = ? AND day = ?", (user_id, day.isoformat())
+    ).fetchone() is not None
+
+
+def _plan_party(
+    db: sqlite3.Connection, user_id: str, day: date, helper_id: str, guests: list[str],
+    what: str, honoree_id: str | None, due: datetime, today: date,
+) -> bool:
+    """Plan the party; False if there is one that day already."""
+    return db.execute(
+        "INSERT OR IGNORE INTO favor_parties (user_id, day, helper_id, guests, what,"
+        " honoree_id, due_at, created_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (user_id, day.isoformat(), helper_id, json.dumps(guests), what, honoree_id,
+         due.astimezone(UTC).isoformat(), today.isoformat()),
+    ).rowcount > 0
+
+
+def _set_tie(
+    db: sqlite3.Connection, user_id: str, character_id: str, field: Literal["address", "bond"],
+    value: str | None, at: datetime | None = None,
+) -> None:
+    db.execute(
+        "INSERT INTO favor_ties (user_id, character_id) VALUES (?, ?)"
+        " ON CONFLICT (user_id, character_id) DO NOTHING",
+        (user_id, character_id),
+    )
+    db.execute(
+        f"UPDATE favor_ties SET {field} = ? WHERE user_id = ? AND character_id = ?",
+        (value, user_id, character_id),
+    )
+    if field == "address":
+        db.execute(
+            "UPDATE favor_ties SET declined = NULL, declined_at = NULL"
+            " WHERE user_id = ? AND character_id = ?",
+            (user_id, character_id),
+        )
+    if at is not None and field == "bond":
+        db.execute(
+            "UPDATE favor_ties SET bonded_at = ? WHERE user_id = ? AND character_id = ?",
+            (at.astimezone(UTC).isoformat(), user_id, character_id),
+        )
+
+
+def _declined(
+    db: sqlite3.Connection, user_id: str, character_id: str, address: str, now: datetime
+) -> None:
+    db.execute(
+        "INSERT INTO favor_ties (user_id, character_id, declined, declined_at)"
+        " VALUES (?, ?, ?, ?) ON CONFLICT (user_id, character_id) DO UPDATE SET"
+        " declined = excluded.declined, declined_at = excluded.declined_at",
+        (user_id, character_id, address, now.astimezone(UTC).isoformat()),
+    )
+
+
+def _plan_wakes(
+    db: sqlite3.Connection, user_id: str, character_id: str, mornings: Sequence[datetime]
+) -> None:
+    # Asked again, the mornings asked before are let go.
+    db.execute(
+        "DELETE FROM favor_wakes WHERE user_id = ? AND character_id = ? AND done = 0",
+        (user_id, character_id),
+    )
+    for nth, at in enumerate(mornings, 1):
+        db.execute(
+            "INSERT OR IGNORE INTO favor_wakes (user_id, character_id, due_at, nth, of_days)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (user_id, character_id, at.astimezone(UTC).isoformat(), nth, len(mornings)),
+        )
+
+
+def _parties_of(db: sqlite3.Connection, user_id: str) -> list[sqlite3.Row]:
+    return by_name(db).execute(
+        "SELECT * FROM favor_parties WHERE user_id = ? ORDER BY day", (user_id,)
+    ).fetchall()
+
+
+_KEYS = {
+    "favor_wakes": "user_id = ? AND character_id = ? AND due_at = ?",
+    "favor_make_ups": "id = ?",
+    "favor_parties": "user_id = ? AND day = ?",
+}
+
+
+def _due(db: sqlite3.Connection, table: str, now: datetime) -> list[sqlite3.Row]:
+    rows = by_name(db).execute(
+        f"SELECT * FROM {table} WHERE done = 0 AND tries < ? AND due_at <= ?",
+        (TRIES, now.astimezone(UTC).isoformat()),
+    ).fetchall()
+    return [
+        r for r in rows
+        if r["last_at"] is None or now - datetime.fromisoformat(r["last_at"]) >= RETRY_AFTER
+    ]
+
+
+def _mark(db: sqlite3.Connection, table: str, change: str, key: tuple) -> None:
+    db.execute(f"UPDATE {table} SET {change} WHERE {_KEYS[table]}", key)
+
+
+def _tried(db: sqlite3.Connection, table: str, key: tuple, now: datetime) -> None:
+    db.execute(
+        f"UPDATE {table} SET tries = tries + 1, last_at = ? WHERE {_KEYS[table]}",
+        (now.astimezone(UTC).isoformat(), *key),
+    )

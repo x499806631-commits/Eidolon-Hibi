@@ -18,6 +18,7 @@ def test_a_connection_keeps_a_log_overwrites_what_is_deleted_and_checks_referenc
     db = database.connect(tmp_path / "eidolon.db")
 
     assert db.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+    assert db.execute("PRAGMA synchronous").fetchone() == (1,)  # NORMAL: no fsync a commit
     assert db.execute("PRAGMA secure_delete").fetchone() == (1,)
     assert db.execute("PRAGMA foreign_keys").fetchone() == (1,)
     assert db.execute("PRAGMA busy_timeout").fetchone() == (30000,)

@@ -43,6 +43,7 @@ from eidolon.config import (
     CloudflareJudgeSettings,
     JevSettings,
     JudgeSettings,
+    LLMProtocol,
     LLMSettings,
     ReasoningEffort,
     Settings,
@@ -226,10 +227,20 @@ class FakeLLMService:
         self.refused_efforts: dict[str, str] = {}
         self.efforts: list[ReasoningEffort | None] = []
         self.efforts_checked: list[ReasoningEffort | None] = []
+        self.listed: list[tuple[LLMProtocol, str, str]] = []
+        self.models: list[str] = ["model-a", "model-b"]
 
     def open(self, settings: LLMSettings) -> ChatLLM:
         self.opened.append(settings)
         return _KeyedLLM(self, settings)
+
+    async def list_models(self, protocol: LLMProtocol, base_url: str, api_key: str) -> list[str]:
+        """`models`, recording where it was asked and with which key (`listed`); a key in
+        `rejects` fails with that message, repeating the key as a service may."""
+        self.listed.append((protocol, base_url, api_key))
+        if api_key in self.rejects:
+            raise LLMError(f"{self.rejects[api_key]} ({api_key})")
+        return list(self.models)
 
     async def check(self, settings: ChatModelSettings) -> None:
         self.checked.append(settings)
@@ -316,6 +327,8 @@ class FakeServiceClients:
         self.judge = FakeJudgeModel()
         self.judges_opened: list[JudgeSettings] = []
         self.judges_closed: list[JudgeSettings] = []
+        self.listed: list[tuple[str, LLMProtocol, str, str]] = []
+        self.models: list[str] = ["model-a", "model-b"]
 
     def chat_models(self, settings: ChatModelSettings) -> ChatModels:
         self.opened.append(settings.text)
@@ -331,6 +344,17 @@ class FakeServiceClients:
     def judge_model(self, settings: JudgeSettings) -> "JudgeModel":
         self.judges_opened.append(settings)
         return _ConfiguredJudge(self, settings)
+
+    async def list_models(
+        self, service: Literal["chat_llm", "memory_llm"], protocol: LLMProtocol,
+        base_url: str, api_key: str,
+    ) -> list[str]:
+        """`models`, recording where it was asked and with which key (`listed`); a key in
+        `rejects` fails with that message."""
+        self.listed.append((service, protocol, base_url, api_key))
+        if api_key in self.rejects:
+            raise LLMError(self.rejects[api_key])
+        return list(self.models)
 
 
 class _ConfiguredLLM:

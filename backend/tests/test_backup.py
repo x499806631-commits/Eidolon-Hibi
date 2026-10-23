@@ -8,6 +8,8 @@ import asyncio
 import gzip
 import re
 import sqlite3
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -15,17 +17,43 @@ import httpx
 import pyrage
 import pytest
 
-from eidolon.backup import BackupSettings, Backups, Source, back_up, backup_key
-from eidolon.clock import utc_now
+from eidolon.backup import (
+    BackupRecord, BackupSettings, Backups, Source, abandon_unfinished, back_up, backup_key,
+)
+from eidolon.clock import Clock, utc_now
 from eidolon.config import Settings
+from eidolon.data_access import Database
 from eidolon.s3 import S3Settings
-from eidolon.store import Store
-from tests.conftest import Admin
+from tests.conftest import Admin, aside, users_in
 from tests.fakes import START
 from tests.test_stand_upload import FakeBucket
 
 IDENTITY = pyrage.x25519.Identity.generate()
 PING = "https://ping.test/backup"
+
+
+@asynccontextmanager
+async def backups_in(
+    database: Path, clock: Clock = utc_now, transport: httpx.AsyncBaseTransport | None = None
+) -> AsyncIterator[Backups]:
+    """The backups of the database at `database`, on a data access layer of their own, as
+    another process has them."""
+    db = Database(database)
+    try:
+        yield Backups(db, clock, transport=transport)
+    finally:
+        await db.close()
+
+
+async def records_in(database: Path) -> list[BackupRecord]:
+    async with backups_in(database) as backups:
+        return await backups.records()
+
+
+async def begun_in(database: Path, source: Source, clock: Clock = utc_now) -> None:
+    """A run begun in the database at `database`, as in another process, not finished."""
+    async with backups_in(database, clock) as backups:
+        await backups.start(source)
 
 
 class Deployment:
@@ -34,9 +62,7 @@ class Deployment:
 
     def __init__(self, tmp_path: Path) -> None:
         self.database = tmp_path / "eidolon.db"
-        store = Store(self.database)
-        store.create_user("producer")
-        store.close()
+        aside(users_in(self.database, "producer"))
         self.storage = FakeBucket("backups")
         self.refuses_puts = False
         self.cancelled_during_put = False
@@ -72,21 +98,18 @@ class Deployment:
         self, source: Source = "manual", now: datetime = START, ping_url: str | None = PING, **settings
     ):
         """A backup run, as `eidolon backup` and the admin console's button make one."""
-        backups = self.backups(now)
-        try:
+        async with self.backups(now) as backups:
             return await backups.run(source, lambda: self.settings(ping_url, **settings))
-        finally:
-            backups.close()
 
-    def backups(self, now: datetime = START) -> Backups:
-        return Backups(self.database, lambda: now, transport=httpx.MockTransport(self._handle))
+    def backups(
+        self, now: datetime = START, transport: httpx.AsyncBaseTransport | None = None
+    ):
+        return backups_in(
+            self.database, lambda: now, transport or httpx.MockTransport(self._handle)
+        )
 
-    def records(self):
-        backups = self.backups()
-        try:
-            return backups.records()
-        finally:
-            backups.close()
+    async def records(self) -> list[BackupRecord]:
+        return await records_in(self.database)
 
     def restore(self, key: str, to: Path) -> list[str]:
         """The names of the users in the backup, decrypted with the deployer's key."""
@@ -230,10 +253,7 @@ async def test_when_the_upload_fails_old_backups_are_still_deleted_save_the_newe
 async def test_a_database_that_cannot_be_copied_whole_is_not_uploaded(
     deployment: Deployment, tmp_path: Path
 ):
-    store = Store(deployment.database)
-    for n in range(500):
-        store.create_user(f"user {n:03d} " + "x" * 200)
-    store.close()
+    await users_in(deployment.database, *(f"user {n:03d} " + "x" * 200 for n in range(500)))
     middle = deployment.database.stat().st_size // 2 // 4096 * 4096
     with deployment.database.open("r+b") as file:  # break a page among the users
         file.seek(middle)
@@ -297,7 +317,7 @@ async def test_each_run_leaves_a_record_of_what_it_did(deployment: Deployment):
 
     report = await deployment.run("cron", warn_gb=0.000_000_001)
 
-    (record,) = deployment.records()
+    (record,) = await deployment.records()
     assert record.source == "cron"
     assert record.started_at == record.finished_at == START.isoformat()
     assert record.exit_code == 0 and not record.abandoned
@@ -312,7 +332,7 @@ async def test_a_run_that_failed_records_why(deployment: Deployment):
 
     await deployment.run("admin")
 
-    (record,) = deployment.records()
+    (record,) = await deployment.records()
     assert record.source == "admin"
     assert record.exit_code == 3
     assert record.key is None
@@ -323,14 +343,13 @@ async def test_a_run_without_the_settings_is_recorded_too(deployment: Deployment
     def missing() -> BackupSettings:
         raise RuntimeError("备份数据库需要存储桶的设置")
 
-    backups = deployment.backups()
-    report = await backups.run("cron", missing)
-    backups.close()
+    async with deployment.backups() as backups:
+        report = await backups.run("cron", missing)
 
     assert report.exit_code == 1
     assert report.config_error == "备份数据库需要存储桶的设置"
     assert deployment.storage.puts == []
-    (record,) = deployment.records()
+    (record,) = await deployment.records()
     assert (record.source, record.exit_code) == ("cron", 1)
     assert record.config_error == "备份数据库需要存储桶的设置"
     assert record.finished_at == START.isoformat()
@@ -338,42 +357,39 @@ async def test_a_run_without_the_settings_is_recorded_too(deployment: Deployment
 
 
 async def test_a_run_under_way_keeps_another_from_starting(deployment: Deployment):
-    backups = deployment.backups(START - timedelta(minutes=59))
-    assert backups.start("cron") is not None  # a run under way, as if in another process
-    backups.close()
+    async with deployment.backups(START - timedelta(minutes=59)) as backups:
+        # a run under way, as if in another process
+        assert await backups.start("cron") is not None
 
     report = await deployment.run("admin")
 
     assert report.exit_code == 6 and report.busy
     assert deployment.storage.puts == []
-    assert [record.source for record in deployment.records()] == ["cron"]
+    assert [record.source for record in await deployment.records()] == ["cron"]
 
 
 async def test_a_run_begun_over_an_hour_ago_and_never_finished_does_not_keep_another_from_starting(
     deployment: Deployment,
 ):
-    backups = deployment.backups(START - timedelta(minutes=61))
-    backups.start("cron")  # and its process killed
-    backups.close()
+    # and its process killed
+    await begun_in(deployment.database, "cron", lambda: START - timedelta(minutes=61))
 
     report = await deployment.run("manual")
 
     assert report.exit_code == 0
-    manual, cron = deployment.records()
+    manual, cron = await deployment.records()
     assert manual.source == "manual" and manual.exit_code == 0
     assert cron.abandoned and cron.finished_at == START.isoformat()
 
 
 async def test_runs_abandoned_no_longer_keep_another_from_starting(deployment: Deployment):
-    backups = deployment.backups()
-    backups.start("cron")
-    assert backups.abandon_unfinished() == 1
-    backups.close()
+    await begun_in(deployment.database, "cron", lambda: START)
+    assert abandon_unfinished(deployment.database, lambda: START) == 1
 
     report = await deployment.run("manual")
 
     assert report.exit_code == 0
-    manual, cron = deployment.records()
+    manual, cron = await deployment.records()
     assert cron.abandoned and cron.finished_at == START.isoformat() and cron.exit_code is None
     assert not manual.abandoned
 
@@ -384,7 +400,7 @@ async def test_a_run_cancelled_part_way_is_abandoned(deployment: Deployment):
     with pytest.raises(asyncio.CancelledError):
         await deployment.run("admin")
 
-    (record,) = deployment.records()
+    (record,) = await deployment.records()
     assert record.abandoned and record.finished_at is not None
     deployment.cancelled_during_put = False
     assert (await deployment.run("manual")).exit_code == 0
@@ -400,13 +416,13 @@ async def test_a_run_begun_in_the_background_is_abandoned_as_the_server_shuts_do
         await asyncio.Event().wait()
         raise AssertionError("unreachable")
 
-    backups = Backups(deployment.database, lambda: START, transport=httpx.MockTransport(never_uploads))
-    assert backups.begin("admin", deployment.settings)
-    await asyncio.wait_for(uploading.wait(), 10)
+    async with deployment.backups(transport=httpx.MockTransport(never_uploads)) as backups:
+        assert await backups.begin("admin", deployment.settings)
+        await asyncio.wait_for(uploading.wait(), 10)
 
-    await backups.aclose()
+        await backups.aclose()
 
-    (record,) = deployment.records()
+    (record,) = await deployment.records()
     assert (record.source, record.abandoned) == ("admin", True)
 
 
@@ -416,7 +432,7 @@ async def test_records_over_90_days_old_are_deleted_as_a_run_begins(deployment: 
 
     await deployment.run("manual")
 
-    assert [record.started_at for record in deployment.records()] == [
+    assert [record.started_at for record in await deployment.records()] == [
         START.isoformat(), (START - timedelta(days=89)).isoformat()
     ]
 
@@ -544,17 +560,14 @@ def test_backing_up_records_who_began_it(
     admin.invoke("backup", "--source", "cron")
     admin.invoke("backup")
 
-    backups = Backups(settings.database_path, utc_now)
-    assert [record.source for record in backups.records()] == ["manual", "cron"]
-    backups.close()
+    records = asyncio.run(records_in(settings.database_path))
+    assert [record.source for record in records] == ["manual", "cron"]
 
 
 def test_backing_up_while_another_backup_is_under_way_exits_6(
     admin: Admin, backup_env: pytest.MonkeyPatch, settings: Settings
 ):
-    backups = Backups(settings.database_path, utc_now)
-    backups.start("admin")
-    backups.close()
+    asyncio.run(begun_in(settings.database_path, "admin"))
 
     code, _, err = admin.invoke("backup", "--source", "cron")
 

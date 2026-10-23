@@ -34,7 +34,7 @@ from tests.test_text_turn import send_turn, start_conversation
 REPLY = ["<ja>はい</ja><zh>好的</zh>"]
 
 IN_HER_OWN_WAY = "按你自己的性格和口吻表现出来"
-UNCHANGED = "一起经历过的事和你们偶像与制作人的关系都不会改变"
+UNCHANGED = "一起经历过的事和你们在事务所里的关系都不会改变"
 NOTHING_MADE_UP = "就不要编造原因"
 TIER_MARKS = {
     "cold": "态度很冷",

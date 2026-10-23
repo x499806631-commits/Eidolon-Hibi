@@ -171,6 +171,7 @@ async def test_memory_and_the_judge_model_never_see_it_nor_her_hanging_up(
     hang_up(settings.database_path, conversation)
 
     await send_turn(client, conversation, "还有这个")
+    await client.get("/api/memories")  # once what the turns write down is written
 
     assert HUNG_UP in told(llm) and RESPOND in told(llm)  # she is told of them all the same
     # Naming the conversation after its third turn reads events too, and may or may not

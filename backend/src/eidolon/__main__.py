@@ -97,6 +97,7 @@ from eidolon.config import (
     mirror_cache_path_from_env,
     story_path_from_env,
 )
+from eidolon.data_access import Database
 from eidolon.identity import PROVIDER_LABELS
 from eidolon.store import NotFound, Store
 from eidolon.usage import Tally, UsageLimiter
@@ -138,21 +139,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "eval":
         return asyncio.run(_eval_rerank(args))
 
-    store = Store(args.db or database_path_from_env())
+    return asyncio.run(_user_command(args))
+
+
+async def _user_command(args: argparse.Namespace) -> int:
+    from eidolon.data_access import Database
+
+    db = Database(args.db or database_path_from_env())
     try:
-        args.run(store, args)
+        await args.run(db, args)
     except NotFound as e:
         print(e, file=sys.stderr)
         return 1
     finally:
-        store.close()
+        await db.close()
     return 0
+
+
+GRACEFUL_SHUTDOWN_SECONDS = 20
+"""How long, in seconds, requests under way are given to finish as the server stops; within
+the grace compose gives it (`stop_grace_period` in docker-compose.prod.yml)."""
 
 
 def _serve() -> int:
     import uvicorn
     from loguru import logger
 
+    from eidolon import server_logs
     from eidolon.app import create_app
     from eidolon.assembly import build
 
@@ -161,15 +174,7 @@ def _serve() -> int:
     logger.remove()
     logger.add(sys.stderr, level="INFO")
 
-    # Which settings the admin console overrides, for a deployer wondering why `.env`'s
-    # did not take (ADR-0013), and what the backups begun from it did, which is not in
-    # `logs/db-backup.log`, and the photo tags the tag table does not know, for the deployer to
-    # add to the rewrite table, and the ambience picked in calls; nothing configures the root logger to show any of them.
-    to_stderr = logging.StreamHandler()
-    to_stderr.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
-    for name in ["eidolon.live_config", "eidolon.backup", "eidolon.photo_prompt", "eidolon.ambience"]:
-        logging.getLogger(name).addHandler(to_stderr)
-        logging.getLogger(name).setLevel(logging.INFO)
+    server_logs.configure()
 
     try:  # missing settings, an unusable DashScope key or Cloudflare token, a broken
         # character configuration
@@ -191,6 +196,9 @@ def _serve() -> int:
         app,
         host=os.environ.get("HOST", "0.0.0.0"),
         port=int(os.environ.get("PORT", "8000")),
+        log_config=server_logs.uvicorn_log_config(),
+        # Calls are no requests: they are hung up after, as the backend closes.
+        timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
     )
     return 0
 
@@ -241,6 +249,7 @@ async def _import_story(args: argparse.Namespace) -> int:
     from eidolon.characters import load_characters
     from eidolon.config import EmbeddingSettings
     from eidolon.corpus import StoryCorpus
+    from eidolon.data_access import Database
     from eidolon.embedding import EmbeddingError, open_embedder
     from eidolon.story_import import import_csv_directory, import_json_directory
 
@@ -255,15 +264,16 @@ async def _import_story(args: argparse.Namespace) -> int:
         return 1
     embedder = open_embedder(settings)
     try:
-        corpus = StoryCorpus(args.db or database_path_from_env(), embedder)
+        db = Database(args.db or database_path_from_env())
         try:
+            corpus = StoryCorpus(db, embedder)
             import_stories = (
                 import_json_directory if args.action == "import-json" else import_csv_directory
             )
             report = await import_stories(args.directory, corpus, characters.values())
-            catalogs = {c.name: corpus.catalog(c.id) for c in characters.values()}
+            catalogs = {c.name: await corpus.catalog(c.id) for c in characters.values()}
         finally:
-            corpus.close()
+            await db.close()
     except EmbeddingError as e:
         print(f"导入中断（已导入的剧情会保留，重新运行即可继续）：{e}", file=sys.stderr)
         return 1
@@ -292,6 +302,7 @@ async def _sync_story(args: argparse.Namespace) -> int:
     from eidolon.characters import load_characters
     from eidolon.config import EmbeddingSettings
     from eidolon.corpus import StoryCorpus
+    from eidolon.data_access import Database
     from eidolon.embedding import EmbeddingError, open_embedder
     from eidolon.mirror import Mirror
     from eidolon.story_sync import load_event_names, sync_stories
@@ -318,19 +329,19 @@ async def _sync_story(args: argparse.Namespace) -> int:
     embedder = open_embedder(settings)
     mirror = Mirror()
     try:
-        corpus = StoryCorpus(args.db or database_path_from_env(), embedder)
+        db = Database(args.db or database_path_from_env())
         try:
             report = await sync_stories(
                 story,
                 args.cache or mirror_cache_path_from_env(),
-                corpus,
+                StoryCorpus(db, embedder),
                 characters.values(),
                 mirror,
                 event_names=event_names,
                 idols=args.idol,
             )
         finally:
-            corpus.close()
+            await db.close()
     except EmbeddingError as e:
         print(f"同步中断（已导入的剧情和已下载的剧本会保留，重新运行即可继续）：{e}", file=sys.stderr)
         return 1
@@ -572,14 +583,15 @@ async def _backup(args: argparse.Namespace) -> int:
     import time
 
     from eidolon.backup import EXPORT_FAILED, Backups, describe
+    from eidolon.data_access import Database
 
     started = time.monotonic()
     try:
-        backups = Backups(args.db or database_path_from_env(), utc_now)
+        db = Database(args.db or database_path_from_env())
         try:
-            report = await backups.run(args.source)
+            report = await Backups(db, utc_now).run(args.source)
         finally:
-            backups.close()
+            await db.close()
     except sqlite3.Error as e:  # not a missing setting, which exiting 1 would say
         print(f"没有备份：备份记录写不进数据库：{e}", file=sys.stderr)
         return EXPORT_FAILED
@@ -614,6 +626,7 @@ async def _draft_sheet(args: argparse.Namespace) -> int:
     from eidolon.characters import load_characters
     from eidolon.config import LLMSettings
     from eidolon.corpus import StoryCorpus
+    from eidolon.data_access import Database
     from eidolon.embedding import NoEmbedder
     from eidolon.llm import LLMError
     from eidolon.llm.providers import open_llm
@@ -662,16 +675,17 @@ async def _draft_sheet(args: argparse.Namespace) -> int:
     logging.getLogger("eidolon.sheet_draft").addHandler(progress)
     logging.getLogger("eidolon.sheet_draft").setLevel(logging.INFO)
     llm = open_llm(llm_settings)
-    corpus = StoryCorpus(args.db or database_path_from_env(), NoEmbedder())
+    db = Database(args.db or database_path_from_env())
     try:
         report = await draft_sheet(
-            character, corpus, llm, output=path, overwrite=args.force, budget=budget
+            character, StoryCorpus(db, NoEmbedder()), llm, output=path, overwrite=args.force,
+            budget=budget,
         )
     except (NoEpisodes, LLMError) as e:
         print(e, file=sys.stderr)
         return 1
     finally:
-        corpus.close()
+        await db.close()
         await llm.aclose()
     sampled = (
         f"（素材太多，均匀抽取了其中 {report.episodes_read} 段）"
@@ -731,6 +745,7 @@ async def _eval_rerank(args: argparse.Namespace) -> int:
 
     from eidolon.characters import load_characters
     from eidolon.config import EmbeddingSettings, RerankSettings
+    from eidolon.data_access import Database
     from eidolon.embedding import EmbeddingError, open_embedder
     from eidolon.rerank import RerankError, SiliconFlowReranker, thresholds_for
     from eidolon.rerank_eval import CalibrationError, evaluate, load_calibration, report
@@ -756,16 +771,15 @@ async def _eval_rerank(args: argparse.Namespace) -> int:
     logging.getLogger("eidolon.retrieval").addHandler(warnings)
     embedder = open_embedder(embedding)
     reranker = SiliconFlowReranker(rerank.api_key, rerank.model, rerank.base_url)
-    sources = open_reference_sources(
-        args.db or database_path_from_env(), embedder, characters.values(), world
-    )
+    db = Database(args.db or database_path_from_env())
     try:
+        sources = open_reference_sources(db, embedder, characters.values(), world)
         results = await evaluate(calibration, characters, reranker, sources)
     except (CalibrationError, EmbeddingError, RerankError) as e:
         print(e, file=sys.stderr)
         return 1
     finally:
-        sources.close()
+        await db.close()
         await embedder.aclose()
         await reranker.aclose()
     print(report(results, rerank.model, thresholds_for(rerank)))
@@ -913,12 +927,15 @@ async def _eval_memory(args: argparse.Namespace) -> int:
     return 0
 
 
-def _list_users(store: Store, _: argparse.Namespace) -> None:
-    for user in store.list_users():
+async def _list_users(db: Database, _: argparse.Namespace) -> None:
+    store = Store(db)
+    users = await store.list_users()
+    methods_of = await store.sign_in_methods_of([user.id for user in users])
+    for user in users:
         methods = "、".join(
             f"{PROVIDER_LABELS.get(m.provider, m.provider)} {m.display_name}"  # pyright: ignore[reportCallIssue, reportArgumentType]
             f" ({m.provider}:{m.subject})"
-            for m in store.sign_in_methods(user.id)
+            for m in methods_of[user.id]
         ) or "（没有登录方式）"
         state = f"已封禁于 {user.banned_at}" if user.banned_at else "正常"
         if user.ban_note:
@@ -926,24 +943,20 @@ def _list_users(store: Store, _: argparse.Namespace) -> None:
         print(f"{user.id}\t{user.name}\t{methods}\t创建于 {user.created_at}\t{state}")
 
 
-def _ban_user(store: Store, args: argparse.Namespace) -> None:
-    store.set_banned(args.user_id, datetime.now(UTC), args.note or None)
+async def _ban_user(db: Database, args: argparse.Namespace) -> None:
+    await Store(db).set_banned(args.user_id, datetime.now(UTC), args.note or None)
     print(f"已封禁用户 {args.user_id}，并让他在所有设备上退出登录；正在进行的通话会在几秒内挂断")
 
 
-def _unban_user(store: Store, args: argparse.Namespace) -> None:
-    store.set_banned(args.user_id, None)
+async def _unban_user(db: Database, args: argparse.Namespace) -> None:
+    await Store(db).set_banned(args.user_id, None)
     print(f"已解封用户 {args.user_id}")
 
 
-def _user_usage(store: Store, args: argparse.Namespace) -> None:
-    store.get_user(args.user_id)  # NotFound for no such user
+async def _user_usage(db: Database, args: argparse.Namespace) -> None:
+    await Store(db).get_user(args.user_id)  # NotFound for no such user
     # The limits play no part in looking over what was used.
-    usage = UsageLimiter(args.db or database_path_from_env(), UsageLimits(), utc_now)
-    try:
-        day = usage.last_day(args.user_id)
-    finally:
-        usage.close()
+    day = await UsageLimiter(db, UsageLimits(), utc_now).last_day(args.user_id)
     print(f"用户 {args.user_id} 最近 24 小时的用量（UTC，按小时）：")
     print("时间\t文字回合\t通话\t其中不计入限额的回合\t其中不计入限额的通话")
     for hour, tally in day.hours.items():

@@ -20,7 +20,7 @@ written after, have them go on it too (GLOSSARY.md「外景照片」).
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -68,6 +68,14 @@ MAX_TWISTS = 2
 """How many twists a day has at most."""
 
 
+async def _no_date(*_: object) -> str | None:
+    return None
+
+
+async def _no_favors(*_: object) -> list[str]:
+    return []
+
+
 class ScheduleWriter:
     def __init__(
         self,
@@ -81,8 +89,8 @@ class ScheduleWriter:
         random: Random,
         enabled: bool,
         features: Switches = AllOn(),
-        date_on: Callable[[str, str, date], str | None] = lambda *_: None,
-        favors_on: Callable[[str, str, date], list[str]] = lambda *_: [],
+        date_on: Callable[[str, str, date], Awaitable[str | None]] = _no_date,
+        favors_on: Callable[[str, str, date], Awaitable[list[str]]] = _no_favors,
     ) -> None:
         """`date_on` says what she is to do with the producer on a day, if anything
         (GLOSSARY.md「邀约」); `favors_on`, what the producer's favors have her do that day
@@ -115,46 +123,47 @@ class ScheduleWriter:
         if not self._enabled:
             return
         now = self._clock()
-        due = await asyncio.to_thread(self._due, now)
+        due = await self._due(now)
         for conversation, day in due[:PER_TICK]:
             try:
                 await self._write(conversation, day)
             except Exception:
                 log.exception("writing a schedule in conversation %s failed", conversation.id)
-        await asyncio.to_thread(self._schedules.sweep, now.date())
+        await self._schedules.sweep(now.date())
 
     async def write_now(self, user_id: str, character_id: str) -> bool:
         """Have her schedule for today written now, whatever the hour and whether it was: for
         trying it out under the development sign-in. False if they have no conversation."""
         newest = [
-            c for c, _, _ in self._store.latest_conversations(user_id)
+            c for c, _, _ in await self._store.latest_conversations(user_id)
             if c.character_id == character_id
         ]
         if not newest:
             return False
-        await self._write(newest[0], self._today(user_id, self._clock()), again=True)
+        await self._write(newest[0], await self._today(user_id, self._clock()), again=True)
         return True
 
-    def _today(self, user_id: str, now: datetime) -> date:
-        zone = ZoneInfo(effective_timezone(self._store.get_profile(user_id), None))
+    async def _today(self, user_id: str, now: datetime) -> date:
+        zone = ZoneInfo(effective_timezone(await self._store.get_profile(user_id), None))
         return now.astimezone(zone).date()
 
-    def _due(self, now: datetime) -> list[tuple[Conversation, date]]:
+    async def _due(self, now: datetime) -> list[tuple[Conversation, date]]:
         found = []
-        for current in self._store.current_conversations():
+        for current in await self._store.current_conversations():
             conversation, contact = current.conversation, current.last_contact
             if conversation.character_id not in self._characters or current.ended:
                 continue
             if not current.has_turns or contact is None or now - contact > WINDOW:
                 continue
-            if not self._features.on(conversation.user_id, "schedules"):  # GLOSSARY.md「玩法开关」
+            if not await self._features.on(conversation.user_id, "schedules"):  # GLOSSARY.md「玩法开关」
                 continue
-            zone = ZoneInfo(effective_timezone(self._store.get_profile(conversation.user_id), None))
+            profile = await self._store.get_profile(conversation.user_id)
+            zone = ZoneInfo(effective_timezone(profile, None))
             local = now.astimezone(zone)
             if local.time() < WRITE_FROM:
                 continue
             day = local.date()
-            if self._schedules.tried(conversation.user_id, conversation.character_id, day):
+            if await self._schedules.tried(conversation.user_id, conversation.character_id, day):
                 continue
             found.append((contact, conversation, day))
         found.sort(key=lambda f: f[0])
@@ -170,12 +179,12 @@ class ScheduleWriter:
     async def _write(self, conversation: Conversation, day: date, again: bool = False) -> None:
         user_id, character_id = conversation.user_id, conversation.character_id
         twists = self._twists()
-        if (what := self._date_on(user_id, character_id, day)) is not None:
+        if (what := await self._date_on(user_id, character_id, day)) is not None:
             twists.append(DATE_TWIST.format(what=what))
-        twists.extend(self._favors_on(user_id, character_id, day))
+        twists.extend(await self._favors_on(user_id, character_id, day))
         names = {c.id: c.name for c in self._characters.values()}
         trip_with: tuple[str, ...] = ()
-        joining = self._schedules.joining(user_id, character_id, day)
+        joining = await self._schedules.joining(user_id, character_id, day)
         if joining is not None:
             trip, trip_with = joining
             twists.append(TRIP_WITH_TWIST.format(
@@ -187,7 +196,7 @@ class ScheduleWriter:
             trip = TRIP_PLACES[self._random(len(TRIP_PLACES))]
             free = [
                 c for c in self._engine.unit_mates(character_id)
-                if not self._schedules.tried(user_id, c, day)
+                if not await self._schedules.tried(user_id, c, day)
             ]
             if free and self._random(TOGETHER_ODDS) == 0:
                 trip_with = tuple(free)
@@ -196,7 +205,7 @@ class ScheduleWriter:
                 ))
             else:
                 twists.append(TRIP_TWIST.format(place=trip))
-        before = self._schedules.of(user_id, character_id, day - timedelta(days=1))
+        before = await self._schedules.of(user_id, character_id, day - timedelta(days=1))
         yesterday = schedule_said(before, names)
         recording = self._activity.begin("schedule", user_id, character_id, own_llm=False, exempt=False)
         lease = self._config.lease()
@@ -213,17 +222,17 @@ class ScheduleWriter:
             if sleep is not None:
                 heart = self._characters[character_id].heart
                 bath = draw_bath(sleep, heart.bath if heart else "tub", self._random)
-            recording.finish("success" if slots else "failed")
+            await recording.finish("success" if slots else "failed")
         except Exception as e:
             # Not logged with what was raised: a service's error may repeat what it was asked.
             log.warning("writing a schedule in conversation %s failed: %s", conversation.id,
                         type(e).__name__)
-            recording.finish("failed")
+            await recording.finish("failed")
         finally:
             lease.release()
         if again:
-            await asyncio.to_thread(self._schedules.forget, user_id, character_id, day)
-        await asyncio.to_thread(
-            self._schedules.keep, user_id, character_id, day, slots, twists, wake, sleep, bath,
+            await self._schedules.forget(user_id, character_id, day)
+        await self._schedules.keep(
+            user_id, character_id, day, slots, twists, wake, sleep, bath,
             trip if slots else None, trip_with,
         )

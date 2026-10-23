@@ -15,9 +15,10 @@ import pytest
 
 from eidolon.characters import Character, load_characters
 from eidolon import memory
+from eidolon.data_access import Database
 from eidolon.llm import ChatLLM
 from eidolon.memory import Memories, MemoryTurn, memory_query
-from eidolon.store import Conversation, Message, Segment, Store
+from eidolon.store import Conversation, Message, Segment, Store, add_turn
 from tests.conftest import CharacterConfig
 from tests.fakes import FakeBackgroundLLM, FakeEmbedder, FakeReranker
 from tests.test_shared_memory import CAT, TRIP, memorized
@@ -29,23 +30,36 @@ TZ = "Asia/Shanghai"
 class World:
     """A store with users and conversations for the memories module to remember them by."""
 
-    def __init__(self, store: Store, characters: dict[str, Character]) -> None:
+    def __init__(
+        self, db: Database, store: Store, characters: dict[str, Character], producer: str
+    ) -> None:
+        self.db = db
         self.store = store
         self.characters = characters
-        self.producer = store.create_user("producer").id
+        self.producer = producer
 
-    def conversation(self, character_id: str, user_id: str | None = None) -> Conversation:
-        return self.store.create_conversation(user_id or self.producer, character_id)
+    @classmethod
+    async def made(cls, db: Database, characters: dict[str, Character]) -> "World":
+        """The world of the store in `db`, the producer made in it."""
+        store = Store(db)
+        return cls(db, store, characters, (await store.create_user("producer")).id)
 
-    def reply(self, conversation: Conversation, text: str) -> Message:
-        return self.store.add_turn(conversation.id, text, [Segment("はいっ", "好的")])
+    async def conversation(self, character_id: str, user_id: str | None = None) -> Conversation:
+        return await self.store.create_conversation(user_id or self.producer, character_id)
+
+    async def reply(
+        self, conversation: Conversation, text: str, reply: Segment = Segment("はいっ", "好的")
+    ) -> Message:
+        return await self.db.write(add_turn, conversation.id, text, [reply])
 
 
 @pytest.fixture
 async def world(tmp_path: Path, characters: CharacterConfig) -> AsyncIterator[World]:
-    store = Store(tmp_path / "eidolon.db")
-    yield World(store, load_characters(characters.path))
-    store.close()
+    db = Database(tmp_path / "eidolon.db")
+    try:
+        yield await World.made(db, load_characters(characters.path))
+    finally:
+        await db.close()
 
 
 MemoriesFactory = Callable[..., Memories]
@@ -66,7 +80,7 @@ async def begin(memories: Memories, conversation: Conversation) -> MemoryTurn:
 
 
 @pytest.fixture
-async def make_memories(tmp_path: Path, world: World) -> AsyncIterator[MemoriesFactory]:
+async def make_memories(world: World) -> AsyncIterator[MemoriesFactory]:
     """Memories on the world's database; with a background model, embedder and reranker
     unless told otherwise (`off=True`)."""
     made: list[Memories] = []
@@ -79,11 +93,11 @@ async def make_memories(tmp_path: Path, world: World) -> AsyncIterator[MemoriesF
         reranker: FakeReranker | None = None,
     ) -> Memories:
         memories = (
-            Memories(tmp_path / "eidolon.db", world.characters, lambda: NOW)
+            Memories(world.db, world.characters, lambda: NOW)
             if off
             else writing_with(
                 Memories(
-                    tmp_path / "eidolon.db", world.characters, lambda: NOW,
+                    world.db, world.characters, lambda: NOW,
                     embedder=embedder or FakeEmbedder(),
                     reranker=reranker or FakeReranker("制作人"),
                 ),
@@ -101,15 +115,15 @@ async def make_memories(tmp_path: Path, world: World) -> AsyncIterator[MemoriesF
 async def tell(memories: Memories, world: World, conversation: Conversation, text: str) -> None:
     """Take a turn in which the user says `text`, and write down what it reveals."""
     turn = await begin(memories, conversation)
-    history = world.store.list_messages(conversation.id)
-    turn.write_down(history, text, world.reply(conversation, text))
+    history = await world.store.list_messages(conversation.id)
+    turn.write_down(history, text, await world.reply(conversation, text))
 
 
 async def find(memories: Memories, world: World, conversation: Conversation, text: str) -> str:
     """Take a turn in which the user says `text`, finding the memories relevant to it as
     retrieval does, the turn's query embedded apart from the memories."""
     turn = await begin(memories, conversation)
-    query = memory_query(world.store.list_messages(conversation.id), text)
+    query = memory_query(await world.store.list_messages(conversation.id), text)
     candidates = await turn.candidates(await FakeEmbedder().embed_query(query))
     return await turn.find(query, candidates) or ""
 
@@ -123,8 +137,8 @@ async def test_what_the_user_told_mano_reaches_kogane_as_hearsay(
 ):
     memories = make_memories(memorized(CAT))
 
-    await tell(memories, world, world.conversation("mano"), "我家的猫叫小白哦")
-    section = await find(memories, world, world.conversation("kogane"), "你知道我家的猫吗？")
+    await tell(memories, world, await world.conversation("mano"), "我家的猫叫小白哦")
+    section = await find(memories, world, await world.conversation("kogane"), "你知道我家的猫吗？")
 
     line = line_of(section, CAT)
     assert "櫻木真乃" in line and "转述" in line
@@ -136,8 +150,8 @@ async def test_a_memory_told_to_the_character_herself_is_not_hearsay(
 ):
     memories = make_memories(memorized(CAT))
 
-    await tell(memories, world, world.conversation("mano"), "我家的猫叫小白哦")
-    section = await find(memories, world, world.conversation("mano"), "你还记得我家的猫吗？")
+    await tell(memories, world, await world.conversation("mano"), "我家的猫叫小白哦")
+    section = await find(memories, world, await world.conversation("mano"), "你还记得我家的猫吗？")
 
     line = line_of(section, CAT)
     assert "对你说的" in line
@@ -145,18 +159,18 @@ async def test_a_memory_told_to_the_character_herself_is_not_hearsay(
 
 
 async def test_a_memory_told_to_a_character_since_removed_is_hearsay_from_another_idol(
-    tmp_path: Path, world: World, make_memories: MemoriesFactory
+    world: World, make_memories: MemoriesFactory
 ):
     earlier = make_memories(memorized(CAT))
-    await tell(earlier, world, world.conversation("mano"), "我家的猫叫小白哦")
+    await tell(earlier, world, await world.conversation("mano"), "我家的猫叫小白哦")
     await earlier.entries(world.producer)  # written down
     without_mano = {"kogane": world.characters["kogane"]}
     memories = Memories(
-        tmp_path / "eidolon.db", without_mano, lambda: NOW,
+        world.db, without_mano, lambda: NOW,
         embedder=FakeEmbedder(), reranker=FakeReranker("制作人"),
     )
 
-    section = await find(memories, world, world.conversation("kogane"), "你知道我家的猫吗？")
+    section = await find(memories, world, await world.conversation("kogane"), "你知道我家的猫吗？")
     [cat] = await memories.entries(world.producer)
     await memories.aclose()
 
@@ -169,11 +183,11 @@ async def test_one_users_memories_never_reach_another_user(
 ):
     reranker = FakeReranker("猫")
     memories = make_memories(memorized(CAT), memorized("制作人喜欢狗"), reranker=reranker)
-    friend = world.store.create_user("friend").id
+    friend = (await world.store.create_user("friend")).id
 
-    await tell(memories, world, world.conversation("mano"), "我家的猫叫小白")
-    await tell(memories, world, world.conversation("mano", friend), "我喜欢狗")
-    section = await find(memories, world, world.conversation("kogane", friend), "你知道我家的猫吗？")
+    await tell(memories, world, await world.conversation("mano"), "我家的猫叫小白")
+    await tell(memories, world, await world.conversation("mano", friend), "我喜欢狗")
+    section = await find(memories, world, await world.conversation("kogane", friend), "你知道我家的猫吗？")
 
     assert CAT not in section and "制作人喜欢狗" in section
     assert not any(CAT in doc for _, docs in reranker.calls for doc in docs)
@@ -185,7 +199,7 @@ async def test_the_background_model_reads_the_exchange_and_what_is_already_remem
 ):
     background = FakeBackgroundLLM(memorized(CAT), memorized(CAT, TRIP))
     memories = make_memories(background_llm=background)
-    conversation = world.conversation("mano")
+    conversation = await world.conversation("mano")
 
     await tell(memories, world, conversation, "我家的猫叫小白哦")
     await tell(memories, world, conversation, "下周六我要去北海道出差")
@@ -206,7 +220,7 @@ async def test_the_background_model_is_told_to_keep_only_what_still_matters_late
     background = FakeBackgroundLLM(memorized())
     memories = make_memories(background_llm=background)
 
-    await tell(memories, world, world.conversation("mano"), "今天好累")
+    await tell(memories, world, await world.conversation("mano"), "今天好累")
     await memories.entries(world.producer)
 
     instructions = next(m.content for m in background.prompts[0] if m.role == "system")
@@ -222,17 +236,17 @@ async def test_the_background_model_is_told_to_keep_only_what_still_matters_late
 async def test_irrelevant_memories_are_not_found(world: World, make_memories: MemoriesFactory):
     memories = make_memories(memorized(CAT), reranker=FakeReranker("北海道", others=0.001))
 
-    await tell(memories, world, world.conversation("mano"), "我家的猫叫小白哦")
+    await tell(memories, world, await world.conversation("mano"), "我家的猫叫小白哦")
 
-    assert await find(memories, world, world.conversation("kogane"), "北海道に行ったことある？") == ""
+    assert await find(memories, world, await world.conversation("kogane"), "北海道に行ったことある？") == ""
 
 
 async def test_only_the_most_relevant_few_are_found(world: World, make_memories: MemoriesFactory):
     told = [f"制作人喜欢第{i}种点心" for i in range(1, 6)]
     memories = make_memories(memorized(*told))
 
-    await tell(memories, world, world.conversation("mano"), "我喜欢好多点心")
-    section = await find(memories, world, world.conversation("mano"), "你知道我喜欢什么点心吗？")
+    await tell(memories, world, await world.conversation("mano"), "我喜欢好多点心")
+    section = await find(memories, world, await world.conversation("mano"), "你知道我喜欢什么点心吗？")
 
     assert sum(t in section for t in told) == 3
 
@@ -245,7 +259,7 @@ async def test_a_failed_extraction_writes_nothing_down(
 ):
     memories = make_memories(failure)
 
-    await tell(memories, world, world.conversation("mano"), "我家的猫叫小白哦")
+    await tell(memories, world, await world.conversation("mano"), "我家的猫叫小白哦")
 
     assert await memories.entries(world.producer) == []
 
@@ -256,25 +270,25 @@ async def test_a_memory_is_found_once_it_can_be_embedded(
     embedder = FakeEmbedder()
     memories = make_memories(memorized(CAT), embedder=embedder)
     embedder.down = True
-    await tell(memories, world, world.conversation("mano"), "我家的猫叫小白哦")
+    await tell(memories, world, await world.conversation("mano"), "我家的猫叫小白哦")
     assert [m.text for m in await memories.entries(world.producer)] == [CAT]
 
-    assert await find(memories, world, world.conversation("kogane"), "你知道我家的猫吗？") == ""
+    assert await find(memories, world, await world.conversation("kogane"), "你知道我家的猫吗？") == ""
 
     embedder.down = False
-    assert CAT in await find(memories, world, world.conversation("kogane"), "你知道我家的猫吗？")
+    assert CAT in await find(memories, world, await world.conversation("kogane"), "你知道我家的猫吗？")
 
 
 async def test_a_deleted_memory_is_found_no_more(world: World, make_memories: MemoriesFactory):
     background = FakeBackgroundLLM(memorized(CAT, TRIP))
     memories = make_memories(background_llm=background)
-    await tell(memories, world, world.conversation("mano"), "我家的猫叫小白，下周六去北海道")
+    await tell(memories, world, await world.conversation("mano"), "我家的猫叫小白，下周六去北海道")
     cat = next(m for m in await memories.entries(world.producer) if m.text == CAT)
 
     assert await memories.delete(world.producer, cat.id)
 
     assert [m.text for m in await memories.entries(world.producer)] == [TRIP]
-    kogane = world.conversation("kogane")
+    kogane = await world.conversation("kogane")
     section = await find(memories, world, kogane, "你知道我家的猫吗？")
     assert TRIP in section and CAT not in section
     # Nor is the background model told it is still remembered.
@@ -287,14 +301,14 @@ async def test_clearing_forgets_everything(world: World, make_memories: Memories
     """A turn's memories are written in the background; clearing right after the turn
     must not let them turn up afterwards."""
     memories = make_memories(memorized(CAT), memorized(TRIP))
-    conversation = world.conversation("mano")
+    conversation = await world.conversation("mano")
     await tell(memories, world, conversation, "我家的猫叫小白哦")
     await tell(memories, world, conversation, "下周六我要去北海道出差")
 
     await memories.clear(world.producer)
 
     assert await memories.entries(world.producer) == []
-    assert await find(memories, world, world.conversation("kogane"), "你知道我家的猫吗？") == ""
+    assert await find(memories, world, await world.conversation("kogane"), "你知道我家的猫吗？") == ""
 
 
 async def test_what_is_written_down_too_slowly_to_wait_for_is_still_forgotten(
@@ -304,7 +318,7 @@ async def test_what_is_written_down_too_slowly_to_wait_for_is_still_forgotten(
     before the clearing write down after that is dropped rather than turning up again."""
     gate = asyncio.Event()
     memories = make_memories(background_llm=FakeBackgroundLLM(memorized(CAT), gate=gate))
-    await tell(memories, world, world.conversation("mano"), "我家的猫叫小白哦")
+    await tell(memories, world, await world.conversation("mano"), "我家的猫叫小白哦")
     monkeypatch.setattr(memory, "SETTLE_TIMEOUT", 0.01)
 
     await memories.clear(world.producer)
@@ -319,12 +333,12 @@ async def test_with_memory_off_turns_neither_find_nor_write_down_but_users_still
 ):
     """Memories kept while memory was on can still be seen and deleted once it is off."""
     kept = make_memories(memorized(CAT, TRIP))
-    await tell(kept, world, world.conversation("mano"), "我家的猫叫小白，下周六去北海道")
+    await tell(kept, world, await world.conversation("mano"), "我家的猫叫小白，下周六去北海道")
     await kept.entries(world.producer)
     memories = make_memories(off=True)
 
-    assert await find(memories, world, world.conversation("kogane"), "你知道我家的猫吗？") == ""
-    await tell(memories, world, world.conversation("kogane"), "我最近在学吉他")
+    assert await find(memories, world, await world.conversation("kogane"), "你知道我家的猫吗？") == ""
+    await tell(memories, world, await world.conversation("kogane"), "我最近在学吉他")
     listed = await memories.entries(world.producer)
     assert [m.text for m in listed] == [TRIP, CAT]  # newest first
 
@@ -339,7 +353,7 @@ async def test_memories_are_embedded_without_a_title(world: World, make_memories
     embedder = FakeEmbedder()
     memories = make_memories(memorized(CAT), embedder=embedder)
 
-    await tell(memories, world, world.conversation("mano"), "我家的猫叫小白哦")
+    await tell(memories, world, await world.conversation("mano"), "我家的猫叫小白哦")
     await memories.entries(world.producer)  # written down
 
     assert embedder.documents == [CAT] and embedder.titles == [None]
@@ -352,10 +366,10 @@ async def test_writing_down_embeds_the_turn_with_the_characters_previous_reply_a
     the memories nearest it."""
     embedder = FakeEmbedder()
     memories = make_memories(memorized(CAT), memorized(), embedder=embedder)
-    conversation = world.conversation("mano")
+    conversation = await world.conversation("mano")
     await tell(memories, world, conversation, "我家的猫叫小白哦")
-    world.store.add_turn(
-        conversation.id, "我回来了", [Segment("[happy] おかえりなさい", "[happy] 欢迎回来，猫还好吗？")]
+    await world.reply(
+        conversation, "我回来了", Segment("[happy] おかえりなさい", "[happy] 欢迎回来，猫还好吗？")
     )
 
     await tell(memories, world, conversation, "它昨晚又叫了一夜")
@@ -371,14 +385,14 @@ async def test_writing_down_a_turn_embedded_already_embeds_it_no_more(
     background model the memories nearest it all the same."""
     embedder, background = FakeEmbedder(), FakeBackgroundLLM(memorized(CAT), memorized())
     memories = make_memories(embedder=embedder, background_llm=background)
-    conversation = world.conversation("mano")
+    conversation = await world.conversation("mano")
     await tell(memories, world, conversation, "我家的猫叫小白哦")
     await memories.entries(world.producer)
     turn = await begin(memories, conversation)
-    history, text = world.store.list_messages(conversation.id), "小白最近胖了"
+    history, text = await world.store.list_messages(conversation.id), "小白最近胖了"
     query_vector = await FakeEmbedder().embed_query(memory_query(history, text))
 
-    turn.write_down(history, text, world.reply(conversation, text), query_vector)
+    turn.write_down(history, text, await world.reply(conversation, text), query_vector)
     await memories.entries(world.producer)
 
     assert embedder.queries == ["我家的猫叫小白哦"]
@@ -427,7 +441,7 @@ async def test_the_background_model_is_shown_the_holding_memories_nearest_the_tu
         memorized(CAT), *(memorized(*others[i:i + 5]) for i in range(0, 25, 5))
     )
     memories = make_memories(background_llm=background)
-    conversation = world.conversation("mano")
+    conversation = await world.conversation("mano")
     for said in ["我家的猫叫小白哦", *["我喜欢点心"] * 5]:
         await tell(memories, world, conversation, said)
     await memories.entries(world.producer)
@@ -445,10 +459,10 @@ async def test_superseded_memories_are_not_shown_to_the_background_model(
 ):
     background = FakeBackgroundLLM(memorized(OSAKA), superseding(TOKYO, OSAKA))
     memories = make_memories(background_llm=background)
-    await tell(memories, world, world.conversation("mano"), "我住在大阪")
-    await tell(memories, world, world.conversation("mano"), "我搬到东京了")
+    await tell(memories, world, await world.conversation("mano"), "我住在大阪")
+    await tell(memories, world, await world.conversation("mano"), "我搬到东京了")
 
-    await tell(memories, world, world.conversation("mano"), "东京好热闹")
+    await tell(memories, world, await world.conversation("mano"), "东京好热闹")
     await memories.entries(world.producer)
 
     assert list(known("\n".join(m.content for m in background.prompts[-1]))) == [TOKYO]
@@ -463,7 +477,7 @@ async def test_while_the_embedder_is_down_the_background_model_is_shown_the_late
         memorized(CAT), *(memorized(*others[i:i + 5]) for i in range(0, 25, 5))
     )
     memories = make_memories(background_llm=background, embedder=embedder)
-    conversation = world.conversation("mano")
+    conversation = await world.conversation("mano")
     for said in ["我家的猫叫小白哦", *["我喜欢点心"] * 5]:
         await tell(memories, world, conversation, said)
     embedder.down = True
@@ -481,11 +495,11 @@ async def test_a_new_memory_supersedes_what_it_updates_whoever_it_was_told_to(
     """Told to Mano they live in Osaka and to Kogane they moved to Tokyo, Mano hears of
     Tokyo, not Osaka; Osaka is still listed, as superseded."""
     memories = make_memories(memorized(OSAKA, DOG), superseding(TOKYO, OSAKA))
-    await tell(memories, world, world.conversation("mano"), "我住在大阪，养了一只狗")
-    await tell(memories, world, world.conversation("kogane"), "我搬到东京了")
+    await tell(memories, world, await world.conversation("mano"), "我住在大阪，养了一只狗")
+    await tell(memories, world, await world.conversation("kogane"), "我搬到东京了")
 
     assert await listed(memories, world) == {TOKYO: None, DOG: None, OSAKA: TOKYO}
-    section = await find(memories, world, world.conversation("mano"), "你知道我住在哪吗？")
+    section = await find(memories, world, await world.conversation("mano"), "你知道我住在哪吗？")
     assert TOKYO in section and "听月岡恋鐘说" in line_of(section, TOKYO)
     assert OSAKA not in section and DOG in section
 
@@ -493,8 +507,8 @@ async def test_a_new_memory_supersedes_what_it_updates_whoever_it_was_told_to(
 async def test_one_memory_may_supersede_several(world: World, make_memories: MemoriesFactory):
     both = "制作人的狗去世了，现在住在东京"
     memories = make_memories(memorized(OSAKA, DOG, CAT), superseding(both, OSAKA, DOG))
-    await tell(memories, world, world.conversation("mano"), "我住在大阪，养了猫和狗")
-    await tell(memories, world, world.conversation("mano"), "狗去世了，我也搬到东京了")
+    await tell(memories, world, await world.conversation("mano"), "我住在大阪，养了猫和狗")
+    await tell(memories, world, await world.conversation("mano"), "狗去世了，我也搬到东京了")
 
     assert await listed(memories, world) == {both: None, CAT: None, OSAKA: both, DOG: both}
 
@@ -514,8 +528,8 @@ async def test_what_the_background_model_gets_wrong_supersedes_nothing(
     memories = make_memories(
         memorized(OSAKA, DOG), json.dumps(answer, ensure_ascii=False)
     )
-    await tell(memories, world, world.conversation("mano"), "我住在大阪，养了一只狗")
-    await tell(memories, world, world.conversation("mano"), "我搬到东京了")
+    await tell(memories, world, await world.conversation("mano"), "我住在大阪，养了一只狗")
+    await tell(memories, world, await world.conversation("mano"), "我搬到东京了")
 
     assert await listed(memories, world) == {TOKYO: None, DOG: None, OSAKA: None}
 
@@ -524,14 +538,14 @@ async def test_a_memory_supersedes_only_what_the_background_model_was_shown(
     world: World, make_memories: MemoriesFactory
 ):
     """Another user's memory, numbered past what was shown, stays as it is."""
-    friend = world.store.create_user("friend").id
+    friend = (await world.store.create_user("friend")).id
     memories = make_memories(
         memorized(OSAKA), memorized(DOG),
         json.dumps({"memories": [{"text": TOKYO, "supersedes": [1, 2]}]}, ensure_ascii=False),
     )
-    await tell(memories, world, world.conversation("mano", friend), "我住在大阪")
-    await tell(memories, world, world.conversation("mano"), "我养了一只狗")
-    await tell(memories, world, world.conversation("mano"), "我搬到东京了")
+    await tell(memories, world, await world.conversation("mano", friend), "我住在大阪")
+    await tell(memories, world, await world.conversation("mano"), "我养了一只狗")
+    await tell(memories, world, await world.conversation("mano"), "我搬到东京了")
 
     assert await listed(memories, world) == {TOKYO: None, DOG: TOKYO}
     assert [m.superseded_by for m in await memories.entries(friend)] == [None]
@@ -541,14 +555,14 @@ async def test_a_superseded_memory_comes_back_when_what_superseded_it_is_deleted
     world: World, make_memories: MemoriesFactory
 ):
     memories = make_memories(memorized(OSAKA), superseding(TOKYO, OSAKA))
-    await tell(memories, world, world.conversation("mano"), "我住在大阪")
-    await tell(memories, world, world.conversation("kogane"), "我搬到东京了")
+    await tell(memories, world, await world.conversation("mano"), "我住在大阪")
+    await tell(memories, world, await world.conversation("kogane"), "我搬到东京了")
     tokyo = next(m for m in await memories.entries(world.producer) if m.text == TOKYO)
 
     assert await memories.delete(world.producer, tokyo.id)
 
     assert await listed(memories, world) == {OSAKA: None}
-    section = await find(memories, world, world.conversation("mano"), "你知道我住在哪吗？")
+    section = await find(memories, world, await world.conversation("mano"), "你知道我住在哪吗？")
     assert OSAKA in section
 
 
@@ -560,7 +574,7 @@ async def test_deleting_a_superseded_memory_brings_back_none_before_it(
         memorized(OSAKA), superseding(TOKYO, OSAKA), superseding(KYOTO, TOKYO)
     )
     for said in ["我住在大阪", "我搬到东京了", "我又搬到京都了"]:
-        await tell(memories, world, world.conversation("mano"), said)
+        await tell(memories, world, await world.conversation("mano"), said)
     tokyo = next(m for m in await memories.entries(world.producer) if m.text == TOKYO)
 
     assert await memories.delete(world.producer, tokyo.id)
@@ -579,10 +593,10 @@ async def test_a_memory_deleted_while_being_superseded_stays_deleted(
                                    gate=gate)
     memories = make_memories(background_llm=background)
     gate.set()
-    await tell(memories, world, world.conversation("mano"), "我住在大阪，养了一只狗")
+    await tell(memories, world, await world.conversation("mano"), "我住在大阪，养了一只狗")
     osaka = next(m for m in await memories.entries(world.producer) if m.text == OSAKA)
     gate.clear()
-    await tell(memories, world, world.conversation("mano"), "我搬到东京了，狗也送人了")
+    await tell(memories, world, await world.conversation("mano"), "我搬到东京了，狗也送人了")
     monkeypatch.setattr(memory, "SETTLE_TIMEOUT", 0.01)
 
     assert await memories.delete(world.producer, osaka.id)
@@ -601,10 +615,10 @@ async def test_writing_down_what_was_superseded_brings_it_back(
         memorized(OSAKA), superseding(TOKYO, OSAKA), superseding(OSAKA, TOKYO)
     )
     for said in ["我住在大阪", "我搬到东京了", "我又搬回大阪了"]:
-        await tell(memories, world, world.conversation("mano"), said)
+        await tell(memories, world, await world.conversation("mano"), said)
 
     assert await listed(memories, world) == {TOKYO: OSAKA, OSAKA: None}
-    section = await find(memories, world, world.conversation("mano"), "你知道我住在哪吗？")
+    section = await find(memories, world, await world.conversation("mano"), "你知道我住在哪吗？")
     assert OSAKA in section and TOKYO not in section
 
 
@@ -624,12 +638,12 @@ async def test_memories_kept_before_superseding_all_hold(tmp_path: Path, world: 
         )
     db.close()
     memories = Memories(
-        tmp_path / "eidolon.db", world.characters, lambda: NOW,
+        world.db, world.characters, lambda: NOW,
         embedder=FakeEmbedder(), reranker=FakeReranker("制作人"),
     )
 
     [cat] = await memories.entries(world.producer)
-    section = await find(memories, world, world.conversation("kogane"), "你知道我家的猫吗？")
+    section = await find(memories, world, await world.conversation("kogane"), "你知道我家的猫吗？")
     await memories.aclose()
 
     assert (cat.text, cat.superseded_by) == (CAT, None)

@@ -43,8 +43,8 @@ const CONVERSATIONS = FIRST_LEVEL.conversations;
 
 /**
  * 设置「统计」（GLOSSARY.md「统计」，DESIGN.md「统计页」）。上半部分不随时间跨度变，从上到下是一句话画像、
- * 认识天数和连续来访三个数、过去一年的热力图和好感度分组；下半部分顶上是「近 30 天 / 近一年 / 全部」，默认全部，下面是总数、聊得最多、
- * 通话最久、分时段图和礼物。好感度和礼物关掉时，好感度分组、礼物和总数里的「送出的礼物」都不显示。哪一块没数据就不显示；一个回合、一次送礼、一通通话都没有时整页只有一句话和去对话列表的按钮。
+ * 认识天数和连续来访三个数、过去一年的热力图、好感度分组和「成就」两个数（解锁的阶段、集齐的角色）；下半部分顶上是「近 30 天 / 近一年 / 全部」，默认全部，下面是总数、聊得最多、
+ * 通话最久、分时段图和礼物。好感度和礼物关掉时，好感度分组、成就、礼物和总数里的「送出的礼物」都不显示。哪一块没数据就不显示；一个回合、一次送礼、一通通话都没有时整页只有一句话和去对话列表的按钮。
  * 每次打开都重新读，删掉历史对话后回来就是新的数；换跨度时重新读整份，新的到之前眼前的数留着、变淡，页面不跳不空。
  */
 export function StatsSettings() {
@@ -139,6 +139,15 @@ export function StatsSettings() {
           </section>
         )}
         {shown.affinity && <AffinityGroups groups={affinityGroups(stats.affinity)} byId={byId} />}
+        {shown.achievements && stats.achievements && (
+          <section className="flex flex-col gap-3">
+            <h2 className="text-header">{t.achievements}</h2>
+            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <Figure label={t.stagesUnlocked} value={stats.achievements.stages} unit={t.stagesUnit} />
+              <Figure label={t.charactersComplete} value={stats.achievements.complete} unit={t.charactersUnit} />
+            </dl>
+          </section>
+        )}
         <div className="flex flex-col gap-4">
           <Tabs
             value={range}

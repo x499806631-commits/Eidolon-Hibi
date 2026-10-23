@@ -6,19 +6,19 @@ same, for the admin to see, but does not count towards the limit. An admin may s
 own limits, apart from the deployment's: a number, unlimited, or 0, which leaves them the
 exempt ones only.
 Each use is kept in the database, next to the
-user it belongs to, for a day; whoever's they are, uses older than that are deleted
-whenever anyone takes one."""
+user it belongs to, for a day; whoever's they are, uses older than that are deleted as the
+backend tidies up (`housekeeping`)."""
 
-import threading
-from collections.abc import Callable
+import sqlite3
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Literal
 
 from eidolon.clock import Clock
 from eidolon.config import UsageLimits
-from eidolon.database import connect
+from eidolon.data_access import Database
+from eidolon.housekeeping import in_batches
 
 UsageKind = Literal["turn", "call", "photo"]
 
@@ -115,10 +115,10 @@ class Use:
         self._limiter = limiter
         self._id: int | None = use_id
 
-    def give_back(self) -> None:
+    async def give_back(self) -> None:
         if self._id is not None:
-            self._limiter._give_back(self._id)
-            self._id = None
+            use_id, self._id = self._id, None
+            await self._limiter._give_back(use_id)
 
 
 class UsageLimiter:
@@ -126,27 +126,12 @@ class UsageLimiter:
     device or sign-in method they come with."""
 
     def __init__(
-        self, path: Path, limits: UsageLimits | Callable[[], UsageLimits], clock: Clock
+        self, db: Database, limits: UsageLimits | Callable[[], UsageLimits], clock: Clock
     ) -> None:
-        """Uses kept in the database at `path`, next to the users they belong to, limited
-        by `limits`, or by what it says as each use is taken (the live configuration's)."""
-        # What is given back or forgotten is overwritten, not just freed (see `database`).
-        self._db = connect(path)
-        self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
-            columns = {name for _, name, *_ in self._db.execute("PRAGMA table_info(usage)")}
-            if "exempt" not in columns:
-                self._db.execute("ALTER TABLE usage ADD COLUMN exempt INTEGER NOT NULL DEFAULT 0")
-            columns = {
-                name for _, name, *_ in self._db.execute("PRAGMA table_info(user_limits)")
-            }
-            # Whether an admin let the user use the deployer's LLM where users had to bring
-            # their own, which no longer is a rule.
-            if "deployer_llm_allowed" in columns:
-                self._db.execute("ALTER TABLE user_limits DROP COLUMN deployer_llm_allowed")
-            if "photos_per_hour" not in columns:
-                self._db.execute("ALTER TABLE user_limits ADD COLUMN photos_per_hour INTEGER")
+        """Uses kept in `db`, next to the users they belong to, limited by `limits`, or by
+        what it says as each use is taken (the live configuration's)."""
+        self._db = db
+        db.prepare(_open)
         self._limits = limits if callable(limits) else lambda: limits
         self._clock = clock
 
@@ -155,67 +140,45 @@ class UsageLimiter:
         """The limits in effect now."""
         return self._limits()
 
-    def take(self, user_id: str, kind: UsageKind, exempt: bool = False) -> Use:
+    async def take(self, user_id: str, kind: UsageKind, exempt: bool = False) -> Use:
         """Record one `kind` by the user, counting it against their limit unless it is
         `exempt`; raises OverLimit, recording nothing, when they have none left this hour,
         that is, when the last hour already holds as many counting uses as the limit: the
-        user's own, if an admin set one, else the deployment's."""
-        now = self._clock()
-        with self._lock, self._db:
-            # Everyone's, so that a user who does not come back leaves none behind.
-            self._db.execute("DELETE FROM usage WHERE at <= ?", ((now - KEPT).timestamp(),))
-            if not exempt:
-                self._refuse_over(user_id, kind, now)
-            cursor = self._db.execute(
-                "INSERT INTO usage (user_id, kind, at, exempt) VALUES (?, ?, ?, ?)",
-                (user_id, kind, now.timestamp(), int(exempt)),
-            )
-        assert cursor.lastrowid is not None
-        return Use(self, cursor.lastrowid)
+        user's own, if an admin set one, else the deployment's. Told and taken in one write
+        task, so that two at once never both take the last one."""
+        return Use(self, await self._db.write(
+            _take, user_id, kind, exempt, self._clock(), self._limits()
+        ))
 
-    def check(self, user_id: str, kind: UsageKind) -> None:
+    async def forget_old(self) -> None:
+        """Delete everyone's uses older than `KEPT`, so that a user who does not come back
+        leaves none behind; in batches (`housekeeping.in_batches`)."""
+        await in_batches(self._db, _forget_before, (self._clock() - KEPT).timestamp())
+
+    def check(self, db: sqlite3.Connection, user_id: str, kind: UsageKind) -> None:
         """Raise OverLimit, as `take` would, if the user has no `kind` left this hour that
-        counts; take nothing."""
-        with self._lock:
-            self._refuse_over(user_id, kind, self._clock())
+        counts; take nothing. Read through `db`, in the body of a read task of the
+        caller's."""
+        _refuse_over(db, user_id, kind, self._clock(), self._limits())
 
-    def user_limits(self, user_id: str) -> UserLimits | None:
+    async def user_limits(self, user_id: str) -> UserLimits | None:
         """The user's own limits; None if an admin set none."""
-        with self._lock:
-            row = self._db.execute(
-                "SELECT turns_per_hour, calls_per_hour, photos_per_hour, note, updated_at"
-                " FROM user_limits WHERE user_id = ?",
-                (user_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        turns, calls, photos, note, updated_at = row
-        return UserLimits(
-            _from_row(turns), _from_row(calls), note, updated_at, photos_per_hour=_from_row(photos)
+        return await self._db.read(read_user_limits, user_id)
+
+    async def limits_of(self, user_ids: Sequence[str]) -> dict[str, UserLimits | None]:
+        """Each of the users' own limits, as `user_limits`, read at once."""
+        return await self._db.read(
+            lambda db: {user_id: read_user_limits(db, user_id) for user_id in user_ids}
         )
 
-    def set_user_limits(self, user_id: str, limits: UserLimits | None) -> None:
+    async def set_user_limits(self, user_id: str, limits: UserLimits | None) -> None:
         """Set the user's own limits, as of now, replacing those they had; None takes them
         off, and the deployment's hold again."""
-        with self._lock, self._db:
-            if limits is None:
-                self._db.execute("DELETE FROM user_limits WHERE user_id = ?", (user_id,))
-                return
-            self._db.execute(
-                "INSERT OR REPLACE INTO user_limits"
-                " (user_id, turns_per_hour, calls_per_hour, photos_per_hour, note, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (user_id, _to_row(limits.turns_per_hour), _to_row(limits.calls_per_hour),
-                 _to_row(limits.photos_per_hour), limits.note, self._clock().isoformat()),
-            )
+        await self._db.write(_set_user_limits, user_id, limits, self._clock())
 
-    def last_day(self, user_id: str) -> DayOfUse:
+    async def last_day(self, user_id: str) -> DayOfUse:
         """The user's uses in the last day, by hour, for the admin to look over."""
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT kind, at, exempt FROM usage WHERE user_id = ? AND at >= ? ORDER BY at",
-                (user_id, (self._clock() - KEPT).timestamp()),
-            ).fetchall()
+        rows = await self._db.read(_last_day, user_id, (self._clock() - KEPT).timestamp())
         hours: dict[datetime, list[tuple[UsageKind, bool]]] = {}
         for kind, at, exempt in rows:
             hour = datetime.fromtimestamp(at, UTC).replace(minute=0, second=0, microsecond=0)
@@ -225,47 +188,132 @@ class UsageLimiter:
             _tally([use for uses in hours.values() for use in uses]),
         )
 
-    def close(self) -> None:
-        self._db.close()
-
-    def _refuse_over(self, user_id: str, kind: UsageKind, now: datetime) -> None:
-        """Raise OverLimit if the last hour already holds as many of the user's counting
-        `kind` as their limit; under the lock."""
-        limits = self._limits()
-        deployment = {
-            "turn": limits.turns_per_hour,
-            "call": limits.calls_per_hour,
-            "photo": limits.photos_per_hour,
-        }[kind]
-        own = self._own_limit(user_id, kind)
-        limit = deployment if own is None else None if own == "unlimited" else own
-        if limit == 0:
-            raise OverLimit(kind, 0, None, now)
-        if limit is None:
-            return
-        recent = [
-            at
-            for (at,) in self._db.execute(
-                "SELECT at FROM usage WHERE user_id = ? AND kind = ? AND NOT exempt"
-                " AND at > ? ORDER BY at",
-                (user_id, kind, (now - WINDOW).timestamp()),
-            )
-        ]
-        if len(recent) >= limit:
-            blocking = recent[len(recent) - limit]  # this one must age out first
-            retry_at = datetime.fromtimestamp(blocking, UTC) + WINDOW
-            raise OverLimit(kind, limit, retry_at, now)
-
-    def _own_limit(self, user_id: str, kind: UsageKind) -> UserLimit:
-        row = self._db.execute(
-            f"SELECT {_COLUMNS[kind]} FROM user_limits WHERE user_id = ?", (user_id,)
-        ).fetchone()
-        return _from_row(row[0]) if row else None
-
-    def _give_back(self, use_id: int) -> None:
+    async def _give_back(self, use_id: int) -> None:
         """Forget a use, as if it had never been taken."""
-        with self._lock, self._db:
-            self._db.execute("DELETE FROM usage WHERE id = ?", (use_id,))
+        await self._db.write(_give_back, use_id)
+
+
+def read_user_limits(db: sqlite3.Connection, user_id: str) -> UserLimits | None:
+    """The user's own limits, read through `db`; None if an admin set none."""
+    row = db.execute(
+        "SELECT turns_per_hour, calls_per_hour, photos_per_hour, note, updated_at"
+        " FROM user_limits WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    turns, calls, photos, note, updated_at = row
+    return UserLimits(
+        _from_row(turns), _from_row(calls), note, updated_at, photos_per_hour=_from_row(photos)
+    )
+
+
+def _open(db: sqlite3.Connection) -> None:
+    """Make the tables, and bring those of an older version up to date."""
+    # What is given back or forgotten is overwritten, not just freed (see `database`).
+    db.executescript(_SCHEMA)
+    columns = {name for _, name, *_ in db.execute("PRAGMA table_info(usage)")}
+    if "exempt" not in columns:
+        db.execute("ALTER TABLE usage ADD COLUMN exempt INTEGER NOT NULL DEFAULT 0")
+    columns = {name for _, name, *_ in db.execute("PRAGMA table_info(user_limits)")}
+    # Whether an admin let the user use the deployer's LLM where users had to bring their
+    # own, which no longer is a rule.
+    if "deployer_llm_allowed" in columns:
+        db.execute("ALTER TABLE user_limits DROP COLUMN deployer_llm_allowed")
+    if "photos_per_hour" not in columns:
+        db.execute("ALTER TABLE user_limits ADD COLUMN photos_per_hour INTEGER")
+
+
+def _take(
+    db: sqlite3.Connection,
+    user_id: str,
+    kind: UsageKind,
+    exempt: bool,
+    now: datetime,
+    limits: UsageLimits,
+) -> int:
+    """Take one `kind` for the user `now`, under `limits` unless `exempt`: its id."""
+    if not exempt:
+        _refuse_over(db, user_id, kind, now, limits)
+    cursor = db.execute(
+        "INSERT INTO usage (user_id, kind, at, exempt) VALUES (?, ?, ?, ?)",
+        (user_id, kind, now.timestamp(), int(exempt)),
+    )
+    assert cursor.lastrowid is not None
+    return cursor.lastrowid
+
+
+def _refuse_over(
+    db: sqlite3.Connection, user_id: str, kind: UsageKind, now: datetime, limits: UsageLimits
+) -> None:
+    """Raise OverLimit if the last hour already holds as many of the user's counting
+    `kind` as their limit: their own, else the deployment's in `limits`."""
+    deployment = {
+        "turn": limits.turns_per_hour,
+        "call": limits.calls_per_hour,
+        "photo": limits.photos_per_hour,
+    }[kind]
+    own = _own_limit(db, user_id, kind)
+    limit = deployment if own is None else None if own == "unlimited" else own
+    if limit == 0:
+        raise OverLimit(kind, 0, None, now)
+    if limit is None:
+        return
+    recent = [
+        at
+        for (at,) in db.execute(
+            "SELECT at FROM usage WHERE user_id = ? AND kind = ? AND NOT exempt"
+            " AND at > ? ORDER BY at",
+            (user_id, kind, (now - WINDOW).timestamp()),
+        )
+    ]
+    if len(recent) >= limit:
+        blocking = recent[len(recent) - limit]  # this one must age out first
+        retry_at = datetime.fromtimestamp(blocking, UTC) + WINDOW
+        raise OverLimit(kind, limit, retry_at, now)
+
+
+def _own_limit(db: sqlite3.Connection, user_id: str, kind: UsageKind) -> UserLimit:
+    row = db.execute(
+        f"SELECT {_COLUMNS[kind]} FROM user_limits WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    return _from_row(row[0]) if row else None
+
+
+def _set_user_limits(
+    db: sqlite3.Connection, user_id: str, limits: UserLimits | None, now: datetime
+) -> None:
+    if limits is None:
+        db.execute("DELETE FROM user_limits WHERE user_id = ?", (user_id,))
+        return
+    db.execute(
+        "INSERT OR REPLACE INTO user_limits"
+        " (user_id, turns_per_hour, calls_per_hour, photos_per_hour, note, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, _to_row(limits.turns_per_hour), _to_row(limits.calls_per_hour),
+         _to_row(limits.photos_per_hour), limits.note, now.isoformat()),
+    )
+
+
+def _last_day(
+    db: sqlite3.Connection, user_id: str, after: float
+) -> list[tuple[UsageKind, float, int]]:
+    return db.execute(
+        "SELECT kind, at, exempt FROM usage WHERE user_id = ? AND at > ? ORDER BY at",
+        (user_id, after),
+    ).fetchall()
+
+
+def _give_back(db: sqlite3.Connection, use_id: int) -> None:
+    db.execute("DELETE FROM usage WHERE id = ?", (use_id,))
+
+
+def _forget_before(db: sqlite3.Connection, at: float, batch: int) -> int:
+    """Delete `batch` at most of everyone's uses up to `at`: how many it deleted."""
+    return db.execute(
+        "DELETE FROM usage WHERE id IN (SELECT id FROM usage WHERE at <= ? LIMIT ?)",
+        (at, batch),
+    ).rowcount
 
 
 def _to_row(limit: UserLimit) -> int | None:

@@ -11,13 +11,14 @@ from datetime import timedelta
 import httpx
 import pytest
 
-from eidolon.activity import ActivityLog
 from eidolon.characters import load_characters
 from eidolon.config import FishAudioModel, Settings
 from eidolon.greetings import FishAudioSettings, GreetingReport, greeting_path, upload_greetings
 from eidolon.readings import load_readings, readings_path
 from eidolon.s3 import S3Error, S3Settings
-from tests.conftest import KOGANE_SHEET, MANO_SHEET, Admin, CharacterConfig, ClientFactory
+from tests.conftest import (
+    KOGANE_SHEET, MANO_SHEET, Admin, CharacterConfig, ClientFactory, activity_in,
+)
 from tests.fakes import START, FakeFishAudio, FakeLLM
 from tests.test_stand_upload import FakeBucket
 
@@ -431,11 +432,8 @@ async def test_voicing_the_greetings_leaves_no_run_record(
 
     await deployment.upload()
 
-    activity = ActivityLog(settings.database_path, lambda: START)
-    try:
-        assert activity.since(START - timedelta(days=365)) == ([], [])
-    finally:
-        activity.close()
+    async with activity_in(settings.database_path, lambda: START) as activity:
+        assert await activity.since(START - timedelta(days=365)) == ([], [])
 
 
 def test_uploading_without_the_bucket_or_fish_audio_exits_1(

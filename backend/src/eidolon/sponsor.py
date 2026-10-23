@@ -7,15 +7,15 @@ camera said and on white where it is transparent, nothing else of it kept, and n
 than `MAX_SIDE` on its longer side: lossless and opaque, so the code still scans on the dark
 viewer."""
 
+import asyncio
 import io
-import threading
+import sqlite3
 from dataclasses import dataclass
-from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from eidolon.clock import Clock
-from eidolon.database import connect
+from eidolon.data_access import Database
 
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 """The largest picture the admin may upload."""
@@ -79,54 +79,64 @@ def kept_as_png(upload: bytes) -> bytes:
 
 
 class Sponsor:
-    def __init__(self, path: Path, clock: Clock) -> None:
-        self._db = connect(path)
-        self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
+    def __init__(self, db: Database, clock: Clock) -> None:
+        self._db = db
+        db.prepare(lambda conn: conn.executescript(_SCHEMA))
         self._clock = clock
 
-    def state(self) -> SponsorState:
-        with self._lock:
-            row = self._db.execute("SELECT enabled, image_at FROM sponsor WHERE id = 1").fetchone()
-        if row is None:
-            return SponsorState(False, None)
-        return SponsorState(bool(row[0]), row[1])
+    async def state(self) -> SponsorState:
+        return await self._db.read(_state)
 
-    def switch(self, enabled: bool) -> SponsorState:
+    async def switch(self, enabled: bool) -> SponsorState:
         """Switch it on or off; switched on without a code, users see nothing yet."""
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT INTO sponsor (id, enabled) VALUES (1, ?)"
-                " ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled",
-                (enabled,),
-            )
-        return self.state()
+        return await self._db.write(_switch, enabled)
 
-    def upload(self, upload: bytes) -> SponsorState:
+    async def upload(self, upload: bytes) -> SponsorState:
         """Keep `upload` as the code, replacing the one there was; raises NotAPicture."""
-        image = kept_as_png(upload)
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT INTO sponsor (id, image, image_at) VALUES (1, ?, ?)"
-                " ON CONFLICT (id) DO UPDATE SET image = excluded.image, image_at = excluded.image_at",
-                (image, self._clock().isoformat()),
-            )
-        return self.state()
+        image = await asyncio.to_thread(kept_as_png, upload)
+        return await self._db.write(_upload, image, self._clock().isoformat())
 
-    def image(self) -> tuple[bytes, str] | None:
+    async def image(self) -> tuple[bytes, str] | None:
         """The code, a PNG, and its version, when it was uploaded; None without one."""
-        with self._lock:
-            row = self._db.execute(
-                "SELECT image, image_at FROM sponsor WHERE id = 1 AND image IS NOT NULL"
-            ).fetchone()
-        return None if row is None else (row[0], row[1])
+        return await self._db.read(_image)
 
-    def clear(self) -> SponsorState:
+    async def clear(self) -> SponsorState:
         """Switch it off and delete the code."""
-        with self._lock, self._db:
-            self._db.execute("DELETE FROM sponsor")
-        return self.state()
+        return await self._db.write(_clear)
 
-    def close(self) -> None:
-        self._db.close()
+
+def _state(db: sqlite3.Connection) -> SponsorState:
+    row = db.execute("SELECT enabled, image_at FROM sponsor WHERE id = 1").fetchone()
+    if row is None:
+        return SponsorState(False, None)
+    return SponsorState(bool(row[0]), row[1])
+
+
+def _switch(db: sqlite3.Connection, enabled: bool) -> SponsorState:
+    db.execute(
+        "INSERT INTO sponsor (id, enabled) VALUES (1, ?)"
+        " ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled",
+        (enabled,),
+    )
+    return _state(db)
+
+
+def _upload(db: sqlite3.Connection, image: bytes, now: str) -> SponsorState:
+    db.execute(
+        "INSERT INTO sponsor (id, image, image_at) VALUES (1, ?, ?)"
+        " ON CONFLICT (id) DO UPDATE SET image = excluded.image, image_at = excluded.image_at",
+        (image, now),
+    )
+    return _state(db)
+
+
+def _image(db: sqlite3.Connection) -> tuple[bytes, str] | None:
+    row = db.execute(
+        "SELECT image, image_at FROM sponsor WHERE id = 1 AND image IS NOT NULL"
+    ).fetchone()
+    return None if row is None else (row[0], row[1])
+
+
+def _clear(db: sqlite3.Connection) -> SponsorState:
+    db.execute("DELETE FROM sponsor")
+    return _state(db)

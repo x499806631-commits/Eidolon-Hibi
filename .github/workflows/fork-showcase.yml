@@ -1,0 +1,61 @@
+# 玩法仓库登记（scripts/fork_showcase.py，见 docs/deploy.md「玩法仓库登记」）：
+# 登记 issue 打开或编辑时自动检查仓库地址，结果写进一条评论；维护者打上 accepted 标签时收录进
+# docs/community-forks.md、推到 main、关闭 issue。issue 正文只交给脚本读，不拼进命令行。
+name: Fork showcase
+
+on:
+  issues:
+    types: [opened, edited, reopened, labeled]
+
+# 同一个 issue 的检查和收录排队跑，免得两条检查评论或同时改文档
+concurrency:
+  group: fork-showcase-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: >-
+      github.event.issue.state == 'open' && github.event.sender.type != 'Bot' &&
+      ((github.event.action != 'labeled' && contains(github.event.issue.labels.*.name, 'fork-showcase')) ||
+       (github.event.action == 'labeled' && github.event.label.name == 'fork-showcase'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts
+
+      - name: 检查登记的仓库
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: python3 scripts/fork_showcase.py check "$NUMBER"
+
+  accept:
+    if: >-
+      github.event.action == 'labeled' && github.event.label.name == 'accepted' &&
+      github.event.issue.state == 'open' && contains(github.event.issue.labels.*.name, 'fork-showcase')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: 收录进社区玩法仓库
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 scripts/fork_showcase.py accept "$NUMBER"

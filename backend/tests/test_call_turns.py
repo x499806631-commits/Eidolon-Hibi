@@ -50,8 +50,8 @@ from eidolon.call_outcome import CallLimits, CallOutcome
 from eidolon.config import EmotionSettings, Settings
 from eidolon.engine import MAX_INPUT_LENGTH
 from eidolon.own_keys import BroughtKeys
-from eidolon.store import Store
-from tests.conftest import ClientFactory
+from eidolon.store import Conversation
+from tests.conftest import ClientFactory, store_in
 from tests.fakes import (
     FAKE_JUDGE,
     HANG,
@@ -76,13 +76,22 @@ MANO_REPLY = ["<ja>ほわっ、", "おはようございます！</ja><zh>哇，
 class CallUnderTest:
     """One call into a fresh conversation with Mano, and the API to read its record."""
 
-    def __init__(self, settings: Settings, client: httpx.AsyncClient, conversation_id: str):
+    def __init__(
+        self, settings: Settings, client: httpx.AsyncClient, conversation: Conversation
+    ):
         self._settings = settings
         self._client = client
-        self._store = Store(settings.database_path)
-        conversation = self._store.get_conversation(conversation_id)
-        assert conversation is not None
         self.conversation = conversation
+
+    @classmethod
+    async def of(
+        cls, settings: Settings, client: httpx.AsyncClient, conversation_id: str
+    ) -> "CallUnderTest":
+        """One into the conversation `conversation_id`."""
+        async with store_in(settings.database_path) as store:
+            conversation = await store.get_conversation(conversation_id)
+        assert conversation is not None
+        return cls(settings, client, conversation)
 
     async def run(
         self,
@@ -157,11 +166,16 @@ class CallUnderTest:
         )
         try:
             mano = backend.characters["mano"]
-            admission = backend.admissions.call(self.conversation.user_id, "mano", BroughtKeys())
+            admission = await backend.admissions.call(
+                self.conversation.user_id, "mano", BroughtKeys()
+            )
             call = Call(self.conversation, mano, admission.llms, muted, "standard", asmr=asmr)
             outcome = CallOutcome(
                 admission, limits, backend.clock,
-                partial(backend.store.keep_call, self.conversation.id),
+                partial(
+                    backend.happenings.call_ended,
+                    self.conversation.id, self.conversation.user_id, "mano",
+                ),
             )
             turns = CallTurns(
                 backend.engine, backend.store, call, outcome, follow_on_timeout,
@@ -172,7 +186,7 @@ class CallUnderTest:
             if cooled is not None:
                 asyncio.get_running_loop().call_later(cooled[0], turns.cooled, cooled[1])
             down, _ = await run_test(turns, frames_to_send=frames)
-            outcome.settle()
+            await outcome.settle()
         finally:
             await backend.aclose()
         return down
@@ -187,11 +201,16 @@ class CallUnderTest:
         backend = build_faked(self._settings, llm, clock=lambda: NOW)
         try:
             mano = backend.characters["mano"]
-            admission = backend.admissions.call(self.conversation.user_id, "mano", BroughtKeys())
+            admission = await backend.admissions.call(
+                self.conversation.user_id, "mano", BroughtKeys()
+            )
             call = Call(self.conversation, mano, admission.llms, False, "standard")
             outcome = CallOutcome(
                 admission, CallLimits(), backend.clock,
-                partial(backend.store.keep_call, self.conversation.id),
+                partial(
+                    backend.happenings.call_ended,
+                    self.conversation.id, self.conversation.user_id, "mano",
+                ),
             )
             turns = CallTurns(
                 backend.engine, backend.store, call, outcome, SONIOX_FOLLOW_ON_TIMEOUT
@@ -216,7 +235,7 @@ class CallUnderTest:
             assert outcome.service_failed(None) is not None
             await worker.cancel()
             await running
-            outcome.settle()
+            await outcome.settle()
         finally:
             await backend.aclose()
 
@@ -237,9 +256,6 @@ class CallUnderTest:
         """What the user said in each recorded turn, None for the character's replies."""
         return [row[1] for row in await self.record()]
 
-    def close(self) -> None:
-        self._store.close()
-
 
 class HoldsUpCancelling(FrameProcessor):
     """Never passes on a `CancelFrame`, as a processor stuck cancelling would not."""
@@ -254,9 +270,7 @@ class HoldsUpCancelling(FrameProcessor):
 @pytest.fixture
 async def mano_call(make_client: ClientFactory, settings: Settings):
     client = make_client(FakeLLM())
-    under_test = CallUnderTest(settings, client, await start_conversation(client, "mano"))
-    yield under_test
-    under_test.close()
+    return await CallUnderTest.of(settings, client, await start_conversation(client, "mano"))
 
 
 def one_by_one(*frames: Frame) -> list[Frame]:

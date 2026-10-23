@@ -26,7 +26,7 @@ from eidolon.schedules import (
     parse_schedule,
     rest,
 )
-from tests.conftest import CharacterConfig, ClientFactory
+from tests.conftest import CharacterConfig, ClientFactory, database_in
 from tests.fakes import FakeClock, FakeLLM, FakeRandom, context_of
 from tests.test_call_turns import CallUnderTest
 from tests.test_call_turns import mano_call  # noqa: F401  # the fixture
@@ -194,7 +194,7 @@ async def test_a_live_of_hers_that_day_is_to_be_in_it(
     conversation_id = await start_conversation(client)
     await send_turn(client, conversation_id, "嗯")
     backend = backend_of(client)
-    conversation = backend.store.get_conversation(conversation_id)
+    conversation = await backend.store.get_conversation(conversation_id)
     assert conversation is not None
 
     await backend.engine.write_schedule(conversation, llm, date(2026, 11, 7), [], "排练。")
@@ -271,13 +271,12 @@ def test_when_she_gets_up_and_goes_to_bed_is_read_within_their_hours():
     assert parse_rest("没有 JSON") == (None, None)
 
 
-def keep_night(settings: Settings, wake: time, sleep: time, day: date) -> None:
-    schedules = Schedules(settings.database_path, lambda: datetime.now(UTC))
-    schedules.keep(
-        user_id(settings.database_path, "producer"), "mano", day,
-        [Slot(time(10), time(12), "练习", "", "lesson")], [], wake, sleep,
-    )
-    schedules.close()
+async def keep_night(settings: Settings, wake: time, sleep: time, day: date) -> None:
+    async with database_in(settings.database_path) as db:
+        await Schedules(db, lambda: datetime.now(UTC)).keep(
+            user_id(settings.database_path, "producer"), "mano", day,
+            [Slot(time(10), time(12), "练习", "", "lesson")], [], wake, sleep,
+        )
 
 
 async def test_a_message_while_she_sleeps_wakes_her_and_after_that_she_is_up(
@@ -288,7 +287,7 @@ async def test_a_message_while_she_sleeps_wakes_her_and_after_that_she_is_up(
     client = make_client(llm, clock=clock)
     await client.put("/api/profile", json={"timezone": "Etc/GMT"})
     conversation = await start_conversation(client)
-    keep_night(settings, time(7), time(23), today_at(1).date())
+    await keep_night(settings, time(7), time(23), today_at(1).date())
 
     await send_turn(client, conversation, "还醒着吗")
     woken = context_of(llm.prompts[-1])
@@ -305,7 +304,7 @@ async def test_a_message_while_she_sleeps_wakes_her_and_after_that_she_is_up(
 async def test_woken_by_a_call_she_answers_it_first(
     mano_call: CallUnderTest, settings: Settings
 ):
-    keep_night(settings, time(7), time(20), date(2026, 9, 25))  # Shanghai's 20:30: asleep
+    await keep_night(settings, time(7), time(20), date(2026, 9, 25))  # Shanghai's 20:30: asleep
     llm = FakeLLM(["<ja>……もしもし……？</ja><zh>……喂……？</zh>"])
 
     spoken, messages = await mano_call.run(llm, [answered(), SleepFrame(0.5)])
@@ -317,7 +316,7 @@ async def test_woken_by_a_call_she_answers_it_first(
 
 
 async def test_awake_she_waits_for_the_user_to_speak(mano_call: CallUnderTest, settings: Settings):
-    keep_night(settings, time(7), time(23, 30), date(2026, 9, 25))  # Shanghai's 20:30: awake
+    await keep_night(settings, time(7), time(23, 30), date(2026, 9, 25))  # Shanghai's 20:30: awake
     llm = FakeLLM()
 
     spoken, _ = await mano_call.run(llm, [answered(), SleepFrame(0.3)])

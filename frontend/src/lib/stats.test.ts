@@ -37,6 +37,7 @@ const none: Stats = {
   all_hours: hours(),
   heatmap: { from: "2025-09-22", counts: Array(52 * 7 + 5).fill(0) },
   affinity: tiers({ trust: ["mano", "kogane"] }),
+  achievements: { stages: 0, complete: 0 },
   range: {
     span: "all",
     turns: 0,
@@ -193,6 +194,7 @@ describe("好感度分组", () => {
 describe("哪一块显示", () => {
   const nothing = {
     affinity: false,
+    achievements: false,
     totals: false,
     giftsGiven: false,
     mostTalked: false,
@@ -221,6 +223,7 @@ describe("哪一块显示", () => {
   it("有回合才有聊得最多和分时段图，送过礼才有礼物；好感度开着时有好感度分组，送出的礼物没送过也写 0", () => {
     expect(statsSections(came)).toMatchObject({
       affinity: true,
+      achievements: true,
       totals: true,
       giftsGiven: true,
       mostTalked: true,
@@ -246,6 +249,7 @@ describe("哪一块显示", () => {
       portrait: false,
       heatmap: false,
       affinity: true,
+      achievements: true,
       totals: true,
       giftsGiven: true,
       mostTalked: false,
@@ -268,8 +272,14 @@ describe("哪一块显示", () => {
     expect(statsSections(onlyGave)).toMatchObject({ mostTalked: false, hours: true, gifts: true });
   });
 
-  it("好感度和礼物关掉时没有好感度分组、礼物和送出的礼物", () => {
-    const off = { ...came, affinity: null, range: { ...came.range, gifts: null } };
-    expect(statsSections(off)).toMatchObject({ affinity: false, totals: true, giftsGiven: false, gifts: false });
+  it("好感度和礼物关掉时没有好感度分组、成就、礼物和送出的礼物", () => {
+    const off = { ...came, affinity: null, achievements: null, range: { ...came.range, gifts: null } };
+    expect(statsSections(off)).toMatchObject({
+      affinity: false,
+      achievements: false,
+      totals: true,
+      giftsGiven: false,
+      gifts: false,
+    });
   });
 });

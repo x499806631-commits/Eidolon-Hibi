@@ -7,6 +7,14 @@
 	request_body /api/account/data-package {
 		max_size 201MiB
 	}
-	# 对话回复是流式的（SSE），Caddy 会随到随发，这里不加压缩
+	# 只压缩 JSON：对话回复是流式的（SSE），要随到随发，不压缩；页面 Next 自己压缩，
+	# 数据包是 zip、头像是图片，压了也没用
+	encode {
+		zstd
+		gzip
+		match {
+			header Content-Type application/json*
+		}
+	}
 	reverse_proxy 127.0.0.1:3000
 }

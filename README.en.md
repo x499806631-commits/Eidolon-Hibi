@@ -25,7 +25,7 @@ Voice · Text · Story recall · Memory shared across characters
 
 Eidolon-SC lets you, as **a producer at 283 Production**, text or call the idols from the game. She answers in her own Japanese voice, with Chinese subtitles. She can recall the episodes she lived through in the game. She also remembers what you tell her, and word "gets around" among the idols.
 
-All **28 idols** from the game's eight units are already set up and ready to talk. Once deployed publicly, anyone can sign in with Google or GitHub and use it.
+All **28 idols** from the game's eight units, plus the office clerk Nanakusa Hazuki, are already set up and ready to talk. Once deployed publicly, anyone can sign in with Google or GitHub and use it.
 
 > [!IMPORTANT]
 > This is an unofficial fan project, not affiliated with Bandai Namco or the rights holders of *THE iDOLM@STER* series; the characters are played by AI. Story data is **not distributed with this repository**; you must prepare it yourself ([ADR-0003](docs/adr/0003-corpus-and-voices-stay-private.md)). Through their replies, the characters indirectly pass story content on to signed-in users; for this risk, see [ADR-0006](docs/adr/0006-open-to-the-public-with-oauth.md).
@@ -58,7 +58,7 @@ All **28 idols** from the game's eight units are already set up and ready to tal
       <p align="center"><sub><b>Photos</b>: ask, and she takes one of herself in the moment</sub></p>
     </td>
     <td width="50%">
-      <img src="docs/images/gifts.webp" alt="Gifts page: the draw counter, a reset card and the gifts in the backpack">
+      <img src="docs/images/gifts.webp" alt="Gifts page: the draw counter, daily tasks, achievements, a reset card and the gifts in the backpack">
       <p align="center"><sub><b>Gifts</b>: draw every day, give her the ones she likes</sub></p>
     </td>
   </tr>
@@ -78,7 +78,7 @@ All **28 idols** from the game's eight units are already set up and ready to tal
 </table>
 
 <details>
-<summary><b>Landing page</b>: a beam of white light splits into 28 image colors, one for each idol</summary>
+<summary><b>Landing page</b>: a beam of white light splits into 29 image colors, one for each character</summary>
 
 <br>
 
@@ -94,7 +94,7 @@ All **28 idols** from the game's eight units are already set up and ready to tal
 - 🇯🇵 **Japanese voice + Chinese subtitles**: She answers in Japanese, keeping her verbal tics, with a Chinese subtitle for every line ([ADR-0001](docs/adr/0001-japanese-replies-with-chinese-subtitles.md)). Proper names are pronounced from a readings table.
 - 🎭 **A living stand**: During a call her Spine stand from the game breathes, blinks, moves her lips and changes expression with her emotion. When the game releases new cards, the weekly sync makes them wearable.
 - 📷 **She sends photos**: Ask, and she takes one of herself in the moment and sends it. All-ages only ([configuration guide](docs/configuration.en.md#photos)).
-- 💗 **Affinity and gifts**: What you say draws her closer or pushes her away; offend her too much and she hangs up, or ends the conversation. Draw gifts every day and give them to her; she responds.
+- 💗 **Affinity and gifts**: What you say draws her closer or pushes her away; offend her too much and she hangs up, or ends the conversation. Draw gifts every day and give them to her; she responds. Daily tasks and achievements earn you extra draws.
 - 💌 **She reaches out**: When you've been away a while, she says a few words first in your conversation; the closer you are, the sooner she does ([configuration guide](docs/configuration.en.md#reach-outs)).
 
 **What she remembers**
@@ -194,6 +194,7 @@ flowchart LR
 | [`.env.example`](.env.example) | Every environment variable, with descriptions |
 | [Architecture decision records](docs/adr/) | Why it is designed this way: the Japanese voice, shared memory, opening to the public, own keys kept only in the browser and more |
 | [`GLOSSARY.md`](GLOSSARY.md) | Domain glossary |
+| [Community forks](docs/community-forks.md) (Chinese) | Gameplay others have built in their own forks, and how to list yours |
 | [`DESIGN.md`](DESIGN.md) · [`PRODUCT.md`](PRODUCT.md) | Visual design system · Product positioning |
 
 ## 🌐 Deployment

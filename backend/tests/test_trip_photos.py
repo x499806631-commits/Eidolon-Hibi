@@ -14,7 +14,6 @@ import pytest
 from eidolon.characters import Character
 from eidolon.config import Settings
 from eidolon.engine import WANTS_TO_SEND_TRIP_PHOTO
-from eidolon.features import Features
 from eidolon.image_generation import generation_request, openai_request
 from eidolon.photo_prompt import GROUP_SIZE, group_prompt, read_tag
 from eidolon.schedules import TRIP_WITH_TWIST, Schedules, Slot
@@ -74,11 +73,11 @@ async def talked(
     return client, llm, conversation
 
 
-def on_a_trip(client: httpx.AsyncClient, settings: Settings, trip_with: tuple[str, ...] = ()) -> None:
+async def on_a_trip(client: httpx.AsyncClient, settings: Settings, trip_with: tuple[str, ...] = ()) -> None:
     schedules: Schedules = backend_of(client).schedules
     me = user_id(settings.database_path, "producer")
     slot = Slot(time(9), time(18), "拍外景", "京都", "work", ())
-    schedules.keep(me, "mano", TODAY, [slot], [], trip="京都", trip_with=trip_with)
+    await schedules.keep(me, "mano", TODAY, [slot], [], trip="京都", trip_with=trip_with)
 
 
 async def test_on_a_trip_she_sends_one_photo_from_there_once_its_time_comes(
@@ -90,7 +89,7 @@ async def test_on_a_trip_she_sends_one_photo_from_there_once_its_time_comes(
     client, llm, conversation = await talked(
         make_client, settings, SENDS, image=image, clock=clock, numbers=(1,)
     )
-    on_a_trip(client, settings)
+    await on_a_trip(client, settings)
     trips = backend_of(client).trip_photos
 
     await trips.run_due()
@@ -133,7 +132,7 @@ async def test_with_her_unit_on_the_trip_it_may_be_of_them_all(
 ):
     image = FakeImageService()
     client, llm, _ = await talked(make_client, settings, SENDS_ALL, image=image, clock=FakeClock(at(17)))
-    on_a_trip(client, settings, trip_with=("kogane",))
+    await on_a_trip(client, settings, trip_with=("kogane",))
 
     await backend_of(client).trip_photos.run_due()
 
@@ -176,14 +175,14 @@ async def test_none_with_image_generation_or_trip_photos_switched_off(
     make_client: ClientFactory, settings: Settings
 ):
     client, llm, conversation = await talked(make_client, settings, clock=FakeClock(at(17)))
-    on_a_trip(client, settings)
+    await on_a_trip(client, settings)
     me = user_id(settings.database_path, "producer")
-    switches = Features(settings.database_path)
+    switches = backend_of(client).features
 
-    switches.switch(me, "images", False)
+    await switches.switch(me, "images", False)
     await backend_of(client).trip_photos.run_due()
-    switches.switch(me, "images", True)
-    switches.switch(me, "trip_photos", False)
+    await switches.switch(me, "images", True)
+    await switches.switch(me, "trip_photos", False)
     await backend_of(client).trip_photos.run_due()
 
     assert len(llm.prompts) == 1
@@ -204,10 +203,10 @@ async def test_her_unit_mates_days_have_them_on_her_trip(
     backend = backend_of(client)
     me = user_id(settings.database_path, "producer")
     slot = Slot(time(9), time(18), "拍外景", "京都", "work", ())
-    backend.schedules.keep(me, "kogane", TODAY, [slot], [], trip="京都", trip_with=("mano",))
+    await backend.schedules.keep(me, "kogane", TODAY, [slot], [], trip="京都", trip_with=("mano",))
 
     await backend.schedule_writer.run_due()
-    mine = backend.schedules.of(me, "mano", TODAY)
+    mine = await backend.schedules.of(me, "mano", TODAY)
 
     assert mine is not None and (mine.trip, mine.trip_with) == ("京都", ("kogane",))
     assert TRIP_WITH_TWIST.format(names="月岡恋鐘", place="京都") in str(llm.prompts[-1])

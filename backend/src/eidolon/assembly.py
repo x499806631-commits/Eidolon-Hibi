@@ -25,6 +25,7 @@ closes only what `build` made, in the order that lets what is still running fini
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
@@ -41,10 +42,15 @@ from eidolon.call import Calls, Speech, SpeechServices
 from eidolon.characters import Character, load_characters
 from eidolon.gift_catalog import Gift, check_liked_gifts, gifts_path, load_gift_catalog
 from eidolon.gifts import Gifts
+from eidolon.happenings import Happenings
 from eidolon.hot_words import hot_words
+from eidolon.housekeeping import keep_tidy
+from eidolon.loop_lag import watch_the_loop
 from eidolon.randomness import Random, secure_random
 from eidolon.clock import Clock, utc_now
 from eidolon.config import DEFAULT_BAILIAN_STT_MODEL, Settings
+from eidolon.corpus import StoryCorpus
+from eidolon.data_access import Database
 from eidolon.data_package import DataPackages
 from eidolon.embedding import EMBEDDING_TIMEOUT, Embedder, open_embedder
 from eidolon.engine import ConversationEngine
@@ -99,12 +105,20 @@ log = logging.getLogger(__name__)
 
 Closer = Callable[[], Awaitable[None] | None]
 
+THREADS = 32
+"""How many threads the event loop's work waits on at once, on the default executor: the
+data access layer's reads, for every turn, the work that is all computing (pictures,
+similarities), and a backup or data package taking minutes too. More than the
+default, a few on a small server, so that those do not keep turns waiting."""
+
 
 @dataclass
 class Backend:
     """Everything the API serves from, ready to run."""
 
     settings: Settings
+    database: Database
+    """The database, as the modules moved onto the data access layer read and write it."""
     store: Store
     characters: dict[str, Character]
     gift_catalog: dict[str, Gift]
@@ -136,6 +150,8 @@ class Backend:
     """Every user's affinity with every character, where it is on."""
     gifts: Gifts
     """Every user's draw chances, backpack and reset cards, where gifts are open."""
+    happenings: Happenings
+    """What happens between users and characters, as it counts towards their daily tasks."""
     backups: Backups
     """The database's backups, as the admin console runs them, and the record of each."""
     photos: Photos
@@ -182,6 +198,8 @@ class Backend:
     experiences: Experiences | None = None
     """Her own doings, by character (GLOSSARY.md「她们的经历」); read and managed on its page.
     A turn writes down and finds none yet: that comes with the page."""
+    corpus: StoryCorpus | None = None
+    """The story corpus retrieval searches; None with retrieval off."""
     _closers: list[Closer] = field(default_factory=list, repr=False)
     _keeping_fresh: asyncio.Task[None] | None = field(default=None, repr=False)
     _probing: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -192,12 +210,20 @@ class Backend:
     _giving: asyncio.Task[None] | None = field(default=None, repr=False)
     _sending: asyncio.Task[None] | None = field(default=None, repr=False)
     _favoring: asyncio.Task[None] | None = field(default=None, repr=False)
+    _tidying: asyncio.Task[None] | None = field(default=None, repr=False)
+    _watching: asyncio.Task[None] | None = field(default=None, repr=False)
+    _loading_stories: asyncio.Task[None] | None = field(default=None, repr=False)
 
     async def start(self) -> None:
         """What is done as the server starts, on its event loop: try the overrides of the
         configuration, falling back to `.env` where one fails; keep the price catalogs
         fresh from now on, fetching them in the background, try the services without
-        calls for their status, and have characters reach out once their time comes."""
+        calls for their status, have characters reach out once their time comes, delete
+        what ages out (`housekeeping`), watch how far behind the loop runs (`loop_lag`),
+        and load the story corpus's vectors to search in the background."""
+        asyncio.get_running_loop().set_default_executor(
+            ThreadPoolExecutor(THREADS, thread_name_prefix="eidolon")
+        )
         await self.config.start()
         self._keeping_fresh = asyncio.create_task(self.prices.catalog.keep_fresh())
         self._probing = asyncio.create_task(self.service_status.keep_probing())
@@ -208,15 +234,25 @@ class Backend:
         self._giving = asyncio.create_task(self.keepsakes.keep_giving())
         self._sending = asyncio.create_task(self.trip_photos.keep_sending())
         self._favoring = asyncio.create_task(self.favors.keep_running())
+        self._tidying = asyncio.create_task(keep_tidy(self.usage.forget_old, self.activity.forget_old))
+        self._watching = asyncio.create_task(watch_the_loop(lambda: self.calls.in_progress))
+        if self.corpus is not None:
+            self._loading_stories = asyncio.create_task(self.corpus.load())
 
     async def aclose(self) -> None:
-        """Close what `build` opened, last opened first."""
-        for task in (
-            self._keeping_fresh, self._probing, self._reaching_out, self._writing,
-            self._keeping_diaries, self._planning, self._giving, self._sending, self._favoring,
-        ):
-            if task is not None:
-                task.cancel()
+        """Close what `build` opened, last opened first, once what `start` began is over."""
+        tasks = [
+            task
+            for task in (
+                self._keeping_fresh, self._probing, self._reaching_out, self._tidying,
+                self._watching, self._writing, self._keeping_diaries, self._planning,
+                self._giving, self._sending, self._favoring, self._loading_stories,
+            )
+            if task is not None
+        ]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         for close in reversed(self._closers):
             result = close()
             if result is not None:
@@ -233,7 +269,7 @@ def build(
     identity_providers: dict[ProviderName, IdentityProvider] | None = None,
     own_llm_service: LLMService | None = None,
     clients: ServiceClients | None = None,
-    catalog_transport: httpx.BaseTransport | None = None,
+    catalog_transport: httpx.AsyncBaseTransport | None = None,
     backup_transport: httpx.AsyncBaseTransport | None = None,
     image_transport: httpx.AsyncBaseTransport | None = None,
     weather_transport: httpx.AsyncBaseTransport | None = None,
@@ -243,8 +279,9 @@ def build(
 ) -> Backend:
     """The backend `settings` describe, with any of the outside services passed in
     used instead of made. Raises RuntimeError, having opened nothing, if the character
-    configuration (her liked gifts and all), the world setting, the gift catalog or the
-    calendar or a heart (`hearts`) is broken, or a character is none of its idols."""
+    configuration (her liked gifts and all), the world setting, the gift catalog, the
+    calendar or a heart (`hearts`) is broken, or a character is none of its idols and none of
+    its staff."""
     characters = load_characters(settings.characters_path)
     characters = with_hearts(
         characters, load_hearts(hearts_path(settings.characters_path), characters.values())
@@ -262,10 +299,11 @@ def build(
         world.check_characters(characters, path)
     special_days = load_special_days(special_days_path(settings.characters_path), characters.values())
     clock = clock or utc_now
-    closers: list[Closer] = []
+    # Closed last, once what writes through it has finished.
+    database = Database(settings.database_path)
+    closers: list[Closer] = [database.close]
 
-    store = Store(settings.database_path)
-    closers.append(store.close)
+    store = Store(database)
     if identity_providers is None:
         identity_providers = open_identity_providers(settings.github, settings.google)
         closers.extend(p.aclose for p in identity_providers.values())
@@ -287,17 +325,14 @@ def build(
         bailian_model, readings, hot_words(readings, characters.values(), world), routes=routes,
         gpt_sovits=GptSovits(local_voices),
     )
-    activity = ActivityLog(settings.database_path, clock)
-    closers.append(activity.close)
-    catalog = Catalog(settings.database_path, clock, catalog_transport)
-    closers.append(catalog.close)
-    prices = Prices(settings.database_path, clock, catalog)
-    closers.append(prices.close)
-    announcements = Announcements(settings.database_path, clock)
-    closers.append(announcements.close)
-    sponsor = Sponsor(settings.database_path, clock)
-    closers.append(sponsor.close)
-    backups = Backups(settings.database_path, clock, transport=backup_transport)
+    activity = ActivityLog(database, clock)
+    closers.append(activity.aclose)
+    catalog = Catalog(database, clock, catalog_transport)
+    closers.append(catalog.aclose)
+    prices = Prices(database, clock, catalog)
+    announcements = Announcements(database, clock)
+    sponsor = Sponsor(database, clock)
+    backups = Backups(database, clock, transport=backup_transport)
     closers.append(backups.aclose)
     image_client = None
     if image_transport is not None:
@@ -306,8 +341,8 @@ def build(
         )
         closers.append(image_client.aclose)
     config = LiveConfig(
-        settings, clients or ProviderClients(routes), clock, activity=activity, speech=speech,
-        routes=routes, image_client=image_client,
+        settings, clients or ProviderClients(routes), clock, db=database, activity=activity,
+        speech=speech, routes=routes, image_client=image_client,
         **({"reach": reach} if reach is not None else {}),
     )
     closers.append(config.aclose)
@@ -359,14 +394,11 @@ def build(
     # each question, and each call judges her emotions on the one it connected with.
     retrieval_judge = config.retrieval_judge()
 
-    features = Features(settings.database_path)
-    closers.append(features.close)
-    promises = Promises(settings.database_path, clock, random or secure_random, features)
-    closers.append(promises.close)
+    features = Features(database)
+    promises = Promises(database, clock, random or secure_random, features)
 
     # 她自己的经历：按角色存，和关于制作人的记忆分开
-    experiences = Experiences(settings.database_path, clock)
-    closers.append(experiences.close)
+    experiences = Experiences(database, clock)
 
     # 联网搜索用能配的那把钥匙（默认沿用聊天模型的）：换聊天模型不该把搜索一起换掉
     search_key = settings.search_key or settings.chat_llm.api_key
@@ -387,18 +419,19 @@ def build(
         closers.append(web.aclose)
 
     retrieval = None
+    corpus = None
     if retrieval_judge is not None and embedder is not None and reranker is not None:
+        references = open_reference_sources(database, embedder, characters.values(), world)
+        corpus = references.corpus
+        closers.append(corpus.aclose)  # closed before the database, loading from it
         retrieval = Retrieval(
             retrieval_judge,
-            open_reference_sources(
-                settings.database_path, embedder, characters.values(), world
-            ),
+            references,
             reranker,
             lambda: config.rerank_thresholds.references,
         )
-        closers.append(retrieval.close)
         memories = Memories(
-            settings.database_path, characters, clock, embedder=embedder, reranker=reranker,
+            database, characters, clock, embedder=embedder, reranker=reranker,
             min_relevance=lambda: config.rerank_thresholds.memories, promises=promises,
             experiences=experiences,
         )
@@ -410,23 +443,20 @@ def build(
             " CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID with JUDGE_PROVIDER=cloudflare)"
         )
         memories = Memories(
-            settings.database_path, characters, clock, promises=promises,
-            experiences=experiences,
+            database, characters, clock, promises=promises, experiences=experiences,
         )
     closers.append(memories.aclose)  # closed before the clients, so what it writes down can finish
     titles = Titles(store, characters, gift_catalog)
     closers.append(titles.aclose)  # likewise, so what it is naming can finish
 
-    affinities = Affinities(settings.database_path, clock, lambda: config.affinity_on, features)
-    closers.append(affinities.close)
+    affinities = Affinities(database, clock, lambda: config.affinity_on, features)
     unphotographed = [c.id for c in characters.values() if not c.photographed]
     if config.image_settings is not None and unphotographed:
         log.warning(
             "%s have no photo_tag and photo_appearance in the character configuration, and"
             " send no photos", ", ".join(unphotographed),
         )
-    usage = UsageLimiter(settings.database_path, lambda: config.usage_limits, clock)
-    closers.append(usage.close)
+    usage = UsageLimiter(database, lambda: config.usage_limits, clock)
     # Users' own image generation, in the deployment's art style; in tests, on the same
     # fake as the deployer's, told apart by its key.
     own_images = OwnImageService(
@@ -435,20 +465,25 @@ def build(
     )
     closers.append(own_images.aclose)
     photos = Photos(store, config.image_generator, activity, usage, own_images.generator)
-    closers.append(photos.aclose)  # closed before the store and usage, so no photo is still kept
+    closers.append(photos.aclose)  # closed before the database, so no photo is still kept
     weather = (
         Weather(settings.weather.latitude, settings.weather.longitude, clock, weather_transport)
         if settings.weather is not None else None
     )
     if weather is not None:
         closers.append(weather.aclose)
-    schedules = Schedules(settings.database_path, clock)
-    closers.append(schedules.close)
+    schedules = Schedules(database, clock)
+    gifts = Gifts(
+        database, clock, lambda: config.affinity_on, affinities, characters, gift_catalog,
+        random or secure_random, promises,
+        tickets.available(settings, features, lambda: config.image_generator() is not None),
+    )
+    happenings = Happenings(database, clock, lambda: config.affinity_on, gifts, activity)
     engine = ConversationEngine(
-        store, characters, gift_catalog, memories, titles, clock, retrieval,
+        database, store, characters, gift_catalog, memories, titles, clock, retrieval,
         lambda: config.history_turns, world, affinities, config.affinity_judge(), photos,
-        special_days, weather, promises, config.promise_judge(), web, config.search_judge(),
-        experiences, schedules=schedules, features=features,
+        happenings, special_days, weather, promises, config.promise_judge(), web,
+        config.search_judge(), experiences, schedules=schedules, features=features,
     )
     own_keys = OwnKeys(
         own_llm_service, config, activity, speech, exempting=lambda: config.exempting_keys,
@@ -457,77 +492,68 @@ def build(
     admissions = Admissions(
         usage, activity, own_keys, cooldown_until=affinities.cooldown_until
     )
+    closers.append(admissions.aclose)  # closed after the calls, which may leave some to settle
     calls = Calls(
         settings, engine, admissions, own_keys, lambda: config.usage_limits, speech, clock, store,
-        weather,
+        happenings, weather,
     )
     closers.append(calls.aclose)  # closed before memory, so no call is still taking turns
-    affinities.on_cooldown(calls.cooled)
+    engine.on_cooled(calls.cooled)
     engine.on_ended(calls.conversation_ended)
-    gifts = Gifts(
-        settings.database_path, clock, lambda: config.affinity_on, affinities, characters,
-        gift_catalog, random or secure_random, store, promises,
-        tickets.available(settings, features, lambda: config.image_generator() is not None),
-    )
-    closers.append(gifts.close)
     reach_outs = ReachOuts(
-        settings.database_path, store, engine, characters, config, affinities, activity, usage,
+        database, store, engine, characters, config, affinities, activity,
         calls.in_call, clock, random or secure_random, special_days, features,
     )
-    closers.append(reach_outs.close)
     letters = Letters(
-        settings.database_path, store, engine, characters, config, affinities, activity,
+        database, store, engine, characters, config, affinities, activity,
         clock, random or secure_random, settings.letters, special_days, features,
     )
-    closers.append(letters.close)
     diary = Diary(
-        settings.database_path, store, engine, characters, config, affinities, activity,
+        database, store, engine, characters, config, affinities, activity,
         clock, settings.diary, special_days, features,
     )
-    closers.append(diary.close)
-    dates = Dates(settings.database_path)
-    closers.append(dates.close)
-    favor_twists: list[Callable[[str, str, date], list[str]]] = []
+    dates = Dates(database)
+    favor_twists: list[Callable[[str, str, date], Awaitable[list[str]]]] = []
+
+    async def twists_on(user_id: str, character_id: str, day: date) -> list[str]:
+        return [t for twists in favor_twists for t in await twists(user_id, character_id, day)]
+
     schedule_writer = ScheduleWriter(
         schedules, store, engine, characters, config, activity, clock,
-        random or secure_random, settings.schedules, features, dates.on,
-        lambda *on: [t for twists in favor_twists for t in twists(*on)],
+        random or secure_random, settings.schedules, features, dates.on, twists_on,
     )
     keepsakes = Keepsakes(
-        settings.database_path, store, engine, characters, config, activity, clock,
+        database, store, engine, characters, config, activity, clock,
         random or secure_random, settings.keepsakes, schedules,
-        lambda user_id: settings.letters and features.on(user_id, "letters"), features,
+        lambda db, user_id: settings.letters and features.read_on(db, user_id, "letters"),
+        features,
     )
     closers.append(keepsakes.close)
     trip_photos = TripPhotos(
-        settings.database_path, store, engine, characters, config, activity, clock,
+        database, store, engine, characters, config, activity, clock,
         random or secure_random, settings.schedules, schedules, affinities, calls.in_call,
         features, dates,
     )
     closers.append(trip_photos.close)
     favors = Favors(
-        settings.database_path, store, engine, characters, gift_catalog, config, activity, clock,
+        database, store, engine, characters, gift_catalog, config, activity, clock,
         random or secure_random, affinities, gifts, keepsakes, trip_photos, special_days,
         diary.moment, calls.in_call, features,
     )
-    closers.append(favors.close)
     favor_twists.append(favors.twists_on)
     engine.with_ties(favors.ties)
-    read_aloud = ReadAloud(settings.database_path, characters, config, speech, activity, clock)
-    closers.append(read_aloud.close)
-    home = Home(settings.database_path, config, activity)
-    closers.append(home.close)
-    outfit_tags = OutfitTags(settings.database_path, settings.vision, settings.stand_assets_url)
-    closers.append(outfit_tags.close)
+    read_aloud = ReadAloud(database, characters, config, speech, activity, clock)
+    home = Home(database, config, activity)
+    outfit_tags = OutfitTags(database, settings.vision, settings.stand_assets_url)
     affinities.on_scene_done(keepsakes.scene_played)
     gifts.on_given(keepsakes.gift_given)
     promises.on_settled(keepsakes.promise_settled)
     letters.on_written(keepsakes.letter_written)
-    keepsakes.on_given(
-        lambda user_id, character_id, name, at: diary.moment(
-            user_id, character_id, f"把「{name}」送给了制作人", at
-        )
-    )
+
+    async def keepsake_given(user_id: str, character_id: str, name: str, at: datetime) -> None:
+        await diary.moment(user_id, character_id, f"把「{name}」送给了制作人", at)
+
+    keepsakes.on_given(keepsake_given)
     engine.on_recorded(diary.turn_recorded)
     affinities.on_scene_done(diary.scene_played)
     gifts.on_given(diary.gift_given)
@@ -535,13 +561,14 @@ def build(
     promises.on_kept(diary.promise_kept)
     promises.on_broken(diary.promise_broken)
 
-    def promise_settled(promise: Promise, settled: Settled, _: datetime) -> None:
-        affinities.promise_settled(promise.user_id, promise.character_id, settled)
+    async def promise_settled(promise: Promise, settled: Settled, _: datetime) -> None:
+        await affinities.promise_settled(promise.user_id, promise.character_id, settled)
 
     promises.on_settled(promise_settled)
     config.on_change(gifts.notice)
     return Backend(
         settings=settings,
+        database=database,
         store=store,
         characters=characters,
         gift_catalog=gift_catalog,
@@ -563,16 +590,17 @@ def build(
         sponsor=sponsor,
         affinities=affinities,
         gifts=gifts,
+        happenings=happenings,
         backups=backups,
         photos=photos,
         service_status=service_status,
         data_packages=DataPackages(
-            settings.database_path, store, memories, characters, gift_catalog, clock, promises,
+            database, store, memories, characters, gift_catalog, clock, promises,
             experiences, diary,
         ),
         reach_outs=reach_outs,
         letters=letters,
-        appeals=Appeals(store, affinities, clock),
+        appeals=Appeals(database, affinities, clock),
         diary=diary,
         schedules=schedules,
         features=features,
@@ -589,5 +617,6 @@ def build(
         promises=promises,
         web=web,
         experiences=experiences,
+        corpus=corpus,
         _closers=closers,
     )

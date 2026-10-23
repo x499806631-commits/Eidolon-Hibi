@@ -29,9 +29,9 @@ class VoiceSettings(BaseModel):
     )
 
 
-def may_change(backend: Backend, user_id: str) -> bool:
+async def may_change(backend: Backend, user_id: str) -> bool:
     """Whether the user may change the deployment's speech synthesis from their settings."""
-    return backend.settings.dev_login or is_admin(backend.store, backend.settings, user_id)
+    return backend.settings.dev_login or await is_admin(backend.store, backend.settings, user_id)
 
 
 def add_voice_settings_routes(app: FastAPI, backend: Backend) -> None:
@@ -51,18 +51,18 @@ def add_voice_settings_routes(app: FastAPI, backend: Backend) -> None:
             ),
         }
 
-    def allowed(user_id: str) -> None:
-        if not may_change(backend, user_id):
+    async def allowed(user_id: str) -> None:
+        if not await may_change(backend, user_id):
             raise HTTPException(403, "只有部署者能改语音合成")
 
     @app.get("/api/voice-settings")
-    def read(user_id: UserId) -> dict:
-        allowed(user_id)
+    async def read(user_id: UserId) -> dict:
+        await allowed(user_id)
         return shown()
 
     @app.put("/api/voice-settings")
     async def change(user_id: UserId, body: VoiceSettings) -> dict:
-        allowed(user_id)
+        await allowed(user_id)
         try:
             await config.save(TTS, body.model_dump())
         except ConfigInvalid as e:

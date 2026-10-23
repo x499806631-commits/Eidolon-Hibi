@@ -45,7 +45,7 @@ class ScriptCache:
         A script kept here is not asked for again unless `recheck`, and then on its
         ETag. One the mirror did not have is asked for again only if `retry_missing`.
         Raises MirrorError if the mirror cannot be reached."""
-        if self._corpus.is_translated(script):
+        if await self._corpus.is_translated(script):
             return "translated"
         if is_failure_ending(script):
             return "failure"

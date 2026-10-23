@@ -18,6 +18,38 @@
   --animate-jump: jump 0.6s ease-out 1;
   /* 抽奖弹窗揭晓前礼物盒跳两下，共约 0.9 秒。 */
   --animate-hop: jump 0.45s ease-in-out 2;
+  /* 页首好感度标识左边的奖杯：弹出、停住、淡出，共 3 秒（TROPHY_MS）；减少动态时只淡入淡出（trophy-fade）。 */
+  --animate-trophy: trophy 3s ease-out 1 both;
+  --animate-trophy-fade: trophy-fade 3s linear 1 both;
+  @keyframes trophy {
+    0% {
+      opacity: 0;
+      transform: scale(0.5);
+    }
+    10% {
+      opacity: 1;
+      transform: scale(1.15);
+    }
+    18%,
+    88% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1);
+    }
+  }
+  @keyframes trophy-fade {
+    0%,
+    100% {
+      opacity: 0;
+    }
+    10%,
+    88% {
+      opacity: 1;
+    }
+  }
   @keyframes jump {
     0%,
     100% {

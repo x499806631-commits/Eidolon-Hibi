@@ -2,7 +2,13 @@
 them out, and the game's own script JSON."""
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
+
+from eidolon.corpus import StoryCorpus
+from eidolon.data_access import Database
+from eidolon.embedding import Embedder
 
 PRODUCER = "0000000000000"
 
@@ -42,6 +48,17 @@ HIORI_EVENT = [
     ("4001004010010", "灯織", "写真の撮影、頑張ります", "拍照，我会加油的"),
     ("4001004010020", "めぐる", "公園で撮るんだって！", "听说要在公园拍！"),
 ]
+
+
+@asynccontextmanager
+async def corpus_in(database: Path, embedder: Embedder) -> AsyncIterator[StoryCorpus]:
+    """The story corpus in the database at `database`, on a data access layer of its own,
+    as another process has it."""
+    db = Database(database)
+    try:
+        yield StoryCorpus(db, embedder)
+    finally:
+        await db.close()
 
 
 def write_story(root: Path, relative: str, rows: list[tuple[str, str, str, str]], info: str | None) -> None:

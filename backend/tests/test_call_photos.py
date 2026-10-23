@@ -76,19 +76,19 @@ async def call(
         settings, llm, clients=asking(), clock=lambda: NOW, image_transport=image.transport()
     )
     try:
-        conversation = backend.store.get_conversation(conversation_id)
+        conversation = await backend.store.get_conversation(conversation_id)
         assert conversation is not None
-        admission = backend.admissions.call(conversation.user_id, "mano", BroughtKeys())
+        admission = await backend.admissions.call(conversation.user_id, "mano", BroughtKeys())
         mano = backend.characters["mano"]
         on = Call(conversation, mano, admission.llms, False, "standard")
         outcome = CallOutcome(
             admission, CallLimits(), backend.clock,
-            partial(backend.store.keep_call, conversation.id),
+            partial(backend.happenings.call_ended, conversation.id, conversation.user_id, "mano"),
         )
         turns = CallTurns(backend.engine, backend.store, on, outcome, SONIOX_FOLLOW_ON_TIMEOUT)
         turns.connected()
         down, _ = await run_test(turns, frames_to_send=frames)
-        outcome.settle()
+        await outcome.settle()
         if after is not None:
             after.set()
             await photos_settled(settings, conversation_id)

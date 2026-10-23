@@ -13,13 +13,14 @@ from tests.browser import Browser, open_browser, until_gone
 from tests.conftest import ClientFactory
 from tests.fakes import FakeClock, FakeIdentityProvider, FakeLLM, FakeServiceClients, FakeSpeech
 from tests.test_live_config import CONFIG, REPLY, admin_client
+from tests.test_concurrent_calls import another_user
 from tests.test_rate_limit import post_turn
 from tests.test_text_turn import send_turn, start_conversation
 
 LIMITS = "/api/admin/config/limits"
 ENV_LIMITS = {
     "turns_per_hour": 60, "calls_per_hour": 5, "photos_per_hour": 5, "call_minutes": 10,
-    "turns_per_call": 2,
+    "turns_per_call": 2, "concurrent_calls": 10,
     "history_turns": 20, "exempting_llm": True, "exempting_tts": True, "exempting_stt": True,
 }
 
@@ -98,6 +99,25 @@ async def test_a_call_keeps_its_own_limits_from_when_it_connected(
     assert "2 轮" in ended_first["message"]
     assert "1 轮" in ended_next["message"]
     assert ice["maxCallSeconds"] == 30 * 60
+
+
+async def test_the_calls_at_once_saved_hold_from_the_next_call(
+    make_client: ClientFactory, admins: Settings, github: FakeIdentityProvider, browser: Browser
+):
+    client = await admin_client(make_client, admins, github, FakeServiceClients(FakeLLM()))
+    await browser.call(client, conversation_id=await start_conversation(client))
+    await browser.connect()
+
+    saved = await client.put(LIMITS, json=ENV_LIMITS | {"concurrent_calls": 1})
+    async with another_user(client, "hazuki") as other:
+        theirs = await start_conversation(other)
+        refused = await other.get("/api/ice-servers", params={"conversation": theirs})
+        await client.put(LIMITS, json=ENV_LIMITS | {"concurrent_calls": 0})
+        unlimited = await other.get("/api/ice-servers", params={"conversation": theirs})
+
+    assert saved.status_code == 200, saved.text
+    assert refused.status_code == 503
+    assert unlimited.status_code == 200
 
 
 async def test_the_history_saved_is_what_the_next_turn_carries(

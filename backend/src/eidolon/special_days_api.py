@@ -17,16 +17,16 @@ def add_calendar_routes(app: FastAPI, backend: Backend) -> None:
     store = backend.store
 
     @app.get("/api/calendar")
-    def read_calendar(user_id: UserId, year: int = Query(ge=1, le=9999)) -> dict:
-        profile = store.get_profile(user_id)
+    async def read_calendar(user_id: UserId, year: int = Query(ge=1, le=9999)) -> dict:
+        profile = await store.get_profile(user_id)
         return {
             **(days.described(year) if days is not None else {"birthdays": [], "holidays": []}),
             "anniversaries": anniversaries.described(
-                store.first_records(user_id), year, effective_timezone(profile, None)
+                await store.first_records(user_id), year, effective_timezone(profile, None)
             ),
             "promises": [
                 promise.shown()
-                for promise in (backend.promises.open_for(user_id) if backend.promises else [])
+                for promise in (await backend.promises.open_for(user_id) if backend.promises else [])
                 if promise.due.year == year
             ],
         }

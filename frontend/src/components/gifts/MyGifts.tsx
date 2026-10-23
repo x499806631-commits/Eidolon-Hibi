@@ -11,6 +11,9 @@ import { DrinkIcon, FlowerIcon, FoodIcon, TrinketIcon } from "@/theme/icons";
 
 const t = copy.gifts;
 
+/** 「我的礼物」标题的 id：每日任务里的「挑一件」滚到这里。 */
+export const MY_GIFTS_ID = "my-gifts";
+
 const FILTER_ICONS = { food: FoodIcon, drink: DrinkIcon, flower: FlowerIcon, trinket: TrinketIcon };
 
 /**
@@ -29,9 +32,9 @@ export function MyGifts({
   const [filter, setFilter] = useState<GiftFilter>("all");
   const held = shownGifts(backpack, catalog, filter);
   return (
-    <section aria-labelledby="my-gifts" className="flex flex-col gap-3">
+    <section aria-labelledby={MY_GIFTS_ID} className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <SectionHeading id="my-gifts">{t.mine}</SectionHeading>
+        <SectionHeading id={MY_GIFTS_ID}>{t.mine}</SectionHeading>
         <ToggleGroup
           aria-label={t.filters.label}
           size="sm"

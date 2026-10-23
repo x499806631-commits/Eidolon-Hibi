@@ -12,6 +12,7 @@ import type { Tier } from "@/lib/affinity";
  * `all_hours`: how many turns and gifts at each hour of the day, 0–23, all told.
  * `heatmap`: how many on each day from `from`, a Monday 52 weeks before this week's, to today.
  * `affinity`: each tier, from cold to intimate, and the characters in it; null while affinity is off.
+ * `achievements`: the stages unlocked in all and the characters complete, whatever the range; null while affinity is off.
  * `range`: what changes with the range, `span`: see `InRange`. */
 export type Stats = {
   days_known: number;
@@ -19,6 +20,7 @@ export type Stats = {
   all_hours: number[];
   heatmap: { from: string; counts: number[] };
   affinity: TierGroup[] | null;
+  achievements: { stages: number; complete: number } | null;
   range: InRange;
 };
 
@@ -177,6 +179,7 @@ export type StatsSections = {
   portrait: boolean;
   heatmap: boolean;
   affinity: boolean;
+  achievements: boolean;
   totals: boolean;
   /** 总数里的「送出的礼物」. */
   giftsGiven: boolean;
@@ -189,9 +192,9 @@ export type StatsSections = {
 /** Which blocks of the page are shown: none, but a line and a way to the conversations, when
  * nothing is left with any of them, no turn, gift or call (`isEmpty`; the characters are
  * those anything is left with, whatever the range); otherwise each that has something, and
- * the totals, 0 or not, whatever the range. Calls alone are not coming (`visits`). While
- * affinity and gifts are off, none of them: no affinity groups, gifts, or gifts given among the
- * totals. */
+ * the totals and the achievements, 0 or not, whatever the range. Calls alone are not coming
+ * (`visits`). While affinity and gifts are off, none of them: no affinity groups, achievements,
+ * gifts, or gifts given among the totals. */
 export function statsSections(stats: Stats): StatsSections {
   const hasCome = stats.all_hours.some((n) => n > 0);
   const { range } = stats;
@@ -202,6 +205,7 @@ export function statsSections(stats: Stats): StatsSections {
     portrait: hasCome,
     heatmap: stats.heatmap.counts.some((n) => n > 0),
     affinity: !isEmpty && affinityGroups(stats.affinity).length > 0,
+    achievements: !isEmpty && stats.achievements !== null,
     totals: !isEmpty,
     giftsGiven: !isEmpty && range.gifts !== null,
     mostTalked: range.characters.some((c) => c.turns > 0),

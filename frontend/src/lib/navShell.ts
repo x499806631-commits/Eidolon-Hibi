@@ -93,6 +93,12 @@ export function currentNavItem(href: string): NavItem | null {
   return path === "/settings" || path.startsWith("/settings/") ? "settings" : "conversations";
 }
 
+/** Whether the gifts page is before the user at `href`: it is shown, and no call layer covers it
+ * (`isCallLayerOpen`). Draw chances that come meanwhile are seen as they come, with no dot on 「礼物」. */
+export function isGiftsInView(href: string, isCallLayerOpen: boolean): boolean {
+  return currentNavItem(href) === "gifts" && !isCallLayerOpen;
+}
+
 /** Where clicking `item` from `href` goes: another item goes to its first level, and so does
  * the current one from its second level; the current one on its first level stays (null). */
 export function navDestination(item: NavItem, href: string): string | null {
