@@ -225,6 +225,7 @@ class Memories:
         self._promises = promises
         self._experiences = experiences
         self._moments: list[Callable[[str, str, str, datetime], Awaitable[None]]] = []
+        self._shares: Callable[[str, str], Awaitable[set[str] | None]] | None = None
         self._embedder = embedder
         self._services = (
             _Services(embedder, reranker, min_relevance)
@@ -361,9 +362,22 @@ class Memories:
         query_text: str,
         candidates: Sequence[Memory],
     ) -> str | None:
+        if self._shares is not None:
+            # 传话开着时（GLOSSARY.md「传话」）：别人听来的，只有和她相熟的人那里的她才知道
+            others = await self._shares(conversation.user_id, conversation.character_id)
+            if others is not None:
+                candidates = [
+                    m for m in candidates
+                    if m.source_character_id in (conversation.character_id, *others)
+                ]
         found = await self._relevant(query_text, candidates)
         character = self._characters[conversation.character_id]
         return _memories_prompt(found, character, timezone, _FOUND) if found else None
+
+    def with_sharing(self, shares: Callable[[str, str], Awaitable[set[str] | None]]) -> None:
+        """Have the memories told to the others known to a character only as `shares` says
+        for a user and her: the others whose she knows, or None for all of them."""
+        self._shares = shares
 
     def on_moment(self, listener: Callable[[str, str, str, datetime], Awaitable[None]]) -> None:
         """Have `listener` told what the background model, writing a turn's memories, found

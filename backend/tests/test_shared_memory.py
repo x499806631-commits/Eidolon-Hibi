@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from eidolon.config import LLMSettings, Settings
-from tests.conftest import ClientFactory
+from tests.conftest import ClientFactory, everyone_hears
 from tests.fakes import (
     FakeBackgroundLLM,
     FakeEmbedder,
@@ -44,6 +44,7 @@ async def test_what_the_user_told_mano_reaches_kogane_as_hearsay(make_client: Cl
         llm, retrieval_judge=FakeJudge(), embedder=FakeEmbedder(), reranker=FakeReranker("猫"),
         background_llm=background,
     )
+    await everyone_hears(client)
 
     await turn(client, await start_conversation(client, "mano"), "我家的猫叫小白哦")
     await turn(client, await start_conversation(client, "kogane"), "你知道我家的猫吗？")
@@ -66,6 +67,7 @@ async def test_talk_of_the_users_own_life_retrieves_memories_only(
         llm, retrieval_judge=jev, embedder=FakeEmbedder(), reranker=reranker,
         background_llm=FakeBackgroundLLM(memorized(CAT)),
     )
+    await everyone_hears(client)
 
     await turn(client, await start_conversation(client, "mano"), "我家的猫叫小白哦")
     await turn(client, await start_conversation(client, "kogane"), "我家的猫最近总是半夜叫")

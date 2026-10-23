@@ -3,7 +3,8 @@ the doors, her diary, her letters, her keepsakes, her schedule and, within it, h
 them, the photos she sends when asked, those she sends from her trips and her keepsakes'
 pictures; the
 anniversaries she brings up, the special days she brings up, the promises she keeps track of,
-and the weather she knows of. All on by default; a user switches off what they would rather
+the weather she knows of, and word of mouth between them (GLOSSARY.md「传话」: with it off,
+what any of them is told of the producer all of them know, as it always was). All on by default; a user switches off what they would rather
 not have, for all the characters, and only for themselves. What the deployer has off is off
 whatever the user's switch says; that is the features' own business, not this one's.
 
@@ -21,6 +22,7 @@ from eidolon.data_access import Database
 Feature = Literal[
     "scenes", "diary", "letters", "keepsakes", "schedules", "sleep", "bath",
     "images", "photos", "trip_photos", "keepsake_images", "anniversaries", "special_days", "promises", "weather",
+    "word_of_mouth",
 ]
 """A feature a user may switch off."""
 

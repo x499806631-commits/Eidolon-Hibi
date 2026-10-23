@@ -52,7 +52,7 @@ async def test_the_features_the_deployment_has_are_on_till_the_user_switches_one
 
     assert before == {
         "diary": True, "schedules": True, "sleep": True, "bath": True, "images": True,
-        "photos": True, "anniversaries": True, "promises": True,
+        "photos": True, "anniversaries": True, "promises": True, "word_of_mouth": True,
     }
     assert off.status_code == 204
     assert (await features(client))["diary"] is False

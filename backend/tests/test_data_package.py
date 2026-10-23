@@ -16,7 +16,7 @@ import pytest
 
 from eidolon import data_package
 from eidolon.config import Settings
-from tests.conftest import ClientFactory
+from tests.conftest import ClientFactory, everyone_hears
 from tests.fakes import (
     FakeBackgroundLLM,
     FakeClock,
@@ -271,6 +271,7 @@ async def test_memories_move_to_another_deployment_superseded_as_they_were(
     await turn(here, await start_conversation(here, "kogane"), "我搬到东京了")
     await turn(here, await start_conversation(here, "mano"), "我家的猫叫小白哦")
     there = other_deployment(make_client, settings, tmp_path)
+    await everyone_hears(there)
 
     package = await export(here, "memories")
     _, manifest, data = unzipped(package)
@@ -363,6 +364,7 @@ async def test_she_recalls_imported_memories_in_her_next_turn(make_client: Clien
         background_llm=FakeBackgroundLLM(memorized()),
     )
 
+    await everyone_hears(client)
     await import_package(client, memories_package(packaged_memory(1, CAT)), "memories")
 
     await memories(client)  # waits for them to be embedded, as her turns do

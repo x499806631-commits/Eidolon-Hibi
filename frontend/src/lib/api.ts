@@ -502,6 +502,7 @@ export const FEATURES = [
   "special_days",
   "promises",
   "weather",
+  "word_of_mouth",
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 

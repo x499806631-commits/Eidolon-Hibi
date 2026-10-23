@@ -334,6 +334,7 @@ class Favors:
         self._trip_photos = trip_photos
         self._special_days = special_days
         self._moment = moment
+        self._together: list[Callable[[str, str, str, str, datetime], Awaitable[None]]] = []
         self._in_call = in_call
         self._features = features
         self._db = db
@@ -714,6 +715,10 @@ class Favors:
         if not row["made"]:
             await self._db.write(self._made_up, user_id, target_id, mediator_id, now, key)
             await self._noted(user_id, target_id, f"{mediator.name}替制作人来说情，和制作人和好了", now)
+            await self._were_together(
+                user_id, mediator_id, target_id,
+                f"{mediator.name}替制作人去找{target.name}说情，两人因此好好聊了一次", now,
+            )
         if row["reaches"] and not row["target_told"]:
             conversation = await self._current(user_id, target_id)
             if conversation is None or await self._store.ended(conversation.id) is not None:
@@ -767,6 +772,10 @@ class Favors:
             await self._db.write(_mark, "favor_parties", "helper_told = 1", key)
             for character_id in [helper_id, *guests]:
                 await self._noted(user_id, character_id, f"和大家一起{row['what']}", now)
+            together = [helper_id, *guests]
+            for i, a in enumerate(together):
+                for b in together[i + 1:]:
+                    await self._were_together(user_id, a, b, f"一起{row['what']}", now)
         honoree_id = row["honoree_id"]
         if honoree_id in self._characters:
             conversation = await self._current(user_id, honoree_id)
@@ -861,6 +870,19 @@ class Favors:
             (user_id, target_id, mediator_id, now.astimezone(UTC).isoformat()),
         )
         _mark(db, "favor_make_ups", "made = 1", key)
+
+    def on_together(self, listener: Callable[[str, str, str, str, datetime], Awaitable[None]]) -> None:
+        """Have `listener` told of two of them doing something together for the producer (the
+        user, the one, the other, what, when): making up through her, a party (GLOSSARY.md
+        「关系表」)."""
+        self._together.append(listener)
+
+    async def _were_together(self, user_id: str, a: str, b: str, what: str, at: datetime) -> None:
+        for listener in self._together:
+            try:
+                await listener(user_id, a, b, what, at)
+            except Exception:
+                log.exception("telling of two of them together failed")
 
     async def _noted(self, user_id: str, character_id: str, what: str, at: datetime) -> None:
         if self._moment is None:

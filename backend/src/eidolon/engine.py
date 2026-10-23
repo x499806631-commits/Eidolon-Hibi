@@ -192,6 +192,7 @@ from eidolon.schedules import rest as schedule_rest
 from eidolon.schedules import summary as schedule_summary
 from eidolon.special_days import SpecialDays
 from eidolon.weather import Weather
+from eidolon.relations import Relations
 from eidolon.web_search import SEARCH_TOOL, Found, Search, result_text, rules as web_rules
 from eidolon.world import World
 
@@ -1039,6 +1040,7 @@ class ConversationEngine:
         self._features = features
         self._ended_listeners: list[Callable[[str, EndsFor], None]] = []
         self._ties_of: Callable[[str, str], Awaitable[Ties | None]] | None = None
+        self._relations: "Relations | None" = None
         self._recorded_listeners: list[
             Callable[[Conversation, Message, datetime, str], Awaitable[None]]
         ] = []
@@ -1085,6 +1087,10 @@ class ConversationEngine:
             *await self._anniversary_lines(character, user_id, today, timezone),
             *promised,
             *([weather] if weather else []),
+            *(
+                self._relations.news_lines(await self._relations.heard(user_id, character.id), timezone)
+                if self._relations is not None else []
+            ),
         ]
         # 特殊日子和纪念日都说一遍「合适的时候自然地提起」，同一句只留一次。
         return list(dict.fromkeys(lines))
@@ -1398,6 +1404,19 @@ class ConversationEngine:
         `ties` saying it for a user and a character."""
         self._ties_of = ties
 
+    def with_relations(self, relations: "Relations") -> None:
+        """Have her prompt tell how she stands with the others (GLOSSARY.md「关系表」), and
+        what she heard of them (GLOSSARY.md「传话」)."""
+        self._relations = relations
+
+    async def _about_producer(self, profile: ProducerProfile, user_id: str, character: Character) -> str:
+        """What she is told of the producer, then of how she stands with the others."""
+        said = producer_prompt(profile, await self._ties(user_id, character.id))
+        if self._relations is None:
+            return said
+        with_others = self._relations.prompt(await self._relations.ties(user_id, character.id), character)
+        return f"{said}\n\n{with_others}" if with_others else said
+
     async def _ties(self, user_id: str, character_id: str) -> Ties | None:
         return await self._ties_of(user_id, character_id) if self._ties_of is not None else None
 
@@ -1583,7 +1602,7 @@ class ConversationEngine:
                     log.warning("the search question could not be asked", exc_info=True)
             closing.append(web_rules(self._random(2) == 0, asked))
         prompt = self._prompt(
-            character, world_prompt, producer_prompt(profile, await self._ties(conversation.user_id, character.id)),
+            character, world_prompt, await self._about_producer(profile, conversation.user_id, character),
             chat_history(messages, turns), narrations(record, self._gift_catalog, timezone),
             [
                 now_prompt(
@@ -1868,7 +1887,7 @@ class ConversationEngine:
         promises_due = await self._promises_due(character, conversation.user_id, now, timezone)
         scene = await self._scene(conversation)
         prompt = self._prompt(
-            character, world_prompt, producer_prompt(profile, await self._ties(conversation.user_id, character.id)),
+            character, world_prompt, await self._about_producer(profile, conversation.user_id, character),
             chat_history(messages, self._history_turns()), told,
             [
                 now_prompt(
@@ -1946,7 +1965,7 @@ class ConversationEngine:
             conversation, timezone, last_turn_query(messages)
         )
         prompt = self._prompt(
-            character, world_prompt, producer_prompt(profile, await self._ties(conversation.user_id, character.id)),
+            character, world_prompt, await self._about_producer(profile, conversation.user_id, character),
             chat_history(messages, self._history_turns()), told,
             [
                 now_prompt(
@@ -2010,7 +2029,7 @@ class ConversationEngine:
         )
         adult = character.heart is not None and character.heart.adult
         prompt = self._prompt(
-            character, world_prompt, producer_prompt(profile, await self._ties(conversation.user_id, character.id)),
+            character, world_prompt, await self._about_producer(profile, conversation.user_id, character),
             chat_history(messages, self._history_turns()), told,
             [
                 now_prompt(
@@ -2060,7 +2079,7 @@ class ConversationEngine:
         told = narrations(record, self._gift_catalog, timezone)
         told[None] = _since_last_turn(record, self._gift_catalog, timezone)
         prompt = self._prompt(
-            character, world_prompt, producer_prompt(profile, await self._ties(conversation.user_id, character.id)),
+            character, world_prompt, await self._about_producer(profile, conversation.user_id, character),
             chat_history(messages, self._history_turns()), told,
             [
                 now_prompt(

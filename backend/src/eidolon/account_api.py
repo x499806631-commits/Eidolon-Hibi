@@ -262,6 +262,7 @@ def available_features(backend: Backend) -> list[Feature]:
         "special_days": backend.special_days is not None,
         "promises": True,
         "weather": backend.weather is not None,
+        "word_of_mouth": True,
     }
     return [f for f in FEATURES if has[f]]
 

@@ -67,6 +67,13 @@ async def store_in(database: Path) -> AsyncIterator[Store]:
         await db.close()
 
 
+async def everyone_hears(client: httpx.AsyncClient) -> None:
+    """The user's word of mouth off (GLOSSARY.md「传话」), as it all was before it: what the
+    user tells any of them, all of them know."""
+    res = await client.put("/api/account/features/word_of_mouth", json={"on": False})
+    assert res.status_code == 204
+
+
 @asynccontextmanager
 async def database_in(database: Path) -> AsyncIterator[Database]:
     """A data access layer of its own on the database at `database`, as in another process."""

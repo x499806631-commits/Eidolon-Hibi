@@ -33,7 +33,7 @@ import logging
 import re
 import sqlite3
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -262,6 +262,7 @@ class TripPhotos:
         self._features = features
         self._drawing: set[asyncio.Task] = set()
         self._dates = dates if dates is not None else Dates(db)
+        self._invited: list[Callable[[str, str, date, str], Awaitable[None]]] = []
         self._db = db
         db.prepare(_open)
 
@@ -567,7 +568,16 @@ class TripPhotos:
             lease.release()
         await self._store.add_photo_reach_out(conversation.id, said, None)
         await recording.finish("success")
+        for listener in self._invited:
+            try:
+                await listener(user_id, character_id, day, what)
+            except Exception:
+                log.exception("telling of a day out planned failed")
         return conversation.id
+
+    def on_invited(self, listener: Callable[[str, str, date, str], Awaitable[None]]) -> None:
+        """Have `listener` told of each day out she said yes to: the user, her, the day, what."""
+        self._invited.append(listener)
 
     async def _tell_date(self, row: sqlite3.Row, now: datetime) -> None:
         """Once the day out is over, have her tell the producer how it was, with a photo

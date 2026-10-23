@@ -24,7 +24,7 @@ closes only what `build` made, in the order that lets what is still running fini
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -69,6 +69,7 @@ from eidolon.keepsakes import Keepsakes
 from eidolon import tickets
 from eidolon.outfit_tags import OutfitTags
 from eidolon.trip_photos import Dates, TripPhotos
+from eidolon.relations import Relations
 from eidolon.voices import GptSovits, load_local_voices
 from eidolon.favors import Favors
 from eidolon.read_aloud import ReadAloud
@@ -183,6 +184,8 @@ class Backend:
     tickets, and her days out with the producer (GLOSSARY.md「体验券」「邀约」)."""
     outfit_tags: OutfitTags
     """The tags each outfit on the outfit lists is drawn with."""
+    relations: Relations
+    """How the characters stand with each other, and word of mouth (GLOSSARY.md「关系表」)."""
     dates: Dates
     """The days out the producer invited each character to (GLOSSARY.md「邀约」)."""
     features: Features
@@ -398,6 +401,8 @@ def build(
 
     features = Features(database)
     promises = Promises(database, clock, random or secure_random, features)
+    # 关系表和传话（GLOSSARY.md「关系表」「传话」）
+    relations = Relations(database, characters, world, clock, features)
 
     # 她自己的经历：按角色存，和关于制作人的记忆分开
     experiences = Experiences(database, clock)
@@ -537,10 +542,17 @@ def build(
         features, dates,
     )
     closers.append(trip_photos.close)
+    async def favor_moment(user_id: str, character_id: str, what: str, at: datetime) -> None:
+        await diary.moment(user_id, character_id, what, at)
+        her = characters[character_id].name if character_id in characters else ""
+        await relations.tell(
+            user_id, character_id, f"{her}{what}" if what.startswith("和") else f"{her}那边：{what}", at
+        )
+
     favors = Favors(
         database, store, engine, characters, gift_catalog, config, activity, clock,
         random or secure_random, affinities, gifts, keepsakes, trip_photos, special_days,
-        diary.moment, calls.in_call, features,
+        favor_moment, calls.in_call, features,
     )
     favor_twists.append(favors.twists_on)
     engine.with_ties(favors.ties)
@@ -567,6 +579,8 @@ def build(
         await affinities.promise_settled(promise.user_id, promise.character_id, settled)
 
     promises.on_settled(promise_settled)
+    _pass_word(relations, characters, engine, memories, gifts, affinities, promises, keepsakes,
+               trip_photos, favors)
     config.on_change(gifts.notice)
     return Backend(
         settings=settings,
@@ -621,5 +635,66 @@ def build(
         web=web,
         experiences=experiences,
         corpus=corpus,
+        relations=relations,
         _closers=closers,
     )
+
+
+def _pass_word(
+    relations: Relations,
+    characters: Mapping[str, Character],
+    engine: ConversationEngine,
+    memories: Memories,
+    gifts: Gifts,
+    affinities: Affinities,
+    promises: Promises,
+    keepsakes: Keepsakes,
+    trip_photos: TripPhotos,
+    favors: Favors,
+) -> None:
+    """Have her prompt tell her how she stands with the others, the memories of the others
+    known to her only through them, and what happens between the producer and one of them
+    told as news to the others (GLOSSARY.md「关系表」「传话」); what two of them did together
+    for the producer changes how they stand."""
+    engine.with_relations(relations)
+    memories.with_sharing(relations.shares_with)
+
+    def name(character_id: str) -> str:
+        return characters[character_id].name if character_id in characters else ""
+
+    async def gift_given(
+        user_id: str, character_id: str, gift: str, liked: bool, _: object, at: datetime
+    ) -> None:
+        if liked:
+            await relations.tell(user_id, character_id, f"制作人送了{name(character_id)}她喜欢的{gift}", at)
+
+    async def scene_played(user_id: str, character_id: str, _: str, at: datetime) -> None:
+        await relations.tell(
+            user_id, character_id, f"{name(character_id)}和制作人之间好像发生了什么，关系一下子近了", at
+        )
+
+    async def promise_kept(user_id: str, character_id: str, text: str, at: datetime) -> None:
+        await relations.tell(user_id, character_id, f"制作人做到了答应{name(character_id)}的事：{text}", at)
+
+    async def promise_broken(user_id: str, character_id: str, text: str, at: datetime) -> None:
+        await relations.tell(user_id, character_id, f"制作人没做到答应{name(character_id)}的事：{text}", at)
+
+    async def keepsake_given(user_id: str, character_id: str, thing: str, at: datetime) -> None:
+        await relations.tell(user_id, character_id, f"{name(character_id)}送了制作人{thing}", at)
+
+    async def date_planned(user_id: str, character_id: str, day: date, what: str) -> None:
+        await relations.tell(
+            user_id, character_id,
+            f"制作人约了{name(character_id)}{day.month}月{day.day}日{what}", relations.now(),
+        )
+
+    async def together(user_id: str, a: str, b: str, what: str, _: datetime) -> None:
+        await relations.change(user_id, a, b, what, "favor")
+
+    gifts.on_given(gift_given)
+    affinities.on_scene_done(scene_played)
+    promises.on_kept(promise_kept)
+    promises.on_broken(promise_broken)
+    keepsakes.on_given(keepsake_given)
+    trip_photos.on_invited(date_planned)
+    favors.on_together(together)
